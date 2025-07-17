@@ -1,4 +1,5 @@
 import Binary
+import Protobuf.Encoding.Basic
 
 namespace Protobuf.Encoding
 
@@ -45,16 +46,6 @@ def put_varint (n : Nat) : Put := do
   let ts := ts.map UInt8.ofBitVec
   put_bytes ⟨ts⟩
 
-inductive ProtoVal where
-  | VARINT (val : Nat)      -- 0
-  | I64 (val : BitVec 64)   -- 1
-  | LEN (data : ByteArray)  -- 2
-  | I32 (val : BitVec 32)   -- 5
-
-structure Record where
-  field_num : Nat
-  value : ProtoVal
-
 open Primitive.LE in
 instance : Encode Record where
   put x := do
@@ -95,13 +86,6 @@ instance : Decode Record where
       let v ← getThe UInt32
       return ⟨num, .I32 v.toBitVec⟩
     | _ => throw "protobuf: invalid wire type encountered"
-
-#eval Get.run get_varint ⟨#[0b10010110, 0b00000001]⟩ |>.toExcept
-
-#eval put_varint 150 ⟨#[]⟩
-
-structure Message where
-  records : Array Record
 
 instance : Encode Message where
   put x := x.records.forM put
