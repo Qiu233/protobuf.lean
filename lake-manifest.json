@@ -1,0 +1,15 @@
+{"version": "1.1.0",
+ "packagesDir": ".lake/packages",
+ "packages":
+ [{"url": "https://github.com/Qiu233/binary",
+   "type": "git",
+   "subDir": null,
+   "scope": "",
+   "rev": "e6f373912bf7e0b4553e5f07c89af14bd2c40f52",
+   "name": "binary",
+   "manifestFile": "lake-manifest.json",
+   "inputRev": "e6f373912bf7e0b4553e5f07c89af14bd2c40f52",
+   "inherited": false,
+   "configFile": "lakefile.lean"}],
+ "name": "protobuf",
+ "lakeDir": ".lake"}
