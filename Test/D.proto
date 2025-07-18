@@ -1,0 +1,4 @@
+package a;
+import "Test/C.proto";
+
+message b {}

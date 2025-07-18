@@ -1,0 +1,12 @@
+package a.b;
+
+message A {
+    int32 f1 = 1;
+    message Inner {
+        B f2 = 1;
+    }
+}
+
+message B {
+    A f3 = 2;
+}

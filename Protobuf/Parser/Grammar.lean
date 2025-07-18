@@ -63,6 +63,8 @@ def pidentNoAntiquot : Parser := {
 }
 
 /--
+`pident := [a-zA-Z][a-zA-Z_]*`
+
 `isPseudoKind` mut be true to be compatible (only logically) with `ident`'s parenthesizer and formatter.
 `identKind` is not used since we still want to quote and antiquote as if it were a real node.
 -/
@@ -77,27 +79,55 @@ attribute [combinator_formatter Protobuf.Parser.pident] ident.formatter
 attribute [parenthesizer Protobuf.Parser.pident] ident.parenthesizer
 attribute [formatter Protobuf.Parser.pident] ident.formatter
 
-syntax fullIdent := pident ("." noWs pident)*
+run_meta do
+  modifyEnv fun env => addSyntaxNodeKind env `Protobuf.Parser.fullIdent
 
+/--
+`fullIdent := sepBy1(pident, ".")` where there are no spaces
+-/
 @[run_parser_attribute_hooks]
+def fullIdent : Parser := withAntiquot (mkAntiquot "fullIdent" decl_name%) <| node decl_name% <|
+  sepBy1 pident "." (checkNoWsBefore >> "." >> checkNoWsBefore)
+
+attribute [parenthesizer Protobuf.Parser.fullIdent] fullIdent.parenthesizer
+attribute [formatter Protobuf.Parser.fullIdent] fullIdent.formatter
+
 abbrev messageName := pident
-@[run_parser_attribute_hooks]
 abbrev enumName    := pident
-@[run_parser_attribute_hooks]
 abbrev fieldName   := pident
-@[run_parser_attribute_hooks]
 abbrev oneofName   := pident
-@[run_parser_attribute_hooks]
 abbrev mapName     := pident
-@[run_parser_attribute_hooks]
 abbrev serviceName := pident
-@[run_parser_attribute_hooks]
 abbrev rpcName     := pident
 
-syntax dot_pident := ("." noWs)? pident (noWs "." noWs pident)* -- TODO: ?
+attribute [run_parser_attribute_hooks, inherit_doc pident]
+  messageName
+  enumName
+  fieldName
+  oneofName
+  mapName
+  serviceName
+  rpcName
+
+run_meta do
+  modifyEnv fun env => addSyntaxNodeKind env `Protobuf.Parser.dot_pident
+
+/--
+`dot_pident := (".")? sepBy1(pident, ".")` where there are no spaces
+-/
+@[run_parser_attribute_hooks]
+def dot_pident : Parser := withAntiquot (mkAntiquot "dot_pident" decl_name%) <| node decl_name% <|
+  optional ("." >> checkNoWsBefore) >> sepBy1 pident "." (checkNoWsBefore >> "." >> checkNoWsBefore)
+
+attribute [parenthesizer Protobuf.Parser.dot_pident] dot_pident.parenthesizer
+attribute [formatter Protobuf.Parser.dot_pident] dot_pident.formatter
 
 abbrev messageType := dot_pident
 abbrev enumType := dot_pident
+
+attribute [run_parser_attribute_hooks, inherit_doc dot_pident]
+  messageType
+  enumType
 
 end
 
@@ -274,6 +304,7 @@ syntax protobuf_const :=
   floatLit <|>
   strLit <|> -- TODO: refine
   boolLit
+  -- TODO: `MessageValue`
 
 section
 
@@ -541,7 +572,7 @@ messageBody = "{" { field | enum | message | option | oneof | mapField |
 reserved | emptyStatement } "}"
 -/
 
-declare_syntax_cat message_body_entry (behavior := both)
+declare_syntax_cat message_body_entry (behavior := symbol)
 -- `message` can occur in `messageBody`, thus we must use a category to prevent aggresive recursion
 
 def messageBodyEntry := categoryParser `message_body_entry 0
