@@ -30,18 +30,68 @@ private def is_decimalDigit : Char → Bool := Char.isDigit
 private def is_octalDigit : Char → Bool := fun c => '0' ≤ c && c ≤ '7'
 private def is_hexDigit : Char → Bool := fun c => c.isDigit || ('a' ≤ c && c ≤ 'f') || ('A' ≤ c && c ≤ 'F')
 
--- we must use vanilla `ident` parser to handle the leading case
--- pident must be checked again to ensure it has only one part and there is no unrecognized characters
-syntax pident := Term.dotIdent <|> ident
+/--
+This function generates `ident` while ensuring it is not escaped has no more than one "parts".
+* To be escaped, we mean something enclosed by `«»`.
+* To have more than one parts, we mean something like `A.B` with separating dots.
+-/
+partial def pidentFnAux (startPos : String.Pos) (tk : Option Token) (r : Name) : ParserFn :=
+  let rec parse (r : Name) (c s) :=
+    let input := c.input
+    let i     := s.pos
+    if h : input.atEnd i then
+      s.mkEOIError
+    else
+      let curr := input.get' i h
+      if curr.isAlpha then
+        let startPart := i
+        let s         := takeWhileFn (fun c => c.isAlpha || c.isDigit || c == '_') c (s.next input i)
+        let stopPart  := s.pos
+        let r := .str r (input.extract startPart stopPart)
+        mkIdResult startPos tk r c s
+      else
+        mkTokenAndFixPos startPos tk c s
+  parse r
+
+def pidentFn : ParserFn := fun c s =>
+  let i := s.pos
+  pidentFnAux i none .anonymous c s
+
+def pidentNoAntiquot : Parser := {
+  fn   := pidentFn
+  info := identNoAntiquot.info
+}
+
+/--
+`isPseudoKind` mut be true to be compatible (only logically) with `ident`'s parenthesizer and formatter.
+`identKind` is not used since we still want to quote and antiquote as if it were a real node.
+-/
+def pident : Parser :=
+  withAntiquot (mkAntiquot "pident" decl_name% (isPseudoKind := true)) pidentNoAntiquot
+
+run_meta do
+  modifyEnv fun env => addSyntaxNodeKind env ``Protobuf.Parser.pident
+
+attribute [combinator_parenthesizer Protobuf.Parser.pident] ident.parenthesizer
+attribute [combinator_formatter Protobuf.Parser.pident] ident.formatter
+attribute [parenthesizer Protobuf.Parser.pident] ident.parenthesizer
+attribute [formatter Protobuf.Parser.pident] ident.formatter
 
 syntax fullIdent := pident ("." noWs pident)*
 
+@[run_parser_attribute_hooks]
 abbrev messageName := pident
+@[run_parser_attribute_hooks]
 abbrev enumName    := pident
+@[run_parser_attribute_hooks]
 abbrev fieldName   := pident
+@[run_parser_attribute_hooks]
 abbrev oneofName   := pident
+@[run_parser_attribute_hooks]
 abbrev mapName     := pident
+@[run_parser_attribute_hooks]
 abbrev serviceName := pident
+@[run_parser_attribute_hooks]
 abbrev rpcName     := pident
 
 syntax dot_pident := ("." noWs)? pident (noWs "." noWs pident)* -- TODO: ?
@@ -521,7 +571,7 @@ run_meta do
 
 run_meta do
   let s ← `(message| message Outer {
-      T a = 1;
+      T.A a = 1;
     }
     )
   println! "{← PrettyPrinter.ppTerm <| TSyntax.mk s}"
