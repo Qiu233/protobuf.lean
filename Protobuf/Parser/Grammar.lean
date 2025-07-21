@@ -154,7 +154,7 @@ def decimalLitFn : ParserFn := fun c s =>
   if h : input.atEnd i then s.mkEOIError
   else
     let curr := input.get' i h
-    if curr.isDigit && curr != '0' then
+    if curr.isDigit then
       let s := takeWhile1Fn Char.isDigit "invalid decimal digit" c s
       mkNodeToken decimalLitKind i c s
     else s.mkUnexpectedError "invalid decimal literal"
@@ -166,7 +166,7 @@ def octalLitFn : ParserFn := fun c s =>
   else
     let curr := input.get' i h
     if curr = '0' then
-      let s := takeWhile1Fn (fun c => '0' ≤ c && c ≤ '7') "invalid octal digit" c s
+      let s := takeWhile1Fn (fun c => '0' ≤ c && c ≤ '7') "invalid octal digit" c (s.next' input i h)
       mkNodeToken octalLitKind i c s
     else s.mkUnexpectedError "invalid octal literal"
 
@@ -281,7 +281,7 @@ attribute [formatter Protobuf.Parser.octalLit] octalLit.formatter
 attribute [parenthesizer Protobuf.Parser.hexLit] hexLit.parenthesizer
 attribute [formatter Protobuf.Parser.hexLit] hexLit.formatter
 
-syntax intLit := octalLit <|> hexLit <|> decimalLit
+syntax intLit := atomic(octalLit) <|> atomic(hexLit) <|> atomic(decimalLit)
 
 syntax boolLit := &"true" <|> &"false"
 syntax floatLit := scientificLit -- TODO: refine
@@ -548,7 +548,7 @@ enumValueOption = optionName "=" constant
 
 syntax enumValueOption := optionName ppSpace "=" ppSpace protobuf_const
 syntax enumField := pident ppSpace "=" ppSpace ("-")? intLit (ppSpace "[" enumValueOption,+ "]")? ";"
-syntax enumBody := "{" ppLine ((option <|> enumField <|> emptyStatement <|> reserved) ppLine)* "}"
+syntax enumBody := "{" ppLine ((option <|> reserved <|> enumField <|> emptyStatement) ppLine)* "}"
 syntax enum := &"enum" ppSpace enumName ppSpace enumBody
 
 run_meta do
@@ -558,6 +558,7 @@ run_meta do
       EAA_UNSPECIFIED = 0;
       EAA_STARTED = 1;
       EAA_RUNNING = 2 [(custom_option) = "hello world"];
+      reserved 2;
     }
     )
   println! "{← PrettyPrinter.ppTerm <| TSyntax.mk s}"

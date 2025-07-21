@@ -244,7 +244,7 @@ partial def preprocess_message_entry (e : TSyntax `message_body_entry) : M Unit 
     insert_leaf name.toIdent.getId.toString .mapField
   | `(message_body_entry| reserved $ts,*;) =>
     for t in ts.getElems do
-      let `(strFieldName| $s:str) := t | throwUnsupportedSyntax
+      let `(strFieldName| $s:str) := t | continue
       let n := s.getString
       unless n.all (fun c => c.isAlpha || c.isDigit || c == '_') do
         throwProtoError (← getFileName) "{n} is not a valid reserved name"
@@ -348,7 +348,7 @@ def resolve_scope (name : String) : M (Option (NameNode × PName)) := do
     | (.scope _) => return some k
     | _ => return none
 
-private def pidents_to_ident (stx : TSyntaxArray ``pident) : M <| TSyntax `ident := do
+private def pidents_to_ident (stx : TSyntaxArray ``pident) : CoreM <| TSyntax `ident := do
   let ts := stx.map fun x => x.toIdent.getId.toString
   let n := ts.foldl (init := Name.anonymous) Name.str
   return mkIdent n
@@ -431,7 +431,7 @@ partial def process_message_entry (e : TSyntax `message_body_entry) : M (TSyntax
     return e
   | `(message_body_entry| option $name:optionName = $c:protobuf_const;)
   | `(message_body_entry| ;) => return e
-  | _ => throwUnsupportedSyntax
+  | _ => return e
 
 partial def process_message (stx : TSyntax ``message) : M (TSyntax ``message) := do
   let `(message| message $name:pident { $entries* }) := stx | throwUnsupportedSyntax
@@ -554,7 +554,7 @@ private partial def process_header (code : TSyntax ``proto) : M Unit := do
 
 end
 
-def load_protos (paths : Array System.FilePath) (files : Array String) : CoreM (Array FileCache) := do
+def load_protos (paths : Array System.FilePath) (files : Array String) : CoreM (Array FileCache × Std.HashMap String FileCache) := do
   let paths := paths.toList
   let mut cache : Std.HashMap String FileCache := {}
   for file in files do
@@ -563,7 +563,130 @@ def load_protos (paths : Array System.FilePath) (files : Array String) : CoreM (
   let ts ← files.mapM fun x => do
     let some v := cache.get? x | throwError "load_protos: impossible, there should be earlier errors"
     pure v
-  return ts
+  return (ts, cache)
+
+def type_to_term (e : TSyntax ``type) : CoreM Term := do
+  match e with
+  | `(type| double  ) => `($(mkIdent ``Float    ))
+  | `(type| float   ) => `($(mkIdent ``Float32  ))
+  | `(type| int32   ) => `($(mkIdent ``Int32    ))
+  | `(type| int64   ) => `($(mkIdent ``Int64    ))
+  | `(type| uint32  ) => `($(mkIdent ``UInt32   ))
+  | `(type| uint64  ) => `($(mkIdent ``UInt64   ))
+  | `(type| sint32  ) => `($(mkIdent ``Int32    ))
+  | `(type| sint64  ) => `($(mkIdent ``Int64    ))
+  | `(type| fixed32 ) => `($(mkIdent ``UInt32   ))
+  | `(type| fixed64 ) => `($(mkIdent ``UInt64   ))
+  | `(type| sfixed32) => `($(mkIdent ``Int32    ))
+  | `(type| sfixed64) => `($(mkIdent ``Int64    ))
+  | `(type| bool    ) => `($(mkIdent ``Bool     ))
+  | `(type| string  ) => `($(mkIdent ``String   ))
+  | `(type| bytes   ) => `($(mkIdent ``ByteArray))
+  | `(type| $name:dot_pident) =>
+    match name with
+    | `(dot_pident| .$ns.*) => pidents_to_ident ns
+    | _ => throwError "type_to_term: impossible"
+  | _ => throwUnsupportedSyntax
+
+variable (cache : Std.HashMap String FileCache) in
+mutual
+
+private partial def genName (s : TSyntax ``pident) : ReaderT (List String) CoreM Ident := do
+  let ps ← read
+  let ps := ps ++ [s.toIdent.getId.toString]
+  let name := ps.foldl (init := Name.anonymous) Name.str
+  return Lean.mkIdent name
+
+partial def translate_message (e : TSyntax ``message) : ReaderT (List String) CoreM (Array Command) := do
+  let `(message| message $name:pident { $body* }) := e | throwUnsupportedSyntax
+  let rs ← withReader (fun c => c ++ [name.toIdent.getId.toString]) do
+    body.mapM translate_message_body_entry_def
+  let rs := rs.flatMap id
+  let r ← translate_message_body_entry name body
+  return rs ++ r
+
+partial def translate_enum (e : TSyntax ``enum) : ReaderT (List String) CoreM (Array Command) := do
+  let `(enum| enum $name:pident { $body* }) := e | throwUnsupportedSyntax
+  let fs := body.filterMap fun x => if x.raw.getKind == ``enumField then some (TSyntax.mk (ks := ``enumField) x.raw) else none
+  let ns ← fs.mapM fun x => do
+    let `(enumField| $name:pident = $[-]? $num $[[$options?,*]]?;) := x | unreachable!
+    pure name.toIdent
+  let s ← `(command| inductive $(← genName name):ident where $[| $ns:ident]*)
+  return #[s]
+
+partial def translate_message_body_entry_def (e : TSyntax `message_body_entry) : ReaderT (List String) CoreM (Array Command) := do
+  match e with
+  | `(message_body_entry| $e:enum) =>
+    translate_enum e
+  | `(message_body_entry| $m:message) =>
+    translate_message m
+  | `(message_body_entry| $[$modifier?]? $type:type $name:pident = $num:intLit $[[$options?]]?;) => pure #[]
+  | `(message_body_entry| map<$k,$v> $name:pident = $num:intLit $[[$options?]]?;) => pure #[]
+  | `(message_body_entry| reserved $ts,*;) => pure #[]
+  | `(message_body_entry| option $name:optionName = $c:protobuf_const;) => pure #[]
+  | `(message_body_entry| ;)
+  | _ => pure #[]
+
+partial def translate_message_body_entry (name : TSyntax ``pident) (e : TSyntaxArray `message_body_entry) : ReaderT (List String) CoreM (Array Command) := do
+  let ts := e.filterMap fun x => if x.raw[0].getKind == ``field then some (TSyntax.mk (ks := ``enumField) x.raw) else none
+  let rs ← ts.mapM fun t => do
+    let `(message_body_entry| $[$modifier?]? $type:type $name:pident = $num:intLit $[[$options?]]?;) := t | unreachable!
+    let type' ← type_to_term type
+    `(Parser.Command.structSimpleBinder| $(name.toIdent):ident : $type')
+  let fields ← `(Parser.Command.structFields| $rs*)
+  let c ← `(command| structure $(← genName name) where $fields:structFields)
+  return #[c]
+
+partial def translate_top_level_defs (code : TSyntax ``proto) : ReaderT (List String) CoreM (Array Command) := do
+  let `(proto| $[$stxSpec?]? $ts*) := code | throwUnsupportedSyntax
+  ts.flatMapM fun t => do
+    let `(topLevelDef| $t:topLevelDef) := t | return #[]
+    match t with
+    | `(topLevelDef| $e:enum) =>
+      translate_enum e
+    | `(topLevelDef| $m:message) =>
+      translate_message m
+    | `(topLevelDef| service $name:pident { $body* }) => return #[]
+    | _ => throwUnsupportedSyntax
+
+end
+
+variable (cache : Std.HashMap String FileCache) in
+/-- we assume there is not cycle dependency -/
+partial def translate_proto (file : String) : StateRefT (Std.HashSet String) CoreM (Array Command) := do
+  if (← get).contains file then
+    return #[]
+  let some c := cache[file]? | throwError "file {file} not loaded"
+  let proto := c.processed
+  let pack ← preprocess_package proto {} |>.run' { cache := {} }
+  let `(proto| $[$stxSpec?]? $ts*) := proto | throwUnsupportedSyntax
+  let imports := ts.filter fun x => x.raw.getKind == ``pimport
+  let importFiles ← imports.mapM fun x => do
+    match x with
+      | `(pimport| import $[$kind]? $file;) =>
+        match kind with
+        | none => return file.getString.trim
+        | some k =>
+          match k with
+          | `(importKind| public) => return file.getString.trim
+          | `(importKind| weak) => unreachable!
+          | _ => throwUnsupportedSyntax
+      | _ => unreachable!
+  let pres ← importFiles.flatMapM translate_proto
+  --
+  let cs ← translate_top_level_defs proto pack
+  modify fun s => s.insert file
+  return pres ++ cs
+
+variable (cache : Std.HashMap String FileCache) in
+def translate_protos (files : Array String) : CoreM (Array Command) := do
+  let mut s : (Std.HashSet String) := {}
+  let mut cmds := #[]
+  for file in files do
+    let (r, s') ← translate_proto cache file |>.run s
+    cmds := cmds.append r
+    s := s'
+  return cmds
 
 syntax (name := loadProtobufCommand) "#load_protobuf " "[" str,* "]" "[" str,* "]" : command
 
@@ -579,9 +702,25 @@ def elabLoadProtobufCommand : CommandElab := fun stx => do
     pure s
   let files := filesStx.getElems.map fun x => x.getString
   runTermElabM fun _ => do
-    let r ← load_protos paths files
-    r.forM fun a => do
-      println! "{a.file}"
-      println! "{← PrettyPrinter.ppTerm <| TSyntax.mk a.processed}"
+    let (r, cache) ← load_protos paths files
+    let cmds ← translate_protos cache files
+    let cmds := cmds.toList.mergeSort fun x y =>
+      match x, y with
+      | `(command| $m:declModifiers $c:inductive), _ => true
+      | `(command| $m:declModifiers $c:structure), r => !(y matches `(command| $m:declModifiers $c:inductive))
+      | _, _ => false
+    let a := cmds.findIdx (α := Command) (fun x => x matches `(command| $m:declModifiers $c:structure))
+    let b := cmds.length - cmds.reverse.findIdx (α := Command) (fun x => x matches `(command| $m:declModifiers $c:structure))
+    let sub := cmds.extract a b
+    let cmds ←
+      if sub.isEmpty then
+        pure cmds
+      else
+        let h := cmds.take a
+        let t := cmds.drop b
+        pure <| h ++ [← `(command| mutual $(sub.toArray)* end)] ++ t
+    let t := MessageData.joinSep (cmds.map fun x => m!"{x}") m!"\n\n"
+    logInfo m!"{t}"
 
-#load_protobuf ["Test"] ["E.proto"]
+
+#load_protobuf ["Test"] ["descriptor.proto"]
