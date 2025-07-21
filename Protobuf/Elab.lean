@@ -86,6 +86,13 @@ def NameNode.getPath! : NameNode → System.FilePath
 
 abbrev ProtoScopes := PrefixTree String NameNode compare
 
+structure FileCache where
+  file : String
+  /-- the syntax names of which have been resolved to fully qualified form, that is, with a leading dot -/
+  processed : TSyntax ``proto
+  /-- the imported and defined symbols -/
+  scopes : ProtoScopes
+
 structure Context where
   /-- name/path of the .proto file -/
   fileName : String := ""
@@ -100,7 +107,7 @@ structure State where
   -- the accumulative trie of scope and names
   scopes : ProtoScopes := {}
   /-- to prevent parsing and loading the same file again and again -/
-  cache : Std.HashMap String (TSyntax ``proto × ProtoScopes)
+  cache : Std.HashMap String FileCache
 
 /-- M should provide all contextual information that is needed to translate a protobuf construct. -/
 abbrev M := ReaderT Context <| StateRefT State CoreM
@@ -448,7 +455,7 @@ def merge_scopes (file : String) (a : ProtoScopes) : M Unit := do
 
 mutual
 
-partial def load_proto (file : String) : M (TSyntax ``proto) := do
+private partial def load_proto (file : String) : M (TSyntax ``proto) := do
   withReader (fun s => {s with fileName := file}) do
     let proto ← load_and_parse file
     process_header proto
@@ -457,9 +464,11 @@ partial def load_proto (file : String) : M (TSyntax ``proto) := do
     let pack ← preprocess_package proto
     withReader (fun c => {c with current_scope := pack}) do
       preprocess_top_level_defs proto
-      process_top_level_defs proto
+      let r ← process_top_level_defs proto
+      modify (fun s => {s with cache := s.cache.insert file ⟨file, r, s.scopes⟩})
+      return r
 
-partial def process_header (code : TSyntax ``proto) : M Unit := do
+private partial def process_header (code : TSyntax ``proto) : M Unit := do
   let `(proto| $[$stxSpec?]? $ts*) := code | throwUnsupportedSyntax
   let imports := ts.filter fun x => x.raw.getKind == ``pimport
   let packageDecl := ts.filter fun x => x.raw.getKind == ``package
@@ -480,26 +489,50 @@ partial def process_header (code : TSyntax ``proto) : M Unit := do
   if !importFiles.allDiff then
     throwError "{currentFile}: duplicate imports to the same file."
   let newChain := (← read).imported_chain.insert currentFile
+  let paths := (← read).proto_paths
+  let subCtx : Context := { imported_chain := newChain, proto_paths := paths }
   importFiles.forM fun i => do
     if newChain.contains i then
       throwError "cyclic imports detected for {i}"
-    let paths := (← read).proto_paths
-    let subCtx : Context := { imported_chain := newChain, proto_paths := paths }
     let cache := (← get).cache
     if let some _ := cache[i]? then
-      return -- do not merge scopes, it is already in cache which means we have already merged it
+      return -- it is already merged somewhere else
     else
-      let (processed, r) ← load_proto i subCtx |>.run { cache := cache } -- only carry the cache
+      let (_, r) ← load_proto i subCtx |>.run { cache := cache } -- only carry the cache
       let scopes := r.scopes
-      modify (fun s => {s with cache := s.cache.insert i (processed, scopes)}) -- update the cache
+      modify (fun s => {s with cache := r.cache}) -- update the cache
       merge_scopes i scopes
 
 end
 
-run_meta do
-  let (r, s) ← load_proto "E.proto" { proto_paths := ["Test"] } |>.run {cache := {}}
-  println! "{← PrettyPrinter.ppTerm <| TSyntax.mk r}"
+def load_protos (paths : Array System.FilePath) (files : Array String) : CoreM (Array FileCache) := do
+  let paths := paths.toList
+  let mut cache : Std.HashMap String FileCache := {}
+  for file in files do
+    let (_, s) ← load_proto file { proto_paths := paths } |>.run { cache := cache }
+    cache := s.cache
+  let ts ← files.mapM fun x => do
+    let some v := cache.get? x | throwError "load_protos: impossible, there should be earlier errors"
+    pure v
+  return ts
 
-  s.cache.forM fun a b => do
-    println! "{a}"
-    println! "{← PrettyPrinter.ppTerm <| TSyntax.mk b.fst}"
+syntax (name := loadProtobufCommand) "#load_protobuf " "[" str,* "]" "[" str,* "]" : command
+
+@[command_elab loadProtobufCommand]
+def elabLoadProtobufCommand : CommandElab := fun stx => do
+  let `(command| #load_protobuf [$pathsStx,*] [$filesStx,*]) := stx | throwUnsupportedSyntax
+  let paths ← pathsStx.getElems.mapM fun (x : TSyntax `str) => do
+    let s := System.FilePath.mk x.getString
+    unless ← s.pathExists do
+      throwErrorAt x "path does not exist"
+    unless ← s.isDir do
+      throwErrorAt x "path is not a directory"
+    pure s
+  let files := filesStx.getElems.map fun x => x.getString
+  runTermElabM fun _ => do
+    let r ← load_protos paths files
+    r.forM fun a => do
+      println! "{a.file}"
+      println! "{← PrettyPrinter.ppTerm <| TSyntax.mk a.processed}"
+
+#load_protobuf ["Test"] ["E.proto"]
