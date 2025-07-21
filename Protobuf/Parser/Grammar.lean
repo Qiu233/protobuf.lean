@@ -547,7 +547,7 @@ enumValueOption = optionName "=" constant
 -/
 
 syntax enumValueOption := optionName ppSpace "=" ppSpace protobuf_const
-syntax enumField := pident ppSpace "=" ppSpace ("-" ppSpace)? intLit (ppSpace "[" enumValueOption,+ "]")? ";"
+syntax enumField := pident ppSpace "=" ppSpace ("-")? intLit (ppSpace "[" enumValueOption,+ "]")? ";"
 syntax enumBody := "{" ppLine ((option <|> enumField <|> emptyStatement <|> reserved) ppLine)* "}"
 syntax enum := &"enum" ppSpace enumName ppSpace enumBody
 

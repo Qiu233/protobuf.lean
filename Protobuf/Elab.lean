@@ -60,6 +60,8 @@ inductive LeafKind where
   * fields of oneof type
   -/
   | field
+  | mapField
+  | reserved
   /-- A oneof declaration. -/
   | oneof
   /-- An rpc declaration inside a service body. -/
@@ -225,8 +227,8 @@ def insert_package (parts : PName) : M Unit := do
 
 
 @[inline]
-def insert_service (file : System.FilePath) (name : String) : M Unit := do
-  insert_scope_nodup file name (fun file => .scope (.service file))
+def insert_service (name : String) : M Unit := do
+  insert_scope_nodup (← getFileName) name (fun file => .scope (.service file))
 
 mutual
 
@@ -236,6 +238,20 @@ partial def preprocess_message_entry (e : TSyntax `message_body_entry) : M Unit 
     preprocess_message m
   | `(message_body_entry| $[$modifier?]? $type:type $name:pident = $num:intLit $[[$options?]]?;) =>
     insert_leaf name.toIdent.getId.toString .field
+  | `(message_body_entry| enum $name:pident $body:enumBody) =>
+    insert_leaf name.toIdent.getId.toString .enum
+  | `(message_body_entry| map<$k,$v> $name:pident = $num:intLit $[[$options?]]?;) =>
+    insert_leaf name.toIdent.getId.toString .mapField
+  | `(message_body_entry| reserved $ts,*;) =>
+    for t in ts.getElems do
+      let `(strFieldName| $s:str) := t | throwUnsupportedSyntax
+      let n := s.getString
+      unless n.all (fun c => c.isAlpha || c.isDigit || c == '_') do
+        throwProtoError (← getFileName) "{n} is not a valid reserved name"
+      insert_leaf n .reserved
+  | `(message_body_entry| option $name:optionName = $c:protobuf_const;) =>
+    pure ()
+  | `(message_body_entry| ;)
   | _ => pure ()
 
 partial def preprocess_message (stx : TSyntax ``message) : M Unit := do
@@ -251,10 +267,23 @@ def preprocess_options (code : TSyntax ``proto) : M Unit := do
   let `(proto| $[$stxSpec?]? $ts*) := code | throwUnsupportedSyntax
 
 def preprocess_enum (code : TSyntax ``enum) : M Unit := do
-  let `(enum| enum $name:pident $body:enumBody) := code | throwUnsupportedSyntax
+  let `(enum| enum $name:pident {$body*}) := code | throwUnsupportedSyntax
+  let id := name.toIdent
+  insert_leaf id.getId.toString .enum
 
 def preprocess_service (code : TSyntax ``service) : M Unit := do
-  let `(service| service $name:pident { $ts* }) := code | throwUnsupportedSyntax
+  let `(service| service $name:pident { $body* }) := code | throwUnsupportedSyntax
+  let id := name.toIdent
+  insert_service id.getId.toString
+  withNestedScope id.getId.toString do
+    for b in body do
+      match b with
+      | `(rpc| rpc $name:pident ( $[stream]? $typed:dot_pident ) returns ( $[stream]? $typer:dot_pident ) {$body*})
+      | `(rpc| rpc $name:pident ( $[stream]? $typed:dot_pident ) returns ( $[stream]? $typer:dot_pident );) =>
+        insert_leaf name.toIdent.getId.toString .rpc
+      | `(option| option $name:optionName = $c:protobuf_const;)
+      | `(emptyStatement| ;)
+      | _ => pure ()
 
 def preprocess_top_level_defs (code : TSyntax ``proto) : M Unit := do
   let `(proto| $[$stxSpec?]? $ts*) := code | throwUnsupportedSyntax
@@ -363,20 +392,20 @@ def resolve_message_enum_type (name : TSyntax ``dot_pident) : M (TSyntax ``dot_p
 
 def resolve_type (e : TSyntax ``type) : M (TSyntax ``type) := do
   match e with
-  | `(type| double  )   => return e
-  | `(type| float   )   => return e
-  | `(type| int32   )   => return e
-  | `(type| int64   )   => return e
-  | `(type| uint32  )   => return e
-  | `(type| uint64  )   => return e
-  | `(type| sint32  )   => return e
-  | `(type| sint64  )   => return e
-  | `(type| fixed32 )   => return e
-  | `(type| fixed64 )   => return e
-  | `(type| sfixed32)   => return e
-  | `(type| sfixed64)   => return e
-  | `(type| bool    )   => return e
-  | `(type| string  )   => return e
+  | `(type| double  )
+  | `(type| float   )
+  | `(type| int32   )
+  | `(type| int64   )
+  | `(type| uint32  )
+  | `(type| uint64  )
+  | `(type| sint32  )
+  | `(type| sint64  )
+  | `(type| fixed32 )
+  | `(type| fixed64 )
+  | `(type| sfixed32)
+  | `(type| sfixed64)
+  | `(type| bool    )
+  | `(type| string  )
   | `(type| bytes   )   => return e
   | `(type| $name:dot_pident) =>
     let s ← resolve_message_enum_type name
@@ -393,6 +422,15 @@ partial def process_message_entry (e : TSyntax `message_body_entry) : M (TSyntax
   | `(message_body_entry| $[$modifier?]? $type:type $name:pident = $num:intLit $[[$options?]]?;) =>
     let type ← resolve_type type
     `(message_body_entry| $[$modifier?]? $type:type $name:pident = $num:intLit $[[$options?]]?;)
+  | `(message_body_entry| enum $name:pident $body:enumBody) =>
+    return e
+  | `(message_body_entry| map<$k,$v> $name:pident = $num:intLit $[[$options?]]?;) =>
+    let v ← resolve_type v
+    `(message_body_entry| map<$k,$v> $name:pident = $num:intLit $[[$options?]]?;)
+  | `(message_body_entry| reserved $ts,*;) =>
+    return e
+  | `(message_body_entry| option $name:optionName = $c:protobuf_const;)
+  | `(message_body_entry| ;) => return e
   | _ => throwUnsupportedSyntax
 
 partial def process_message (stx : TSyntax ``message) : M (TSyntax ``message) := do
@@ -405,16 +443,27 @@ end
 
 def process_options (code : TSyntax ``proto) : M Unit := do
   let `(proto| $[$stxSpec?]? $ts*) := code | throwUnsupportedSyntax
-  for t in ts do
-    match t with
-    | `(option| option $name:optionName = $val;) => throwError "process_options not implemented yet"
-    | _ => continue
 
 def process_enum (code : TSyntax ``enum) : M (TSyntax ``enum) := do
   pure code
 
 def process_service (code : TSyntax ``service) : M (TSyntax ``service) := do
-  pure code
+  let `(service| service $name:pident { $body* }) := code | throwUnsupportedSyntax
+  withNestedScope name.toIdent.getId.toString do
+    let body ← body.mapM (β := TSyntax [`Protobuf.Parser.option, `Protobuf.Parser.rpc, `Protobuf.Parser.emptyStatement]) fun (b : TSyntax [`Protobuf.Parser.option, `Protobuf.Parser.rpc, `Protobuf.Parser.emptyStatement]) => do
+      match b with
+      | `(rpc| rpc $name:pident ( $[stream%$tk1]? $typed:dot_pident ) returns ( $[stream%$tk2]? $typer:dot_pident ) {$body*}) =>
+        let typed ← resolve_message_enum_type typed
+        let typer ← resolve_message_enum_type typer
+        `(rpc| rpc $name:pident ( $[stream%$tk1]? $typed:dot_pident ) returns ( $[stream%$tk2]? $typer:dot_pident ) {$body*})
+      | `(rpc| rpc $name:pident ( $[stream%$tk1]? $typed:dot_pident ) returns ( $[stream%$tk2]? $typer:dot_pident );) =>
+        let typed ← resolve_message_enum_type typed
+        let typer ← resolve_message_enum_type typer
+        `(rpc| rpc $name:pident ( $[stream%$tk1]? $typed:dot_pident ) returns ( $[stream%$tk2]? $typer:dot_pident );)
+      | `(option| option $name:optionName = $c:protobuf_const;)
+      | `(emptyStatement| ;)
+      | _ => pure b
+    `(service| service $name:pident { $body* })
 
 def process_top_level_defs (code : TSyntax ``proto) : M (TSyntax ``proto) := do
   let `(proto| $[$stxSpec?]? $ts*) := code | throwUnsupportedSyntax
