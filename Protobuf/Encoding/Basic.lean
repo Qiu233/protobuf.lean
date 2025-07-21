@@ -66,3 +66,24 @@ scoped instance : Repr Message where
         " }"
 
 end
+
+@[inline]
+def Message.find? (m : Message) (n : Nat) : Option ProtoVal :=
+  m.records.find? (fun x => x.field_num == n) |>.map fun x => x.value
+
+@[inline]
+def Message.update (m : Message) (n : Nat) (v : ProtoVal) : Message :=
+  let rs := m.records
+  let rs := rs.eraseP (fun x => x.field_num == n)
+  let rs := rs.push <| Record.mk n v
+  ⟨rs⟩
+
+@[inline]
+def Message.update? (m : Message) (n : Nat) (v : Option ProtoVal) : Message := Option.getD (dflt := m) <| v.map fun v =>
+  let rs := m.records
+  let rs := rs.eraseP (fun x => x.field_num == n)
+  let rs := rs.push <| Record.mk n v
+  ⟨rs⟩
+
+@[inline]
+def Message.empty : Message := ⟨#[]⟩
