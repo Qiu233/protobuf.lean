@@ -10,21 +10,39 @@ inductive ScopeKind where
   | service (file : System.FilePath)
 deriving Repr
 
+inductive LeafKind where
+  /--
+  A field that is not a `map<.., ..>`.
+  The only possibilities are
+  * fields of scalar type
+  * fields of message type
+  * fields of enum type
+  * fields of oneof type
+  -/
+  | field
+  /-- A oneof declaration. -/
+  | oneof
+  /-- An rpc declaration inside a service body. -/
+  | rpc
+  /-- An enum declaration. -/
+  | enum
+deriving Repr
+
 def ScopeKind.getPath! : ScopeKind → System.FilePath
   | .package files => files.head!
   | .message file | .service file => file
 
 inductive Scope where
   | scope (fullName : List String) (kind : ScopeKind)
-  | leaf (fullName : List String) (file : System.FilePath)
+  | leaf (fullName : List String) (kind : LeafKind) (file : System.FilePath)
 deriving Repr
 
 def Scope.fullName : Scope → List String
-  | .scope x _ | .leaf x _ => x
+  | .scope x _ | .leaf x _ _  => x
 
 def Scope.getPath! : Scope → System.FilePath
   | .scope _ x => x.getPath!
-  | .leaf _ x => x
+  | .leaf _ _ x => x
 
 abbrev ProtoScopes := PrefixTree String Scope compare
 
@@ -129,12 +147,12 @@ def insert_scope_nodup (file : System.FilePath) (name : String) (f : List String
       throwIsAlreadyDefined file k paths.head!
     | .scope _ kind =>
       throwIsAlreadyDefinedNotPackage file k kind.getPath!
-    | .leaf _ file =>
+    | .leaf _ _ file =>
       throwIsAlreadyDefinedNotPackage file k file
 
 @[inline]
-def insert_leaf (name : String) : M Unit := do
-  insert_scope_nodup (← getFileName) name .leaf
+def insert_leaf (name : String) (kind : LeafKind) : M Unit := do
+  insert_scope_nodup (← getFileName) name (.leaf · kind ·)
 
 @[inline]
 def insert_message (name : String) : M Unit := do
@@ -155,7 +173,7 @@ def insert_package (parts : List String) : M Unit := do
         insert_scope_raw k (.scope k (.package <| paths ++ [System.FilePath.mk file]))
       | .scope _ kind =>
         throwIsAlreadyDefinedNotPackage file k kind.getPath!
-      | .leaf _ file =>
+      | .leaf _ _ file =>
         throwIsAlreadyDefinedNotPackage file k file
 
 
@@ -170,7 +188,7 @@ partial def preprocess_message_entry (e : TSyntax `message_body_entry) : M Unit 
   | `(message_body_entry| $m:message) =>
     preprocess_message m
   | `(message_body_entry| $[$modifier?]? $type:type $name:pident = $num:intLit $[[$options?]]?;) =>
-    insert_leaf name.toIdent.getId.toString
+    insert_leaf name.toIdent.getId.toString .field
   | _ => pure ()
 
 partial def preprocess_message (stx : TSyntax ``message) : M Unit := do
@@ -221,13 +239,80 @@ def preprocess_package (code : TSyntax ``proto) : M (List String) := do
 
 --
 
-def resolve_message_enum_type (name : TSyntax ``dot_pident) : M (TSyntax ``dot_pident) := do
+private def to_fully_qualified_pidents (parts : List String) : M <| (TSyntax ``dot_pident) := do
+  let ts : TSyntaxArray ``pident ← parts.toArray.mapM fun x => do
+    let p := Lean.mkIdent (Name.mkSimple x)
+    return TSyntax.mk p.raw
+  `(dot_pident| .$ts.*)
+
+@[specialize]
+def resolve_core_loop {α} (f : List String → M (Option α)) : M (Option α) := do
+  let mut current_scope := (← read).current_scope
+  while True do
+    if let some r ← f current_scope then
+      return some r
+    if current_scope.isEmpty then -- we must check again when it is emtpy
+      break
+    current_scope := current_scope.take (current_scope.length - 1) -- go up
+  return none
+
+@[specialize]
+def resolve_single {α} (name : String) (f : List String → Scope → M (Option α)) : M (Option (Scope × α)) := do
+  resolve_core_loop fun s => do
+    let k := s ++ [name]
+    let scopes := (← get).scopes
+    if let some r := scopes.find? k then
+      if let some a ← f k r then
+        return some (r, a)
+    return none
+
+def resolve_scope (name : String) : M (Option (Scope × List String)) := do
+  resolve_single name fun k s => do
+    match s with
+    | (.scope _ _) => return some k
+    | _ => return none
+
+private def pidents_to_ident (stx : TSyntaxArray ``pident) : M <| TSyntax `ident := do
+  let ts := stx.map fun x => x.toIdent.getId.toString
+  let n := ts.foldl (init := Name.anonymous) Name.str
+  return mkIdent n
+
+@[specialize]
+def resolve_core (name : TSyntax ``dot_pident) (f : List String → Scope → M Bool) (errNotFound : {α : Type} → String → M α) : M (TSyntax ``dot_pident) := do
   let `(dot_pident| $[.%$leading_dot?]? $ts.*) := name | throwUnsupportedSyntax
   if leading_dot?.isSome then
     return name
   else
-    -- let scopes := (← get).scopes
-    return name
+    let parts := ts.getElems
+    if h' : parts.size ≤ 1 then
+      if h0 : parts.size = 0 then
+        throwProtoError (← getFileName) "resolve_core: impossible, input name has no parts"
+      else -- unqualified, like `A`
+        let last := parts[0]
+        let n := last.toIdent.getId.toString
+        let r? ← resolve_single n fun k s => do
+          if ← f k s then
+            return some k
+          else return none
+        if let some (r, k) := r? then
+          return ← to_fully_qualified_pidents k
+        else
+          errNotFound n
+    else -- partially qualified, like `A.B`
+      let pname := (← pidents_to_ident parts).getId.toString
+      let some (scope, k) ← resolve_scope parts[0].toIdent.getId.toString |
+        throwProtoError (← getFileName) "failed to resolve package, message, or service with name \"{pname}\"" -- this error message cannot be redirected
+      let tail := parts.toList.tail.map fun x => x.toIdent.getId.toString
+      let scopes := (← get).scopes
+      let k := k ++ tail
+      if let some r := scopes.find? k then
+        if ← f k r then
+          return ← to_fully_qualified_pidents k
+      errNotFound pname
+
+def resolve_message_enum_type (name : TSyntax ``dot_pident) : M (TSyntax ``dot_pident) := do
+  resolve_core name (fun _ s => return s matches (.scope _ (ScopeKind.message _)) | (.leaf _ (LeafKind.enum) _))
+    (fun n => do throwProtoError (← getFileName) "failed to resolve message or enum with name \"{n}\"")
 
 def resolve_type (e : TSyntax ``type) : M (TSyntax ``type) := do
   match e with
@@ -318,7 +403,7 @@ def merge_scopes (file : String) (a : ProtoScopes) : M Unit := do
         throwIsAlreadyDefined file k paths.head!
       | .scope _ kind, _ =>
         throwIsAlreadyDefinedNotPackage file k kind.getPath!
-      | .leaf _ file, _ =>
+      | .leaf _ _ file, _ =>
         throwIsAlreadyDefinedNotPackage file k file
   modify fun s => {s with scopes := r}
 
@@ -376,3 +461,4 @@ run_meta do
   let (r, s) ← load_proto "E.proto" { proto_paths := ["Test"] } |>.run {cache := {}}
   s.scopes.forM fun x => do
     println! "{intercalateName x.fullName}"
+  println! "{r}"

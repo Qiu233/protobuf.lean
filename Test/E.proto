@@ -1,2 +1,8 @@
 import "C.proto";
 import "D.proto";
+
+package a;
+
+message T {
+    b.A v = 1;
+}
