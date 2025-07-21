@@ -4,6 +4,44 @@ namespace Protobuf.Elab
 
 open Lean Parser Elab Command
 
+section
+
+@[specialize]
+private partial def _root_.Lean.PrefixTreeNode.foldMatchingM' {m α β σ}
+  [Monad m] (t : PrefixTreeNode α β) (cmp : α → α → Ordering) (k : List α) (init : σ) (f : List α → β → σ → m σ) : m σ :=
+  let rec fold : PrefixTreeNode α β → σ → List α → m σ
+    | PrefixTreeNode.Node b? n, d, k => do
+      let d ← match b? with
+        | none   => pure d
+        | some b => f k.reverse b d
+      n.foldM (init := d) fun d a t => fold t d (a :: k)
+  let rec find : List α → List α → PrefixTreeNode α β → σ → m σ := fun ks r t d => do
+    match ks, t, d with
+    | [],    t, d => fold t d r
+    | k::ks, PrefixTreeNode.Node _ m, d =>
+      match RBNode.find cmp m k with
+      | none   => pure init
+      | some t => find ks (k :: r) t d
+  find k [] t init
+
+@[inline]
+private def _root_.Lean.PrefixTree.foldMatchingM' [Monad m] (t : PrefixTree α β p) (k : List α) (init : σ) (f : List α → β → σ → m σ) : m σ :=
+  t.val.foldMatchingM' p k init f
+
+@[inline]
+private def _root_.Lean.PrefixTree.foldM' [Monad m] (t : PrefixTree α β p) (init : σ) (f : List α → β → σ → m σ) : m σ :=
+  t.foldMatchingM' [] init f
+
+@[inline]
+private def _root_.Lean.PrefixTree.forMatchingM' [Monad m] (t : PrefixTree α β p) (k : List α) (f : List α → β → m Unit) : m Unit :=
+  t.val.foldMatchingM' p k () (fun k b _ => f k b)
+
+@[inline]
+private def _root_.Lean.PrefixTree.forM' [Monad m] (t : PrefixTree α β p) (f : List α → β → m Unit) : m Unit :=
+  t.forMatchingM' [] f
+
+end
+
 abbrev PName := List String
 
 inductive ScopeKind where
@@ -35,16 +73,16 @@ def ScopeKind.getPath! : ScopeKind → System.FilePath
   | .message file | .service file => file
 
 inductive NameNode where
-  | scope (fullName : PName) (kind : ScopeKind)
-  | leaf (fullName : PName) (kind : LeafKind) (file : System.FilePath)
+  | scope (kind : ScopeKind)
+  | leaf (kind : LeafKind) (file : System.FilePath)
 deriving Repr
 
-def NameNode.fullName : NameNode → PName
-  | .scope x _ | .leaf x _ _  => x
+-- def NameNode.fullName : NameNode → PName
+--   | .scope x _ | .leaf x _ _  => x
 
 def NameNode.getPath! : NameNode → System.FilePath
-  | .scope _ x => x.getPath!
-  | .leaf _ _ x => x
+  | .scope x => x.getPath!
+  | .leaf _ x => x
 
 abbrev ProtoScopes := PrefixTree String NameNode compare
 
@@ -138,27 +176,27 @@ def insert_scope_raw (k : PName) (scope : NameNode) : M Unit := do
   modify fun s => {s with scopes := s.scopes.insert k scope}
 
 @[specialize]
-def insert_scope_nodup (file : System.FilePath) (name : String) (f : PName → System.FilePath → NameNode) : M Unit := do
+def insert_scope_nodup (file : System.FilePath) (name : String) (f : System.FilePath → NameNode) : M Unit := do
   let k := (← read).current_scope ++ [name]
   let s ← find_scope_node? k
   match s with
-  | none => insert_scope_raw k (f k file)
+  | none => insert_scope_raw k (f file)
   | some x =>
     match x with
-    | .scope _ (.package paths) =>
+    | .scope (.package paths) =>
       throwIsAlreadyDefined file k paths.head!
-    | .scope _ kind =>
+    | .scope kind =>
       throwIsAlreadyDefinedNotPackage file k kind.getPath!
-    | .leaf _ _ file =>
+    | .leaf _ file =>
       throwIsAlreadyDefinedNotPackage file k file
 
 @[inline]
 def insert_leaf (name : String) (kind : LeafKind) : M Unit := do
-  insert_scope_nodup (← getFileName) name (.leaf · kind ·)
+  insert_scope_nodup (← getFileName) name (.leaf kind ·)
 
 @[inline]
 def insert_message (name : String) : M Unit := do
-  insert_scope_nodup (← getFileName) name (fun k file => .scope k (.message file))
+  insert_scope_nodup (← getFileName) name (fun file => .scope (.message file))
 
 @[inline]
 def insert_package (parts : PName) : M Unit := do
@@ -168,20 +206,20 @@ def insert_package (parts : PName) : M Unit := do
     k := k ++ [p]
     let s ← find_scope_node? k
     match s with
-    | none => insert_scope_raw k (.scope k (.package [file]))
+    | none => insert_scope_raw k (.scope (.package [file]))
     | some x =>
       match x with
-      | .scope _ (.package paths) =>
-        insert_scope_raw k (.scope k (.package <| paths ++ [System.FilePath.mk file]))
-      | .scope _ kind =>
+      | .scope (.package paths) =>
+        insert_scope_raw k (.scope (.package <| paths ++ [System.FilePath.mk file]))
+      | .scope kind =>
         throwIsAlreadyDefinedNotPackage file k kind.getPath!
-      | .leaf _ _ file =>
+      | .leaf _ file =>
         throwIsAlreadyDefinedNotPackage file k file
 
 
 @[inline]
 def insert_service (file : System.FilePath) (name : String) : M Unit := do
-  insert_scope_nodup file name (fun k file => .scope k (.service file))
+  insert_scope_nodup file name (fun file => .scope (.service file))
 
 mutual
 
@@ -271,7 +309,7 @@ def resolve_single {α} (name : String) (f : PName → NameNode → M (Option α
 def resolve_scope (name : String) : M (Option (NameNode × PName)) := do
   resolve_single name fun k s => do
     match s with
-    | (.scope _ _) => return some k
+    | (.scope _) => return some k
     | _ => return none
 
 private def pidents_to_ident (stx : TSyntaxArray ``pident) : M <| TSyntax `ident := do
@@ -313,7 +351,7 @@ def resolve_core (name : TSyntax ``dot_pident) (f : PName → NameNode → M Boo
       errNotFound pname
 
 def resolve_message_enum_type (name : TSyntax ``dot_pident) : M (TSyntax ``dot_pident) := do
-  resolve_core name (fun _ s => return s matches (.scope _ (ScopeKind.message _)) | (.leaf _ (LeafKind.enum) _))
+  resolve_core name (fun _ s => return s matches (.scope (ScopeKind.message _)) | (.leaf (LeafKind.enum) _))
     (fun n => do throwProtoError (← getFileName) "failed to resolve message or enum with name \"{n}\"")
 
 def resolve_type (e : TSyntax ``type) : M (TSyntax ``type) := do
@@ -393,19 +431,18 @@ def process_top_level_defs (code : TSyntax ``proto) : M (TSyntax ``proto) := do
 
 def merge_scopes (file : String) (a : ProtoScopes) : M Unit := do
   let curr := (← get).scopes
-  let r ← a.foldM (init := curr) fun x c => do
-    let k := x.fullName
+  let r ← a.foldM' (init := curr) fun k x c => do
     match c.find? k with
     | none => return c.insert k x
     | some v => -- now we shall merge the two `Scope`
       match v, x with
-      | .scope _ (.package paths), .scope _ (.package paths') =>
-        return c.insert k (.scope k (.package (paths ++ paths').eraseDups))
-      | .scope _ (.package paths), _ =>
+      | .scope (.package paths), .scope (.package paths') =>
+        return c.insert k (.scope (.package (paths ++ paths').eraseDups))
+      | .scope (.package paths), _ =>
         throwIsAlreadyDefined file k paths.head!
-      | .scope _ kind, _ =>
+      | .scope kind, _ =>
         throwIsAlreadyDefinedNotPackage file k kind.getPath!
-      | .leaf _ _ file, _ =>
+      | .leaf _ file, _ =>
         throwIsAlreadyDefinedNotPackage file k file
   modify fun s => {s with scopes := r}
 
