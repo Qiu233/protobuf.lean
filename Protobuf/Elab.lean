@@ -4,6 +4,8 @@ namespace Protobuf.Elab
 
 open Lean Parser Elab Command
 
+abbrev PName := List String
+
 inductive ScopeKind where
   | package (files : List System.FilePath)
   | message (file : System.FilePath)
@@ -32,19 +34,19 @@ def ScopeKind.getPath! : ScopeKind → System.FilePath
   | .package files => files.head!
   | .message file | .service file => file
 
-inductive Scope where
-  | scope (fullName : List String) (kind : ScopeKind)
-  | leaf (fullName : List String) (kind : LeafKind) (file : System.FilePath)
+inductive NameNode where
+  | scope (fullName : PName) (kind : ScopeKind)
+  | leaf (fullName : PName) (kind : LeafKind) (file : System.FilePath)
 deriving Repr
 
-def Scope.fullName : Scope → List String
+def NameNode.fullName : NameNode → PName
   | .scope x _ | .leaf x _ _  => x
 
-def Scope.getPath! : Scope → System.FilePath
+def NameNode.getPath! : NameNode → System.FilePath
   | .scope _ x => x.getPath!
   | .leaf _ _ x => x
 
-abbrev ProtoScopes := PrefixTree String Scope compare
+abbrev ProtoScopes := PrefixTree String NameNode compare
 
 structure Context where
   /-- name/path of the .proto file -/
@@ -54,7 +56,7 @@ structure Context where
   /-- to prevent cyclic import -/
   imported_chain : Std.HashSet String := {}
   /-- the enclosing scope into which we add parsed stuff -/
-  current_scope : List String := []
+  current_scope : PName := []
 
 structure State where
   -- the accumulative trie of scope and names
@@ -119,24 +121,24 @@ def join_pidents (ts : Syntax.TSepArray `Protobuf.Parser.pident ".") : Ident := 
   return Lean.mkIdent t
 
 @[inline]
-def intercalateName : List String → String := String.intercalate "."
+def intercalateName : PName → String := String.intercalate "."
 
-def throwIsAlreadyDefined (file : System.FilePath) (name : List String) (from' : System.FilePath) : M α := do
+def throwIsAlreadyDefined (file : System.FilePath) (name : PName) (from' : System.FilePath) : M α := do
   throwProtoError file "\"{intercalateName name}\" is already defined in file \"{from'}\"."
 
-def throwIsAlreadyDefinedNotPackage (file : System.FilePath) (name : List String) (from' : System.FilePath) : M α := do
+def throwIsAlreadyDefinedNotPackage (file : System.FilePath) (name : PName) (from' : System.FilePath) : M α := do
   throwProtoError file "\"{intercalateName name}\" is already defined (as something other than a package) in file \"{from'}\"."
 
-def find_scope_node? (k : List String) : M (Option Scope) := do
+def find_scope_node? (k : PName) : M (Option NameNode) := do
   let scopes := (← get).scopes
   return scopes.find? k
 
 @[inline]
-def insert_scope_raw (k : List String) (scope : Scope) : M Unit := do
+def insert_scope_raw (k : PName) (scope : NameNode) : M Unit := do
   modify fun s => {s with scopes := s.scopes.insert k scope}
 
 @[specialize]
-def insert_scope_nodup (file : System.FilePath) (name : String) (f : List String → System.FilePath → Scope) : M Unit := do
+def insert_scope_nodup (file : System.FilePath) (name : String) (f : PName → System.FilePath → NameNode) : M Unit := do
   let k := (← read).current_scope ++ [name]
   let s ← find_scope_node? k
   match s with
@@ -159,7 +161,7 @@ def insert_message (name : String) : M Unit := do
   insert_scope_nodup (← getFileName) name (fun k file => .scope k (.message file))
 
 @[inline]
-def insert_package (parts : List String) : M Unit := do
+def insert_package (parts : PName) : M Unit := do
   let file ← getFileName
   let mut k := []
   for p in parts do
@@ -221,7 +223,7 @@ def preprocess_top_level_defs (code : TSyntax ``proto) : M Unit := do
       preprocess_service m
     | _ => pure ()
 
-def preprocess_package (code : TSyntax ``proto) : M (List String) := do
+def preprocess_package (code : TSyntax ``proto) : M PName := do
   let `(proto| $[$stxSpec?]? $ts*) := code | throwUnsupportedSyntax
   let ts := ts.filter fun s => s.raw.getKind == ``package
   if ts.size = 0 then
@@ -239,14 +241,14 @@ def preprocess_package (code : TSyntax ``proto) : M (List String) := do
 
 --
 
-private def to_fully_qualified_pidents (parts : List String) : M <| (TSyntax ``dot_pident) := do
+private def to_fully_qualified_pidents (parts : PName) : M <| (TSyntax ``dot_pident) := do
   let ts : TSyntaxArray ``pident ← parts.toArray.mapM fun x => do
     let p := Lean.mkIdent (Name.mkSimple x)
     return TSyntax.mk p.raw
   `(dot_pident| .$ts.*)
 
 @[specialize]
-def resolve_core_loop {α} (f : List String → M (Option α)) : M (Option α) := do
+def resolve_core_loop {α} (f : PName → M (Option α)) : M (Option α) := do
   let mut current_scope := (← read).current_scope
   while True do
     if let some r ← f current_scope then
@@ -257,7 +259,7 @@ def resolve_core_loop {α} (f : List String → M (Option α)) : M (Option α) :
   return none
 
 @[specialize]
-def resolve_single {α} (name : String) (f : List String → Scope → M (Option α)) : M (Option (Scope × α)) := do
+def resolve_single {α} (name : String) (f : PName → NameNode → M (Option α)) : M (Option (NameNode × α)) := do
   resolve_core_loop fun s => do
     let k := s ++ [name]
     let scopes := (← get).scopes
@@ -266,7 +268,7 @@ def resolve_single {α} (name : String) (f : List String → Scope → M (Option
         return some (r, a)
     return none
 
-def resolve_scope (name : String) : M (Option (Scope × List String)) := do
+def resolve_scope (name : String) : M (Option (NameNode × PName)) := do
   resolve_single name fun k s => do
     match s with
     | (.scope _ _) => return some k
@@ -278,7 +280,7 @@ private def pidents_to_ident (stx : TSyntaxArray ``pident) : M <| TSyntax `ident
   return mkIdent n
 
 @[specialize]
-def resolve_core (name : TSyntax ``dot_pident) (f : List String → Scope → M Bool) (errNotFound : {α : Type} → String → M α) : M (TSyntax ``dot_pident) := do
+def resolve_core (name : TSyntax ``dot_pident) (f : PName → NameNode → M Bool) (errNotFound : {α : Type} → String → M α) : M (TSyntax ``dot_pident) := do
   let `(dot_pident| $[.%$leading_dot?]? $ts.*) := name | throwUnsupportedSyntax
   if leading_dot?.isSome then
     return name
@@ -459,6 +461,8 @@ end
 
 run_meta do
   let (r, s) ← load_proto "E.proto" { proto_paths := ["Test"] } |>.run {cache := {}}
-  s.scopes.forM fun x => do
-    println! "{intercalateName x.fullName}"
-  println! "{r}"
+  println! "{← PrettyPrinter.ppTerm <| TSyntax.mk r}"
+
+  s.cache.forM fun a b => do
+    println! "{a}"
+    println! "{← PrettyPrinter.ppTerm <| TSyntax.mk b.fst}"
