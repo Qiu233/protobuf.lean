@@ -103,3 +103,18 @@ instance : Decode Message where
             throw e
       rs := rs.push r
     return Message.mk rs
+
+def wrap_encode {α} (f : α → Protobuf.Encoding.PMEncoder Unit) : Nat → α → Protobuf.Encoding.PMEncoder Unit := fun i a => do
+  let m := Binary.Put.run 128 <| Binary.put (f a |>.run)
+  Encoding.encode_bytes i m
+
+def wrap_decode {α} (f : Protobuf.Encoding.PMDecoder α) : Nat → Protobuf.Encoding.PMDecoder α := fun i => do
+  let d ← Encoding.decode_bytes i
+  let r := Binary.Get.run (Binary.getThe Encoding.Message) d
+  match r with
+  | Binary.DecodeResult.error err _ => throw <| .other s!"failed to decode protobuf message due to internal error: {err}"
+  | Binary.DecodeResult.pending .. => throw <| .other "failed to decode protobuf message due to not enough bytes"
+  | Binary.DecodeResult.success e .. =>
+    match f.run e with
+    | .error err => throw <| .other s!"protobuf message decoded but failed to be interpreted, internal error: {err}"
+    | .ok r => return r

@@ -5,4 +5,9 @@ package a;
 
 message T {
     b.A v = 1;
+    V x = 2;
+}
+
+message V {
+    T a = 1;
 }

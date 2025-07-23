@@ -1,4 +1,5 @@
 import Protobuf.Parser.Grammar
+import Protobuf.Encoding
 
 namespace Protobuf.Elab
 
@@ -588,33 +589,152 @@ def type_to_term (e : TSyntax ``type) : CoreM Term := do
     | _ => throwError "type_to_term: impossible"
   | _ => throwUnsupportedSyntax
 
-variable (cache : Std.HashMap String FileCache) in
-mutual
+structure TranState where
+  encodes : Std.HashMap Name Name := {}
+  decodes : Std.HashMap Name Name := {}
+  encoders : Std.HashMap Name Name := {}
+  decoders : Std.HashMap Name Name := {}
 
-private partial def genName (s : TSyntax ``pident) : ReaderT (List String) CoreM Ident := do
-  let ps ← read
+structure TranContext where
+  cache : Std.HashMap String FileCache
+  scope : List String
+
+abbrev M' := ReaderT TranContext <| StateRefT TranState CoreM
+
+def genName (s : TSyntax ``pident) : M' Name := do
+  let ps := (← read).scope
   let ps := ps ++ [s.toIdent.getId.toString]
-  let name := ps.foldl (init := Name.anonymous) Name.str
-  return Lean.mkIdent name
+  return ps.foldl (init := Name.anonymous) Name.str
 
-partial def translate_message (e : TSyntax ``message) : ReaderT (List String) CoreM (Array Command) := do
-  let `(message| message $name:pident { $body* }) := e | throwUnsupportedSyntax
-  let rs ← withReader (fun c => c ++ [name.toIdent.getId.toString]) do
-    body.mapM translate_message_body_entry_def
-  let rs := rs.flatMap id
-  let r ← translate_message_body_entry name body
-  return rs ++ r
+def genName' (s : TSyntax ``pident) : M' Ident := Lean.mkIdent <$> genName s
 
-partial def translate_enum (e : TSyntax ``enum) : ReaderT (List String) CoreM (Array Command) := do
+def getEncodeName (n : Name) : M' Name := do
+  if let some r := (← get).encodes[n]? then
+    return r
+  let r := n.append `encode
+  let r' := n.append `encoder
+  modify fun s => {s with encodes := s.encodes.insert n r}
+  modify fun s => {s with encoders := s.encoders.insert n r'}
+  return r
+
+def getDecodeName (n : Name) : M' Name := do
+  if let some r := (← get).decodes[n]? then
+    return r
+  let r := n.append `decode
+  let r' := n.append `decoder
+  modify fun s => {s with decodes := s.decodes.insert n r}
+  modify fun s => {s with decoders := s.decoders.insert n r'}
+  return r
+
+def getEncoderName (n : Name) : M' Name := do
+  if let some r := (← get).encoders[n]? then
+    return r
+  let r := n.append `encode
+  let r' := n.append `encoder
+  modify fun s => {s with encodes := s.encodes.insert n r}
+  modify fun s => {s with encoders := s.encoders.insert n r'}
+  return r'
+
+def getDecoderName (n : Name) : M' Name := do
+  if let some r := (← get).decoders[n]? then
+    return r
+  let r := n.append `decode
+  let r' := n.append `decoder
+  modify fun s => {s with decodes := s.decodes.insert n r}
+  modify fun s => {s with decoders := s.decoders.insert n r'}
+  return r'
+
+def getEncode (e : TSyntax ``type) : M' Term := do
+  match e with
+  | `(type| double  ) => `($(mkIdent ``Encoding.encode_float64    ))
+  | `(type| float   ) => `($(mkIdent ``Encoding.encode_float32))
+  | `(type| int32   ) => `($(mkIdent ``Encoding.encode_int32))
+  | `(type| int64   ) => `($(mkIdent ``Encoding.encode_int64))
+  | `(type| uint32  ) => `($(mkIdent ``Encoding.encode_uint32))
+  | `(type| uint64  ) => `($(mkIdent ``Encoding.encode_uint64))
+  | `(type| sint32  ) => `($(mkIdent ``Encoding.encode_sint32))
+  | `(type| sint64  ) => `($(mkIdent ``Encoding.encode_sint64))
+  | `(type| fixed32 ) => `($(mkIdent ``Encoding.encode_fixed32))
+  | `(type| fixed64 ) => `($(mkIdent ``Encoding.encode_fixed64))
+  | `(type| sfixed32) => `($(mkIdent ``Encoding.encode_sfixed32))
+  | `(type| sfixed64) => `($(mkIdent ``Encoding.encode_sfixed64))
+  | `(type| bool    ) => `($(mkIdent ``Encoding.encode_bool))
+  | `(type| string  ) => `($(mkIdent ``Encoding.encode_string))
+  | `(type| bytes   ) => `($(mkIdent ``Encoding.encode_bytes))
+  | `(type| $name:dot_pident) =>
+    match name with
+    | `(dot_pident| .$ns.*) =>
+      let n ← pidents_to_ident ns
+      let s ← Lean.mkIdent <$> getEncodeName n.getId
+      return s
+    | _ => throwError "getEncoder: impossible"
+  | _ => throwUnsupportedSyntax
+
+def getDecode (e : TSyntax ``type) : M' Term := do
+  match e with
+  | `(type| double  ) => `($(mkIdent ``Encoding.decode_float64  ))
+  | `(type| float   ) => `($(mkIdent ``Encoding.decode_float32  ))
+  | `(type| int32   ) => `($(mkIdent ``Encoding.decode_int32    ))
+  | `(type| int64   ) => `($(mkIdent ``Encoding.decode_int64    ))
+  | `(type| uint32  ) => `($(mkIdent ``Encoding.decode_uint32   ))
+  | `(type| uint64  ) => `($(mkIdent ``Encoding.decode_uint64   ))
+  | `(type| sint32  ) => `($(mkIdent ``Encoding.decode_sint32   ))
+  | `(type| sint64  ) => `($(mkIdent ``Encoding.decode_sint64   ))
+  | `(type| fixed32 ) => `($(mkIdent ``Encoding.decode_fixed32  ))
+  | `(type| fixed64 ) => `($(mkIdent ``Encoding.decode_fixed64  ))
+  | `(type| sfixed32) => `($(mkIdent ``Encoding.decode_sfixed32 ))
+  | `(type| sfixed64) => `($(mkIdent ``Encoding.decode_sfixed64 ))
+  | `(type| bool    ) => `($(mkIdent ``Encoding.decode_bool     ))
+  | `(type| string  ) => `($(mkIdent ``Encoding.decode_string   ))
+  | `(type| bytes   ) => `($(mkIdent ``Encoding.decode_bytes    ))
+  | `(type| $name:dot_pident) =>
+    match name with
+    | `(dot_pident| .$ns.*) =>
+      let n ← pidents_to_ident ns
+      let s ← Lean.mkIdent <$> getDecodeName n.getId
+      return s
+    | _ => throwError "getDecoder: impossible"
+  | _ => throwUnsupportedSyntax
+
+def _root_.Lean.TSyntax.getIntLit (s : TSyntax ``intLit) : Nat := Id.run do
+  match s with
+  | `(intLit| $o:decimalLit) =>
+    let b := o.raw[0].getAtomVal
+    let v := b.data.foldl (init := 0) (fun x v => (x * 10) + (v.toNat - '0'.toNat))
+    return v
+  | `(intLit| $o:octalLit) =>
+    let b := o.raw[0].getAtomVal
+    let v := b.data.drop 1 |>.foldl (init := 0) (fun x v => (x * 8) + (v.toNat - '0'.toNat))
+    return v
+  | `(intLit| $o:hexLit) =>
+    let b := o.raw[0].getAtomVal
+    let v := b.data.drop 2 |>.foldl (init := 0) (fun x v => (x * 16) + (if v.isDigit then v.toNat - '0'.toNat else if 'a' ≤ v && v ≤ 'f' then v.toNat - 'a'.toNat + 10 else v.toNat - 'A'.toNat + 10))
+    return v
+  | _ => 0
+
+def translate_enum (e : TSyntax ``enum) : M' (Array Command) := do
   let `(enum| enum $name:pident { $body* }) := e | throwUnsupportedSyntax
   let fs := body.filterMap fun x => if x.raw.getKind == ``enumField then some (TSyntax.mk (ks := ``enumField) x.raw) else none
   let ns ← fs.mapM fun x => do
     let `(enumField| $name:pident = $[-]? $num $[[$options?,*]]?;) := x | unreachable!
     pure name.toIdent
-  let s ← `(command| inductive $(← genName name):ident where $[| $ns:ident]*)
+  let s ← `(command| inductive $(← genName' name):ident where $[| $ns:ident]*)
   return #[s]
 
-partial def translate_message_body_entry_def (e : TSyntax `message_body_entry) : ReaderT (List String) CoreM (Array Command) := do
+open Encoding.AuxNotation
+
+mutual
+
+partial def translate_message (e : TSyntax ``message) : M' (Array Command) := do
+  let `(message| message $name:pident { $body* }) := e | throwUnsupportedSyntax
+  let fullName ← genName name
+  withReader (fun c => {c with scope := c.scope ++ [name.toIdent.getId.toString]}) do
+    let rs ← body.mapM translate_message_body_entry_def
+    let rs := rs.flatMap id
+    let r ← translate_message_body_entry fullName body
+    return rs ++ r
+
+partial def translate_message_body_entry_def (e : TSyntax `message_body_entry) : M' (Array Command) := do
   match e with
   | `(message_body_entry| $e:enum) =>
     translate_enum e
@@ -627,17 +747,43 @@ partial def translate_message_body_entry_def (e : TSyntax `message_body_entry) :
   | `(message_body_entry| ;)
   | _ => pure #[]
 
-partial def translate_message_body_entry (name : TSyntax ``pident) (e : TSyntaxArray `message_body_entry) : ReaderT (List String) CoreM (Array Command) := do
-  let ts := e.filterMap fun x => if x.raw[0].getKind == ``field then some (TSyntax.mk (ks := ``enumField) x.raw) else none
-  let rs ← ts.mapM fun t => do
+
+partial def translate_message_body_entry (declFullName : Name) (e : TSyntaxArray `message_body_entry) : M' (Array Command) := do
+  let ts := e.filterMap fun x => if x.raw[0].getKind == ``field then some (TSyntax.mk (ks := ``field) x.raw) else none
+  let ts ← ts.mapM fun t => do
     let `(message_body_entry| $[$modifier?]? $type:type $name:pident = $num:intLit $[[$options?]]?;) := t | unreachable!
+    return (modifier?, type, name, num, options?)
+  let rs ← ts.mapM fun (modifier?, type, name, num, options?) => do
     let type' ← type_to_term type
     `(Parser.Command.structSimpleBinder| $(name.toIdent):ident : $type')
   let fields ← `(Parser.Command.structFields| $rs*)
-  let c ← `(command| structure $(← genName name) where $fields:structFields)
-  return #[c]
+  let c ← `(command| structure $(Lean.mkIdent declFullName) where $fields:structFields)
+  let fns := ts.map fun (modifier?, type, name, num, options?) => name.toIdent
+  let ns ← fns.mapM fun name => do
+    let n := name.getId
+    return Lean.mkIdent n
+  let ps ← ns.zip ts |>.mapM fun (vname, modifier?, type, name, num, options?) => do
+    let encoder ← getEncode type
+    let decoder ← getDecode type
+    let n := num.getIntLit
+    let e ← `(Parser.Term.doSeqItem| $encoder:term $(quote n):num x.$(name.toIdent))
+    let q ← genName name
+    let d ← `(Parser.Term.doSeqItem| let $vname:ident ← checked% $(quote q) $decoder:term at $(quote n):num)
+    return (e, d)
+  let ename ← getEncoderName declFullName
+  let dname ← getDecoderName declFullName
+  let encoder ← `(command| unsafe def $(Lean.mkIdent ename):ident : $(Lean.mkIdent declFullName) → $(Lean.mkIdent ``Encoding.PMEncoder) Unit := fun x => do $(ps.unzip.fst)*)
+  let decVal ← `(Parser.Term.structInst| { $[$fns:ident := $ns:ident]* })
+  let decoder ← `(command| unsafe def $(Lean.mkIdent dname):ident : $(Lean.mkIdent ``Encoding.PMDecoder) $(Lean.mkIdent declFullName) := do
+    $(ps.unzip.snd)*
+    return $decVal:structInst)
+  let encode ← `(command| unsafe def $(Lean.mkIdent (← getEncodeName declFullName)):ident : Nat → $(Lean.mkIdent declFullName) → $(Lean.mkIdent ``Encoding.PMEncoder) Unit :=
+    $(Lean.mkIdent ``Encoding.wrap_encode) $(Lean.mkIdent ename):ident)
+  let decode ← `(command| unsafe def $(Lean.mkIdent (← getDecodeName declFullName)):ident : Nat → $(Lean.mkIdent ``Encoding.PMDecoder) $(Lean.mkIdent declFullName) :=
+    $(Lean.mkIdent ``Encoding.wrap_decode) $(Lean.mkIdent dname):ident)
+  return #[c, encoder, decoder, encode, decode]
 
-partial def translate_top_level_defs (code : TSyntax ``proto) : ReaderT (List String) CoreM (Array Command) := do
+partial def translate_top_level_defs (code : TSyntax ``proto) : M' (Array Command) := do
   let `(proto| $[$stxSpec?]? $ts*) := code | throwUnsupportedSyntax
   ts.flatMapM fun t => do
     let `(topLevelDef| $t:topLevelDef) := t | return #[]
@@ -674,7 +820,7 @@ partial def translate_proto (file : String) : StateRefT (Std.HashSet String) Cor
       | _ => unreachable!
   let pres ← importFiles.flatMapM translate_proto
   --
-  let cs ← translate_top_level_defs proto pack
+  let cs ← translate_top_level_defs proto {cache := cache, scope := pack} |>.run' {}
   modify fun s => s.insert file
   return pres ++ cs
 
@@ -701,26 +847,29 @@ def elabLoadProtobufCommand : CommandElab := fun stx => do
       throwErrorAt x "path is not a directory"
     pure s
   let files := filesStx.getElems.map fun x => x.getString
-  runTermElabM fun _ => do
+  let cmds ← runTermElabM fun _ => do
     let (r, cache) ← load_protos paths files
     let cmds ← translate_protos cache files
-    let cmds := cmds.toList.mergeSort fun x y =>
-      match x, y with
-      | `(command| $m:declModifiers $c:inductive), _ => true
-      | `(command| $m:declModifiers $c:structure), r => !(y matches `(command| $m:declModifiers $c:inductive))
-      | _, _ => false
-    let a := cmds.findIdx (α := Command) (fun x => x matches `(command| $m:declModifiers $c:structure))
-    let b := cmds.length - cmds.reverse.findIdx (α := Command) (fun x => x matches `(command| $m:declModifiers $c:structure))
-    let sub := cmds.extract a b
-    let cmds ←
-      if sub.isEmpty then
-        pure cmds
-      else
-        let h := cmds.take a
-        let t := cmds.drop b
-        pure <| h ++ [← `(command| mutual $(sub.toArray)* end)] ++ t
-    let t := MessageData.joinSep (cmds.map fun x => m!"{x}") m!"\n\n"
+    let (inds, cmds) : Array Command × Array Command := cmds.partition (fun x => x matches `(command| $m:declModifiers $c:inductive))
+    let (structs, cmds) : Array Command × Array Command := cmds.partition (fun x => x matches `(command| $m:declModifiers $c:structure))
+    let (defs, cmds) : Array Command × Array Command := cmds.partition (fun x => x matches `(command| $m:declModifiers $c:definition))
+    let structsMut ← `(command|
+      mutual
+        $structs*
+      end
+    )
+    let defsMut ← `(command|
+      mutual
+        $defs*
+      end
+    )
+    let complete := inds ++ [structsMut, defsMut] ++ cmds
+    let t := MessageData.joinSep (complete.toList.map fun x => m!"{x}") m!"\n\n"
     logInfo m!"{t}"
+    return complete
+  cmds.forM fun c => do
+    elabCommand c
 
 
-#load_protobuf ["Test"] ["descriptor.proto"]
+-- #load_protobuf ["Test"] ["descriptor.proto"]
+-- #load_protobuf ["Test"] ["E.proto"]
