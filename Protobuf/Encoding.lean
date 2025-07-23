@@ -118,3 +118,82 @@ def wrap_decode {α} (f : Protobuf.Encoding.PMDecoder α) : Nat → Protobuf.Enc
     match f.run e with
     | .error err => throw <| .other s!"protobuf message decoded but failed to be interpreted, internal error: {err}"
     | .ok r => return r
+
+def wrap_decode? {α} (f : Protobuf.Encoding.PMDecoder α) : Nat → Protobuf.Encoding.PMDecoder (Option α) := fun i => do
+  let d ← Encoding.decode_bytes i
+  let r := Binary.Get.run (Binary.getThe Encoding.Message) d
+  match r with
+  | Binary.DecodeResult.error ..
+  | Binary.DecodeResult.pending .. => return none
+  | Binary.DecodeResult.success e .. =>
+    match f.run e with
+    | .error err => throw <| .other s!"protobuf message decoded but failed to be interpreted, internal error: {err}"
+    | .ok r => return r
+
+section
+
+open Primitive.LE
+
+def put_uint32    (x : UInt32)   : Binary.Put := put_varint x.toNat
+def put_uint64    (x : UInt64)   : Binary.Put := put_varint x.toNat
+def put_int32     (x : Int32)    : Binary.Put := put_varint x.toUInt32.toNat
+def put_int64     (x : Int64)    : Binary.Put := put_varint x.toUInt64.toNat
+def put_bool      (x : Bool)     : Binary.Put := put_varint <| if x then 1 else 0
+def put_sint32    (x : Int32)    : Binary.Put := put_varint <| from_sint32 x
+def put_sint64    (x : Int64)    : Binary.Put := put_varint <| from_sint64 x
+def put_fixed32   (x : UInt32)   : Binary.Put := put x
+def put_fixed64   (x : UInt64)   : Binary.Put := put x
+def put_sfixed32  (x : Int32)    : Binary.Put := put x
+def put_sfixed64  (x : Int64)    : Binary.Put := put x
+def put_float32   (x : Float32)  : Binary.Put := put x
+def put_float64   (x : Float)    : Binary.Put := put x
+
+def get_uint32    : Binary.Get UInt32  := UInt32.ofNat <$> get_varint
+def get_uint64    : Binary.Get UInt64  := UInt64.ofNat <$> get_varint
+def get_int32     : Binary.Get Int32   := Int32.ofNat  <$> get_varint
+def get_int64     : Binary.Get Int64   := Int64.ofNat  <$> get_varint
+def get_bool      : Binary.Get Bool    := (· == 1) <$> get_varint
+def get_sint32    : Binary.Get Int32   := to_sint32 <$> get_varint
+def get_sint64    : Binary.Get Int64   := to_sint64 <$> get_varint
+def get_fixed32   : Binary.Get UInt32  := Binary.get
+def get_fixed64   : Binary.Get UInt64  := Binary.get
+def get_sfixed32  : Binary.Get Int32   := Binary.get
+def get_sfixed64  : Binary.Get Int64   := Binary.get
+def get_float32   : Binary.Get Float32 := Binary.get
+def get_float64   : Binary.Get Float   := Binary.get
+
+end
+
+def packed_encode {α} (f : α → Binary.Put) : Nat → Array α → Protobuf.Encoding.PMEncoder Unit := fun i a => do
+  let m := Binary.Put.run 128 (a.forM f)
+  Encoding.encode_bytes i m
+
+def packed_decode {α} (f : Binary.Get α) : Nat → Protobuf.Encoding.PMDecoder (Array α) := fun i => do
+  let g : Binary.Get (Array α) := do
+    let mut vs := Array.emptyWithCapacity 8
+    while True do
+      let v ← try f catch _ => break
+      vs := vs.push v
+    return vs
+  let data ← PMDecoder.getAll i Validator.bytes
+  let r := data.map g.run
+  r.flatMapM fun r => do
+    match r with
+    | Binary.DecodeResult.error err _ => throw <| .other s!"failed to decode packed bytes due to internal error: {err}"
+    | Binary.DecodeResult.pending .. => throw <| .other "failed to decode packed bytes due to not enough bytes"
+    | Binary.DecodeResult.success e .. => return e
+
+def repeated_string_decode : Nat → Protobuf.Encoding.PMDecoder (Array String) := fun i => PMDecoder.getAll i Validator.string
+def repeated_bytes_decode : Nat → Protobuf.Encoding.PMDecoder (Array ByteArray) := fun i => PMDecoder.getAll i Validator.bytes
+
+def repeated_wrap_decode {α} (f : Protobuf.Encoding.PMDecoder α) : Nat → Protobuf.Encoding.PMDecoder (Array α) := fun i => do
+  let data ← PMDecoder.getAll i Validator.bytes
+  let r := data.map fun d => Binary.Get.run (Binary.getThe Encoding.Message) d
+  r.mapM fun r => do
+    match r with
+    | Binary.DecodeResult.error err _ => throw <| .other s!"failed to decode protobuf message due to internal error: {err}"
+    | Binary.DecodeResult.pending .. => throw <| .other "failed to decode protobuf message due to not enough bytes"
+    | Binary.DecodeResult.success e .. =>
+      match f.run e with
+      | .error err => throw <| .other s!"protobuf message decoded but failed to be interpreted, internal error: {err}"
+      | .ok r => return r

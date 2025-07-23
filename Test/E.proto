@@ -6,6 +6,7 @@ package a;
 message T {
     b.A v = 1;
     V x = 2;
+    repeated int32 t = 3;
 }
 
 message V {

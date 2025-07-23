@@ -27,6 +27,8 @@ open Binary
 structure A where
   a : Int32
   b : Option String
+  c : Array UInt64
+  d : Array String
 deriving Inhabited
 
 
@@ -35,10 +37,14 @@ instance : ProtoMessage A where
   encode x := do
     encode_sint32 0 x.a
     x.b.forM (encode_string 1)
+    packed_encode (put_uint64) 2 x.c
+    x.d.forM (encode_string 3)
   decode := do
     let a ← checked% ``A.a decode_sint32 at 0
     let b ← checked% ``A.b decode_string? at 1
-    return { a := a, b := b }
+    let c ← packed_decode (get_uint64) 2
+    let d ← repeated_string_decode 3
+    return { a := a, b := b, c := c, d := d }
 
 run_meta do
   let s ← `(a)

@@ -72,16 +72,8 @@ def Message.find? (m : Message) (n : Nat) : Option ProtoVal :=
   m.records.find? (fun x => x.field_num == n) |>.map fun x => x.value
 
 @[inline]
-def Message.update (m : Message) (n : Nat) (v : ProtoVal) : Message :=
+def Message.insert (m : Message) (n : Nat) (v : ProtoVal) : Message :=
   let rs := m.records
-  let rs := rs.eraseP (fun x => x.field_num == n)
-  let rs := rs.push <| Record.mk n v
-  ⟨rs⟩
-
-@[inline]
-def Message.update? (m : Message) (n : Nat) (v : Option ProtoVal) : Message := Option.getD (dflt := m) <| v.map fun v =>
-  let rs := m.records
-  let rs := rs.eraseP (fun x => x.field_num == n)
   let rs := rs.push <| Record.mk n v
   ⟨rs⟩
 
@@ -218,6 +210,13 @@ def PMDecoder.get {α} [Inhabited α] (i : Nat) (validate : Validator α) : PMDe
 @[inline, specialize]
 def PMDecoder.get? {α} (i : Nat) (validate : Validator α) : PMDecoder (Option α) := do
   PMDecoder.getD i (fun x => some <$> validate x) (pure none)
+
+@[inline, specialize]
+def PMDecoder.getAll {α} [Inhabited α] (i : Nat) (validate : Validator α) : PMDecoder (Array α) := do
+  let c ← read
+  match c.get? i with
+  | none => return #[]
+  | some v => v.val.mapM validate
 
 namespace Validator
 
