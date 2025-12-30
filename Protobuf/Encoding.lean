@@ -1,19 +1,25 @@
-import Binary
-import Protobuf.Encoding.Basic
+module
+
+public import Binary
+public import Protobuf.Encoding.Basic
+
+public section
 
 namespace Protobuf.Encoding
 
 open Binary
 
+@[always_inline]
 private def get_varint_bytes : Get ByteArray := do
   let mut bs := ByteArray.emptyWithCapacity 4 -- TODO: maybe another value?
-  while True do
+  repeat
     let b ← getThe UInt8
     bs := bs.push b
     if !b.toBitVec.msb then
       break
   return bs
 
+@[always_inline]
 def get_varint : Get Nat := do
   let bs ← get_varint_bytes
   let mut v := 0
@@ -29,7 +35,7 @@ def put_varint (n : Nat) : Put := do
     bs := bs.push bv[i]!
   let mut cs := bs.toList
   let mut es := #[]
-  while True do
+  repeat
     let (l, r) := cs.splitAt 7
     cs := r
     let stop := r.all (· == false)
@@ -47,6 +53,7 @@ def put_varint (n : Nat) : Put := do
   put_bytes ⟨ts⟩
 
 open Primitive.LE in
+@[always_inline]
 instance : Encode Record where
   put x := do
     let wire_type : Nat := match x.value with
@@ -66,6 +73,7 @@ instance : Encode Record where
       put_bytes data
 
 open Primitive.LE in
+@[always_inline]
 instance : Decode Record where
   get := do
     let key ← get_varint
@@ -85,11 +93,13 @@ instance : Decode Record where
     | 5 =>
       let v ← getThe UInt32
       return ⟨num, .I32 v.toBitVec⟩
-    | _ => throw "protobuf: invalid wire type encountered"
+    | _ => throw (.userError "protobuf: invalid wire type encountered")
 
+@[always_inline]
 instance : Encode Message where
   put x := x.records.forM put
 
+@[always_inline]
 instance : Decode Message where
   get := do
     let mut rs := #[]
@@ -97,9 +107,8 @@ instance : Decode Message where
       let r ←
         try getThe Record
         catch e =>
-          if e = "EOI" then
-            break -- TODO: check the position
-          else
-            throw e
+          match e with
+          | .eoi => break -- TODO: check the position
+          | _ => throw e
       rs := rs.push r
     return Message.mk rs

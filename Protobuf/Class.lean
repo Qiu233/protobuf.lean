@@ -1,12 +1,15 @@
-import Protobuf.Encoding
+module
+public import Protobuf.Encoding
+
+public section
 
 namespace Protobuf
 
-class Default (α : Type) [BEq α] where
-  pdefault : α
-  isDefault : α → Bool := fun x => x == pdefault
+-- class Default (α : Type) [BEq α] where
+--   pdefault : α
+--   isDefault : α → Bool := fun x => x == pdefault
 
-export Default (pdefault)
+-- export Default (pdefault)
 
 class ProtoMessage (α : Type) where
   encode : α → Encoding.Message

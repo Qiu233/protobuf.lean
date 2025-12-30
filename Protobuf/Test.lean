@@ -1,10 +1,16 @@
-import Protobuf.Encoding
-import Protobuf.Encoding.Pretty
+module
 
-open Protobuf.Encoding
+public import Protobuf.Encoding
+public import Binary
+import Binary.Hex
+
 open Binary
+open Protobuf Encoding
 
-#eval Get.run (getThe Message) hex!"089601" |>.toExcept
+local instance : Repr ByteArray where
+  reprPrec x p := reprPrec x.data p
+
+#eval Get.run (Binary.getThe Message) hex!"089601" |>.toExcept
 
 #eval Get.run (getThe Message) hex!"0a06616263313233" |>.toExcept
 

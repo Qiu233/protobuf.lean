@@ -1,4 +1,6 @@
-import Binary
+module
+
+public section
 
 namespace Protobuf.Encoding
 
@@ -19,7 +21,7 @@ structure Message where
 * We only derive the instances if `Repr ByteArray` is present.
 * These instances are `scoped`, that is, only have effect when the namespace is opened.
 -/
-section
+public section
 
 variable [Repr ByteArray]
 
