@@ -11,4 +11,4 @@ lean_lib «Protobuf» where
 lean_exe "protobuf" where
   root := `Main
 
-require binary from git "https://github.com/Qiu233/binary" @ "d845ca7766aebeabc481f95d0c738cfb80828369"
+require binary from git "https://github.com/Qiu233/binary" @ "34c54ee3dda26c4bfaff0041464756df2ecc0760"
