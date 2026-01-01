@@ -1,4 +1,4 @@
-syntax = "proto3";
+syntax = "proto2";
 
 package google.protobuf;
 
@@ -414,8 +414,8 @@ message MethodOptions {
 
 message UninterpretedOption {
   message NamePart {
-    string name_part = 1;
-    bool is_extension = 2;
+    required string name_part = 1;
+    required bool is_extension = 2;
   }
   repeated NamePart name = 2;
 

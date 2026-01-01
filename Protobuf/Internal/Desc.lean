@@ -33,8 +33,8 @@ enum Edition {
 }
 
 message UninterpretedOption.NamePart {
-  string name_part = 1;
-  bool is_extension = 2;
+  required string name_part = 1;
+  required bool is_extension = 2;
 }
 
 message UninterpretedOption {
