@@ -56,40 +56,65 @@ partial def put_varint (n : Nat) : Put := do
 
 open Primitive.LE in
 @[always_inline]
-instance : Encode Record where
+partial instance : Encode Record where
   put x := do
-    let v : Nat := (x.fieldNum <<< 3) ||| x.value.wireType
-    put_varint v
-    match x.value with
-    | .VARINT v => put_varint v
-    | .I64 v => put (UInt64.ofBitVec v)
-    | .I32 v => put (UInt32.ofBitVec v)
-    | .LEN data =>
-      put_varint data.size
-      put_bytes data
+    let rec go (x : Record) : Put := do
+      let wireType : ProtoVal → Nat
+        | .VARINT .. => 0
+        | .I64 .. => 1
+        | .LEN .. => 2
+        | .GROUPED .. => unreachable!
+        | .I32 .. => 5
+      match x.value with
+      | .GROUPED sub =>
+        put_varint <| (x.fieldNum <<< 3) ||| 3 -- SGROUP
+        sub.records.forM go
+        put_varint <| (x.fieldNum <<< 3) ||| 4 -- EGROUP
+      | _ =>
+        let v : Nat := (x.fieldNum <<< 3) ||| (wireType x.value)
+        put_varint v
+        match x.value with
+        | .VARINT v => put_varint v
+        | .I64 v => put (UInt64.ofBitVec v)
+        | .I32 v => put (UInt32.ofBitVec v)
+        | .GROUPED _ => unreachable!
+        | .LEN data =>
+          put_varint data.size
+          put_bytes data
+    go x
 
 open Primitive.LE in
 @[always_inline]
-instance : Decode Record where
+partial instance : Decode Record where
   get := do
-    let key ← get_varint
-    let wire_type := (key &&& 0b111)
-    let num := (key >>> 3)
-    match wire_type with
-    | 0 =>
-      let v ← get_varint
-      return ⟨num, .VARINT v⟩
-    | 1 =>
-      let v ← getThe UInt64
-      return ⟨num, .I64 v.toBitVec⟩
-    | 2 =>
-      let size ← get_varint
-      let bytes ← get_bytes size
-      return ⟨num, .LEN bytes⟩
-    | 5 =>
-      let v ← getThe UInt32
-      return ⟨num, .I32 v.toBitVec⟩
-    | _ => throw (.userError "protobuf: invalid wire type encountered")
+    let rec go : Get (Option Record) := do
+      let key ← get_varint
+      let wire_type := (key &&& 0b111)
+      let num := (key >>> 3)
+      match wire_type with
+      | 0 =>
+        let v ← get_varint
+        return some ⟨num, .VARINT v⟩
+      | 1 =>
+        let v ← getThe UInt64
+        return some ⟨num, .I64 v.toBitVec⟩
+      | 2 =>
+        let size ← get_varint
+        let bytes ← get_bytes size
+        return some ⟨num, .LEN bytes⟩
+      | 3 =>
+        let mut rs := #[]
+        repeat
+          let some x ← go | break
+          rs := rs.push x
+        return some ⟨num, .GROUPED ⟨rs⟩⟩
+      | 4 => return none
+      | 5 =>
+        let v ← getThe UInt32
+        return some ⟨num, .I32 v.toBitVec⟩
+      | _ => throw (.userError "protobuf: invalid wire type encountered")
+    let some r ← go | throw (.userError "protobuf: unexpected EGROUP")
+    return r
 
 @[always_inline]
 instance : Encode Message where

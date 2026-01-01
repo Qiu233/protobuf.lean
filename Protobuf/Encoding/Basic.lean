@@ -4,19 +4,27 @@ public section
 
 namespace Protobuf.Encoding
 
+mutual
+
 inductive ProtoVal where
   | VARINT (val : Nat)      -- 0
   | I64 (val : BitVec 64)   -- 1
   | LEN (data : ByteArray)  -- 2
+  /-- `GROUPED` is not real wire type -/
+  | GROUPED (subMessage : Message) -- 34
   | I32 (val : BitVec 32)   -- 5
 deriving Inhabited
 
-@[always_inline]
-def ProtoVal.wireType : ProtoVal → Nat
-  | .VARINT .. => 0
-  | .I64 .. => 1
-  | .LEN .. => 2
-  | .I32 .. => 5
+structure Record where
+  fieldNum : Nat
+  value : ProtoVal
+deriving Inhabited
+
+structure Message where
+  records : Array Record
+deriving Inhabited
+
+end
 
 @[always_inline]
 def ProtoVal.isVARINT : ProtoVal → Bool
@@ -65,14 +73,10 @@ def ProtoVal.isScalar : ProtoVal → Bool
   | .I32 .. => true
   | _ => false
 
-structure Record where
-  fieldNum : Nat
-  value : ProtoVal
-deriving Inhabited
-
-structure Message where
-  records : Array Record
-deriving Inhabited
+@[always_inline]
+def ProtoVal.isGROUPED : ProtoVal → Bool
+  | .GROUPED .. => true
+  | _ => false
 
 @[always_inline]
 def Message.empty : Message := Message.mk Array.empty
@@ -86,9 +90,11 @@ def Message.emptyWithCapacity (capacity : Nat) : Message := Message.mk (Array.em
 -/
 public section
 
+mutual
+
 variable [Repr ByteArray]
 
-scoped instance : Repr ProtoVal where
+private unsafe instance instReprProtoValUnsafe : Repr ProtoVal where
   reprPrec x prec := match x with
       | ProtoVal.VARINT a =>
         Repr.addAppParen
@@ -105,14 +111,21 @@ scoped instance : Repr ProtoVal where
           (Std.Format.nest (if prec ≥ 1024 then 1 else 2)
               (Std.Format.text "Protobuf.Encoding.ProtoVal.LEN" ++ Std.Format.line ++ reprArg a)).group
           prec
+      | ProtoVal.GROUPED a =>
+        have := instReprMessageUnsafe
+        Repr.addAppParen
+          (Std.Format.nest (if prec ≥ 1024 then 1 else 2)
+              (Std.Format.text "Protobuf.Encoding.ProtoVal.GROUPED" ++ Std.Format.line ++ reprArg a)).group
+          prec
       | ProtoVal.I32 a =>
         Repr.addAppParen
           (Std.Format.nest (if prec ≥ 1024 then 1 else 2)
               (Std.Format.text "Protobuf.Encoding.ProtoVal.I32" ++ Std.Format.line ++ reprArg a)).group
           prec
 
-scoped instance : Repr Record where
+private unsafe instance instReprRecordUnsafe : Repr Record where
   reprPrec x prec :=
+      have := instReprProtoValUnsafe
       Std.Format.bracket "{ "
         (Std.Format.nil ++ Std.Format.text "fieldNum" ++ Std.Format.text " := " ++
                     (Std.Format.nest 13 (repr x.fieldNum)).group ++
@@ -123,11 +136,23 @@ scoped instance : Repr Record where
           (Std.Format.nest 9 (repr x.value)).group)
         " }"
 
-scoped instance : Repr Message where
+private unsafe instance instReprMessageUnsafe : Repr Message where
   reprPrec x prec :=
+      have := instReprRecordUnsafe
       Std.Format.bracket "{ "
         (Std.Format.nil ++ Std.Format.text "records" ++ Std.Format.text " := " ++
           (Std.Format.nest 11 (repr x.records)).group)
         " }"
+
+end
+
+@[implemented_by instReprProtoValUnsafe, scoped instance]
+opaque instReprProtoValOfReprByteArray [Repr ByteArray] : Repr ProtoVal := ⟨fun _ _ => ""⟩
+
+@[implemented_by instReprRecordUnsafe, scoped instance]
+opaque instReprRecordOfReprByteArray [Repr ByteArray] : Repr Record := ⟨fun _ _ => ""⟩
+
+@[implemented_by instReprMessageUnsafe, scoped instance]
+opaque instReprMessageOfReprByteArray [Repr ByteArray] : Repr Message := ⟨fun _ _ => ""⟩
 
 end

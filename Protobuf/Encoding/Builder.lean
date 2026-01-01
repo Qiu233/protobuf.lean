@@ -77,6 +77,7 @@ def ProtoVal.canBePacked : ProtoVal → Bool
   | .VARINT ..
   | .I64 ..
   | .I32 .. => true
+  | .GROUPED ..
   | .LEN .. => false
 
 open Binary.Primitive.LE in

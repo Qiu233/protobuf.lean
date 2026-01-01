@@ -289,11 +289,8 @@ private def construct_decoder_rep (name : Ident) (push_name : String → Ident) 
   let msg ← mkIdent <$> mkFreshUserName `msg
   let decoderRepId := push_name "decoder_rep"
   let decoderRep ← `(partial def $decoderRepId:ident : Protobuf.Encoding.Message → Nat → Except Protobuf.Encoding.ProtoDecodeError (Array $name) := fun $msg field_num => do
-    let xs ← Encoding.Message.getExpandedBytes $msg field_num
-    xs.mapM fun bytes => do
-      let r := Binary.Get.run (Binary.getThe Protobuf.Encoding.Message) bytes
-      let m ← Encoding.protoDecodeParseResultExcept r.toExcept
-      $fromMessage:ident m
+    let xs ← Encoding.Message.getExpandedMessage $msg field_num
+    xs.mapM $fromMessage:ident
     )
   return (decoderRepId, decoderRep)
 
@@ -343,11 +340,8 @@ private def construct_decoder? (name : Ident) (push_name : String → Ident) (fr
   let msg ← mkIdent <$> mkFreshUserName `msg
   let decoder?Id := push_name "decoder?"
   let decoder? ← `(partial def $decoder?Id:ident : Protobuf.Encoding.Message → Nat → Except Protobuf.Encoding.ProtoDecodeError (Option $name) := fun $msg field_num => do
-    let bytes? ← Encoding.Message.getExpandedBytes $msg field_num
-    let ms ← bytes?.mapM fun bytes => do
-      let r := Binary.Get.run (Binary.getThe Protobuf.Encoding.Message) bytes
-      let m ← Encoding.protoDecodeParseResultExcept r.toExcept
-      $fromMessage:ident m
+    let xs? ← Encoding.Message.getExpandedMessage $msg field_num
+    let ms ← xs?.mapM $fromMessage:ident
     if let m :: ms := ms.toList then
       if ms.isEmpty then
         return some m

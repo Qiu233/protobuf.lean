@@ -54,6 +54,17 @@ private partial def getPackedValues : Get (Array ProtoVal) := do
     result := result.push x
   return result
 
+/-- use when elements are not messages -/
+private def isStrictUniform : Array ProtoVal → Bool := fun xs =>
+  if xs.isEmpty then true else
+  let x := xs[0]!
+  match x with
+  | .VARINT _ => xs.all (· matches .VARINT _)
+  | .I64 _ => xs.all (· matches .I64 _)
+  | .LEN _ => xs.all (· matches .LEN _)
+  | .I32 _ => xs.all (· matches .I32 _)
+  | .GROUPED _ => xs.all (· matches .GROUPED _)
+
 local macro "throwWireType! " err:term : term => ``(throw (ProtoDecodeError.invalidWireType s!"{decl_name%}: {$err}"))
 local macro "throwUserError! " err:term : term => ``(throw (ProtoDecodeError.userError s!"{decl_name%}: {$err}"))
 local macro "throwInvalidBuffer! " err:term : term => ``(throw (ProtoDecodeError.invalidBuffer s!"{decl_name%}: {$err}"))
@@ -69,7 +80,7 @@ private def decodePacked (data : ByteArray) : Except ProtoDecodeError (Array Pro
 
 def Message.concatPacked (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array ProtoVal) := do
   let xs := msg.getValuesOf fieldNum
-  if xs.any (fun x => x.wireType != 2) then
+  if xs.any (fun x => !x.isLEN) then
     throwWireType! "packed data must be LEN"
   let xs := xs.map fun
     | .LEN data => data
@@ -95,20 +106,25 @@ def Message.getBytes? (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError
     throwWireType! "expected LEN"
 
 @[always_inline]
+private def decodeMessage (data : ByteArray) : Except ProtoDecodeError Message := do
+  let r := Binary.Get.run (Binary.getThe Message) data
+  protoDecodeParseResultExcept r.toExcept
+
+@[always_inline]
+def Message.getMessage? (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Option Message) := do
+  let r := msg.getLastValueOf? fieldNum
+  r.mapM fun x => do
+    match x with
+    | .LEN data => decodeMessage data
+    | .GROUPED sub => return sub
+    | _ => throwWireType! "expected LEN or GROUPED"
+
+@[always_inline]
 def Message.getBool? (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Option Bool) := do
   let r := msg.getLastValueOf? fieldNum
   r.mapM fun x => do
     let some v := x.isVARINT? | throwWireType! "expected VARINT"
     return v != 0
-
-@[always_inline]
-def Message.getExpandedNonPacked (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array ProtoVal) := do
-  let xs := msg.getValuesOf fieldNum
-  if xs.size == 0 then return #[]
-  let ks := xs.groupByKey ProtoVal.wireType
-  if ks.size > 1 then
-    throwWireType! "values of repeated field have more than one wire type"
-  return xs
 
 @[always_inline]
 def Message.getVarint? (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Option Nat) := do
@@ -299,7 +315,7 @@ def Message.getPackedI32_sfixed32 (msg : Message) (fieldNum : Nat) : Except Prot
 
 @[always_inline]
 private def Message.getExpandedVarint (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array Nat) := do
-  let xs ← msg.getExpandedNonPacked fieldNum
+  let xs := msg.getValuesOf fieldNum
   xs.mapM fun x =>
     match x.isVARINT? with
     | some v => return v
@@ -307,7 +323,7 @@ private def Message.getExpandedVarint (msg : Message) (fieldNum : Nat) : Except 
 
 @[always_inline]
 private def Message.getExpandedI64 (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array (BitVec 64)) := do
-  let xs ← msg.getExpandedNonPacked fieldNum
+  let xs := msg.getValuesOf fieldNum
   xs.mapM fun x =>
     match x.isI64? with
     | some v => return v
@@ -315,7 +331,7 @@ private def Message.getExpandedI64 (msg : Message) (fieldNum : Nat) : Except Pro
 
 @[always_inline]
 private def Message.getExpandedI32 (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array (BitVec 32)) := do
-  let xs ← msg.getExpandedNonPacked fieldNum
+  let xs := msg.getValuesOf fieldNum
   xs.mapM fun x =>
     match x.isI32? with
     | some v => return v
@@ -323,7 +339,7 @@ private def Message.getExpandedI32 (msg : Message) (fieldNum : Nat) : Except Pro
 
 @[always_inline]
 private def Message.getExpandedLen (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array ByteArray) := do
-  let xs ← msg.getExpandedNonPacked fieldNum
+  let xs := msg.getValuesOf fieldNum
   xs.mapM fun x =>
     match x.isLEN? with
     | some v => return v
@@ -337,6 +353,15 @@ def Message.getExpandedString (msg : Message) (fieldNum : Nat) : Except ProtoDec
 @[always_inline]
 def Message.getExpandedBytes (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array ByteArray) := do
   msg.getExpandedLen fieldNum
+
+@[always_inline]
+def Message.getExpandedMessage (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array Message) := do
+  let xs := msg.getValuesOf fieldNum
+  xs.mapM fun x => do
+    match x with
+    | .LEN data => decodeMessage data
+    | .GROUPED sub => return sub
+    | _ => throwWireType! "expected LEN or GROUPED"
 
 @[always_inline]
 def Message.getExpandedBool (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array Bool) := do
@@ -410,12 +435,12 @@ private def Message.getExpandedScalarMixed (msg : Message) (fieldNum : Nat) : Ex
   for r in rs do
     match r.value with
     | .VARINT _ | .I64 _ | .I32 _ => out := out.push r.value
+    | .GROUPED _ => throwWireType! "value of repeated field cannot be GROUPED"
     | .LEN data =>
       let xs ← decodePacked data
       out := out ++ xs
   if out.size == 0 then return out
-  let ty := out[0]!.wireType
-  if out.any (fun v => v.wireType != ty) then
+  if !isStrictUniform out then
     throwWireType! "values of repeated field have more than one wire type"
   return out
 
