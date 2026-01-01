@@ -181,12 +181,12 @@ private def FieldOptions.first? (options : FieldOptions) (x : Name) : Option Ter
   else
     none
 
-private def FieldOptions.is_true (options : FieldOptions) (x : Name) : Bool :=
+private def FieldOptions.is_true? (options : FieldOptions) (x : Name) : Option Bool :=
   if let some y := options.first? x then
     y matches `(true)
   else false
 
-private def FieldOptions.packed (options : FieldOptions) : Bool := options.is_true `packed
+private def FieldOptions.packed? (options : FieldOptions) : Option Bool := options.is_true? `packed
 
 private def expandMessageEntryOptions (s : TSyntax ``message_entry_options) : FieldOptions :=
   match s with
@@ -225,7 +225,7 @@ private def construct_toMessage (name : Ident) (push_name : String → Ident) (f
     | .optional =>
       ``($field_num:num <~? ($builder <$> ($field_proj $val)) # $msg)
     | .repeated =>
-      if options.packed then
+      if options.packed?.getD is_scalar then
         ``($field_num:num <~p (Array.map $builder ($field_proj $val)) # $msg)
       else
         ``($field_num:num <~f (Array.map $builder ($field_proj $val)) # $msg)
@@ -265,7 +265,7 @@ private def construct_fromMessage (name : Ident) (push_name : String → Ident) 
     | .optional =>
       `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num))
     | .repeated =>
-      if options.packed then
+      if options.packed?.getD is_scalar then
         assert! decoder_rep_packed?.isSome
         let decoder_rep_packed := decoder_rep_packed?.get!
         `(Parser.Term.doSeqItem| let $var ← ($decoder_rep_packed $msg $field_num:num))
