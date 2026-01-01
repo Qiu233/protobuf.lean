@@ -18,6 +18,16 @@ inductive ProtoError where
   | userError (err : String)
 deriving Repr
 
+def ProtoError.toString : ProtoError → String
+  | .truncated => "proto decode error: truncated input"
+  | .invalidVarint => "proto decode error: invalid varint"
+  | .invalidWireType err => s!"proto decode error: invalid wire type: {err}"
+  | .invalidBuffer err => s!"proto decode error: invalid buffer: {err}"
+  | .missingRequiredField err => s!"proto decode error: missing required field: {err}"
+  | .userError err => s!"proto decode error: {err}"
+
+instance : ToString ProtoError := ⟨ProtoError.toString⟩
+
 @[always_inline]
 private partial def get_varint_bytes : Get ((bs : ByteArray) ×' bs.size > 0) := do
   let rec go (acc : ByteArray) : Get ((bs : ByteArray) ×' bs.size > 0) := do

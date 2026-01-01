@@ -543,3 +543,53 @@ message FileDescriptorProto {
 message FileDescriptorSet {
   repeated FileDescriptorProto file = 1;
 }
+
+local instance : Repr ByteArray where
+  reprPrec x p := reprPrec x.data p
+
+deriving instance Repr for Edition
+deriving instance Repr for UninterpretedOption.NamePart, UninterpretedOption
+deriving instance Repr for SourceCodeInfo.Location, SourceCodeInfo
+deriving instance Repr for GeneratedCodeInfo.Annotation.Semantic, GeneratedCodeInfo.Annotation, GeneratedCodeInfo
+deriving instance Repr for FeatureSet.FieldPresence
+deriving instance Repr for FeatureSet.EnumType
+deriving instance Repr for FeatureSet.RepeatedFieldEncoding
+deriving instance Repr for FeatureSet.Utf8Validation
+deriving instance Repr for FeatureSet.MessageEncoding
+deriving instance Repr for FeatureSet.JsonFormat
+deriving instance Repr for FeatureSet
+deriving instance Repr for FieldOptions.CType
+deriving instance Repr for FieldOptions.JSType
+deriving instance Repr for FieldOptions.OptionRetention
+deriving instance Repr for FieldOptions.OptionTargetType
+deriving instance Repr for FieldOptions.EditionDefault
+deriving instance Repr for FieldOptions.FeatureSupport
+deriving instance Repr for FieldOptions
+deriving instance Repr for FeatureSetDefaults.FeatureSetEditionDefault
+deriving instance Repr for FeatureSetDefaults
+deriving instance Repr for FileOptions.OptimizeMode
+deriving instance Repr for FileOptions
+deriving instance Repr for MessageOptions
+deriving instance Repr for OneofOptions
+deriving instance Repr for EnumOptions
+deriving instance Repr for EnumValueOptions
+deriving instance Repr for ServiceOptions
+deriving instance Repr for MethodOptions.IdempotencyLevel
+deriving instance Repr for MethodOptions
+deriving instance Repr for FieldDescriptorProto.Type
+deriving instance Repr for FieldDescriptorProto.Label
+deriving instance Repr for FieldDescriptorProto
+deriving instance Repr for OneofDescriptorProto
+deriving instance Repr for EnumValueDescriptorProto
+deriving instance Repr for EnumDescriptorProto.EnumReservedRange
+deriving instance Repr for EnumDescriptorProto
+deriving instance Repr for MethodDescriptorProto
+deriving instance Repr for ServiceDescriptorProto
+deriving instance Repr for ExtensionRangeOptions.VerificationState
+deriving instance Repr for ExtensionRangeOptions.Declaration
+deriving instance Repr for ExtensionRangeOptions
+deriving instance Repr for DescriptorProto.ExtensionRange
+deriving instance Repr for DescriptorProto.ReservedRange
+deriving instance Repr for DescriptorProto
+deriving instance Repr for FileDescriptorProto
+deriving instance Repr for FileDescriptorSet

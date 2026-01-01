@@ -1,0 +1,5 @@
+import "A.proto";
+
+message B {
+    optional A a = 1;
+}
