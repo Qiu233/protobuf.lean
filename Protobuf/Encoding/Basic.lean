@@ -12,7 +12,7 @@ inductive ProtoVal where
 deriving Inhabited
 
 @[always_inline]
-def ProtoVal.tag : ProtoVal → Nat
+def ProtoVal.wireType : ProtoVal → Nat
   | .VARINT .. => 0
   | .I64 .. => 1
   | .LEN .. => 2

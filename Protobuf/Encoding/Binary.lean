@@ -9,72 +9,63 @@ namespace Protobuf.Encoding
 
 open Binary
 
+inductive ProtoDecodeError where
+  | truncated
+  | invalidVarint
+  | invalidWireType (err : String)
+  | invalidBuffer (err : String)
+  | userError (err : String)
+deriving Repr
+
 @[always_inline]
-private def get_varint_bytes : Get ByteArray := do
-  let mut bs := ByteArray.emptyWithCapacity 4 -- TODO: maybe another value?
-  let mut count := 0
-  repeat
-    let b ← getThe UInt8
-    bs := bs.push b
-    count := count + 1
-    if count > 10 then
+private partial def get_varint_bytes : Get ((bs : ByteArray) ×' bs.size > 0) := do
+  let rec go (acc : ByteArray) : Get ((bs : ByteArray) ×' bs.size > 0) := do
+    if acc.size ≥ 10 then
       throw (.userError "protobuf: varint too long")
-  until !b.toBitVec.msb
-  return bs
+    let b ← getThe UInt8
+    let acc := acc.push b
+    if !b.toBitVec.msb then
+      return ⟨acc, by simp [acc, ByteArray.push]; unfold ByteArray.size; simp⟩
+    go acc
+  go (ByteArray.emptyWithCapacity 10)
 
 @[always_inline]
-def get_varint : Get Nat := do
-  let bs ← get_varint_bytes
-  let shifts := Array.range' 0 bs.size 7
-  return runST fun σ => do
-    let v ← ST.mkRef (σ := σ) 0
-    _ ← bs.data.zipWithM (bs := shifts) fun b shift => do
-      v.modify fun x => (x ||| ((b &&& 0x7F).toNat <<< shift))
-    v.get
+partial def get_varint : Get Nat := do
+  let ⟨bs, h⟩ ← get_varint_bytes
+  let rec go (acc : Nat) (shift : Nat) (idx : USize) (h : idx.toNat < bs.size) : Nat :=
+    let b := bs.uget idx h
+    let j := idx + 1
+    let acc := acc ||| ((b &&& 0x7F).toNat <<< shift)
+    if h' : j.toNat < bs.size then
+      go acc (shift + 7) j h'
+    else
+      acc
+  return go 0 0 0 h
 
-def put_varint (n : Nat) : Put := do
-  let bv := BitVec.ofNat 64 n
-  let bv := bv.extractLsb' 0 80 -- 10 bytes
-  let mut bs : Array Bool := #[]
-  for i in [0:80] do
-    bs := bs.push bv[i]!
-  let mut cs := bs.toList
-  let mut es := #[]
-  repeat
-    let (l, r) := cs.splitAt 7
-    cs := r
-    let stop := r.all (· == false)
-    if stop then
-      es := es.push (l ++ [false])
-      break
+@[always_inline]
+partial def put_varint (n : Nat) : Put := do
+  let rec go (acc : ByteArray) (v : UInt64) : ByteArray :=
+    let byte : UInt8 := UInt8.ofNat ((v &&& (0x7F : UInt64)).toNat)
+    let v := v >>> 7
+    if v = 0 then
+      acc.push byte
     else
-      es := es.push (l ++ [true])
-  let ts := es.map fun e =>
-    if h : e.length = 8 then
-      h ▸ BitVec.ofBoolListLE e
-    else
-      unreachable!
-  let ts := ts.map UInt8.ofBitVec
-  put_bytes ⟨ts⟩
+      go (acc.push (byte ||| (0x80 : UInt8))) v
+  let bs := go (ByteArray.emptyWithCapacity 10) (UInt64.ofNat n)
+  put_bytes bs
 
 open Primitive.LE in
 @[always_inline]
 instance : Encode Record where
   put x := do
-    let wire_type : Nat := match x.value with
-      | .VARINT _ => 0
-      | .I64 _ => 1
-      | .LEN _ => 2
-      | .I32 _ => 5
-    let v : Nat := (x.fieldNum <<< 3) ||| wire_type
+    let v : Nat := (x.fieldNum <<< 3) ||| x.value.wireType
     put_varint v
     match x.value with
     | .VARINT v => put_varint v
     | .I64 v => put (UInt64.ofBitVec v)
     | .I32 v => put (UInt32.ofBitVec v)
     | .LEN data =>
-      let size := data.size
-      put_varint size
+      put_varint data.size
       put_bytes data
 
 open Primitive.LE in
@@ -105,15 +96,11 @@ instance : Encode Message where
   put x := x.records.forM put
 
 @[always_inline]
-instance : Decode Message where
+partial instance : Decode Message where
   get := do
-    let mut rs := #[]
-    while True do
-      let r ←
-        try getThe Record
-        catch e =>
-          match e with
-          | .eoi => break -- TODO: check the position
-          | _ => throw e
-      rs := rs.push r
-    return Message.mk rs
+    let rec go (acc : Array Record) : Get (Array Record) := do
+      if (← remaining) = 0 then
+        return acc
+      let r ← getThe Record
+      go (acc.push r)
+    Message.mk <$> go (Array.emptyWithCapacity 32)

@@ -23,13 +23,6 @@ def Message.getValuesOf (msg : Message) (fieldNum : Nat) : Array ProtoVal := msg
 @[always_inline]
 def Message.getLastValueOf? (msg : Message) (fieldNum : Nat) : Option ProtoVal := msg.records.reverse.find? (fun x => x.fieldNum == fieldNum) |>.map Record.value
 
-inductive ProtoDecodeError where
-  | truncated
-  | invalidVarint
-  | invalidWireType (err : String)
-  | invalidBuffer (err : String)
-  | userError (err : String)
-
 open Binary
 open Primitive.LE
 
@@ -54,7 +47,7 @@ private partial def getPackedValue : Get ProtoVal := getVarint <|> getI32 <|> ge
 @[always_inline]
 private partial def getPackedValues : Get (Array ProtoVal) := do
   let mut result := #[]
-  while true do
+  repeat
     let r ← remaining
     if r == 0 then break
     let x ← getPackedValue
@@ -72,7 +65,7 @@ def protoDecodeParseResultExcept : Except Binary.DecodeError α → Except Proto
 
 def Message.concatPacked (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array ProtoVal) := do
   let xs := msg.getValuesOf fieldNum
-  if xs.any (fun x => x.tag != 2) then
+  if xs.any (fun x => x.wireType != 2) then
     throwWireType! "packed data must be LEN"
   let xs := xs.map fun
     | .LEN data => data
@@ -110,7 +103,7 @@ def Message.getBool? (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError 
 def Message.getRepeatedNonPacked (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array ProtoVal) := do
   let xs := msg.getValuesOf fieldNum
   if xs.size == 0 then return #[]
-  let ks := xs.groupByKey ProtoVal.tag
+  let ks := xs.groupByKey ProtoVal.wireType
   if ks.size > 1 then
     throwWireType! "values of repeated field have more than one wire type"
   return xs
