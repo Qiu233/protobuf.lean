@@ -23,8 +23,10 @@ private def get_varint_bytes : Get ByteArray := do
 def get_varint : Get Nat := do
   let bs ← get_varint_bytes
   let mut v := 0
+  let mut shift := 0
   for b in bs do
-    v := (v <<< 7) ||| (b &&& 0x7F).toNat
+    v := v ||| ((b &&& 0x7F).toNat <<< shift)
+    shift := shift + 7
   return v
 
 def put_varint (n : Nat) : Put := do
