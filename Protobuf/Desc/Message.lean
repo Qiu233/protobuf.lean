@@ -249,9 +249,7 @@ private def construct_fromMessage (name : Ident) (push_name : String → Ident) 
     let stx ← match mod with
     | .default =>
       if is_scalar then
-        match proto_type with
-        | `(bool) => `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num <&> (fun x => Option.getD x false)))
-        | _ => `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num <&> (fun x => Option.getD x 0)))
+        `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num <&> (fun x => Option.getD x Inhabited.default)))
       else
         `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num))
     | .optional =>

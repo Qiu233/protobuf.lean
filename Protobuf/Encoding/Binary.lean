@@ -12,11 +12,14 @@ open Binary
 @[always_inline]
 private def get_varint_bytes : Get ByteArray := do
   let mut bs := ByteArray.emptyWithCapacity 4 -- TODO: maybe another value?
+  let mut count := 0
   repeat
     let b ← getThe UInt8
     bs := bs.push b
-    if !b.toBitVec.msb then
-      break
+    count := count + 1
+    if count > 10 then
+      throw (.userError "protobuf: varint too long")
+  until !b.toBitVec.msb
   return bs
 
 @[always_inline]
