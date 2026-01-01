@@ -16,12 +16,16 @@ def Message.push (msg : Message) (r : Record) : Message := {msg with records := 
 @[always_inline]
 def Message.set (msg : Message) (fieldNum : Nat) (value : ProtoVal) : Message := msg.push { fieldNum, value }
 
+namespace Notation
+
 scoped notation n " <~ " val " # " msg => Message.set msg n val
 
 scoped notation n " <~? " val " # " msg => Option.getD (Option.map (Message.set msg n) val) msg
 
 /-- flattened repeated -/
 scoped notation n " <~f " vs " # " msg => Array.foldl (init := msg) (fun acc x => Message.set acc n x) vs
+
+end Notation
 
 @[always_inline]
 def ProtoVal.ofMessage : Message → ProtoVal := fun s => ProtoVal.LEN (Put.run 128 (put s))

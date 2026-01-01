@@ -2,14 +2,14 @@ module
 
 public import Protobuf.Encoding
 import Protobuf.Encoding.Builder
-import Protobuf.Desc.Enum
-import Protobuf.Desc.Message
+import Protobuf.Internal.Desc.Enum
+import Protobuf.Internal.Desc.Message
 
 public section
 
-namespace Protobuf.Desc
+namespace Protobuf.Internal.Desc
 
-open Encoding
+open Encoding Notation
 
 
 enum Edition {

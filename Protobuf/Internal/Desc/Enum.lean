@@ -1,13 +1,13 @@
 module
 
 public import Lean
-public import Protobuf.Desc.Basic
+public import Protobuf.Internal.Desc.Basic
 import Protobuf.Encoding.Builder
 import Protobuf.Encoding.Unwire
 
 meta section
 
-namespace Protobuf.Desc
+namespace Protobuf.Internal.Desc
 
 open Lean Meta Elab Term Command
 

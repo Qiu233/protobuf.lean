@@ -3,14 +3,14 @@ module
 import Protobuf.Encoding
 import Protobuf.Encoding.Builder
 import Protobuf.Encoding.Unwire
-public import Protobuf.Desc.Enum
+public import Protobuf.Internal.Desc.Enum
 public import Lean
 
 public meta section
 
-namespace Protobuf.Desc
+namespace Protobuf.Internal.Desc
 
-open Encoding
+open Encoding Notation
 
 open Lean Meta Elab Term Command
 

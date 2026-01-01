@@ -1,6 +1,0 @@
-syntax = "proto3";
-
-message Test {
-    string inner = 1;
-    Outer outer = 2;
-}
