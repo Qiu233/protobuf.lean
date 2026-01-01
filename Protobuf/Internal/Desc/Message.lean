@@ -14,7 +14,7 @@ open Encoding Notation
 
 open Lean Meta Elab Term Command
 
-syntax message_entry_modifier := "optional" <|> "repeated"
+syntax message_entry_modifier := &"optional" <|> &"repeated" <|> &"required"
 
 syntax message_entry_options_entry := ident " = " term
 
@@ -50,6 +50,7 @@ private inductive Modifier where
   /-- all optional -/
   | optional
   | repeated
+  | required
 
 private inductive InternalType where
   | string
@@ -208,46 +209,57 @@ private structure MData where
   options : FieldOptions
   is_scalar : Bool
 
-
 private def construct_toMessage (name : Ident) (push_name : String → Ident) (fields : Array MData) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let val ← mkIdent <$> mkFreshUserName `val
-  let builder ← fields.mapM fun {mod, proto_type, lean_type_inner := _, lean_type := _, field_name := _, field_proj, field_num, options, is_scalar} => do
+  let toMessageBody ← fields.mapM fun {mod, proto_type, lean_type_inner := _, lean_type := _, field_name := _, field_proj, field_num, options, is_scalar} => do
     let itype? := getInternalType? proto_type
     let builder? ← itype?.mapM InternalType.builder
     let builder := builder?.getD (mkIdentFrom proto_type (proto_type.getId.str "builder"))
     match mod with
     | .default =>
       if is_scalar then
-        ``($field_num:num <~ ($builder ($field_proj $val)) # $msg)
+        `(Parser.Term.doSeqItem| let $msg ← $field_num:num <~ ($builder ($field_proj $val)) # $msg)
       else
-        ``($field_num:num <~? ($builder <$> ($field_proj $val)) # $msg)
+        `(Parser.Term.doSeqItem| let $msg ← $field_num:num <~? (Option.mapM $builder ($field_proj $val)) # $msg)
+    | .required =>
+      if is_scalar then
+        `(Parser.Term.doSeqItem| let $msg ← $field_num:num <~ ($builder ($field_proj $val)) # $msg)
+      else
+        `(Parser.Term.doSeqItem|
+          let $msg ← do
+            if let Option.some v := ($field_proj $val) then
+              $field_num:num <~ ($builder v) # $msg
+            else
+              throw (Protobuf.Encoding.ProtoError.missingRequiredField s!"required field `{$(quote field_proj.getId.toString)}` is missing when building the message")
+            )
     | .optional =>
-      ``($field_num:num <~? ($builder <$> ($field_proj $val)) # $msg)
+      `(Parser.Term.doSeqItem| let $msg ← $field_num:num <~? (Option.mapM $builder ($field_proj $val)) # $msg)
     | .repeated =>
       if options.packed?.getD is_scalar then
-        ``($field_num:num <~p (Array.map $builder ($field_proj $val)) # $msg)
+        `(Parser.Term.doSeqItem| let $msg ← $field_num:num <~p (Array.mapM $builder ($field_proj $val)) # $msg)
       else
-        ``($field_num:num <~f (Array.map $builder ($field_proj $val)) # $msg)
-  let toMessageBody ← builder.foldrM (init := ← `($msg)) fun b acc => `(let $msg:ident := $b; $acc)
+        `(Parser.Term.doSeqItem| let $msg ← $field_num:num <~f (Array.mapM $builder ($field_proj $val)) # $msg)
   let toMessageId := push_name "toMessage"
-  let toMessage ← `(partial def $toMessageId:ident : $name → Protobuf.Encoding.Message := fun $val =>
+  let toMessage ← `(partial def $toMessageId:ident : $name → Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message := fun $val => do
     let $msg:ident := Protobuf.Encoding.Message.emptyWithCapacity $(quote fields.size)
-    $toMessageBody
+    $toMessageBody*
+    return $msg
     )
   return (toMessageId, toMessage)
 
 private def construct_builder (name : Ident) (push_name : String → Ident) (toMessage : Ident) : CommandElabM (Ident × Command) := do
   let val ← mkIdent <$> mkFreshUserName `val
   let builderId := push_name "builder"
-  let builder ← `(partial def $builderId:ident : $name → Protobuf.Encoding.ProtoVal := fun $val =>
-    Encoding.ProtoVal.ofMessage ($toMessage:ident $val)
+  let builder ← `(partial def $builderId:ident : $name → Except Protobuf.Encoding.ProtoError Protobuf.Encoding.ProtoVal := fun $val => do
+    let m ← $toMessage:ident $val
+    Encoding.ProtoVal.ofMessage m
     )
   return (builderId, builder)
 
 private def construct_fromMessage (name : Ident) (push_name : String → Ident) (fields : Array MData) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
-  let decoder ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, proto_type, lean_type_inner := _, lean_type := _, field_name, field_proj := _, field_num, options, is_scalar} => do
+  let decoder ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, proto_type, lean_type_inner := _, lean_type := _, field_name, field_proj, field_num, options, is_scalar} => do
     let itype? := getInternalType? proto_type
     let decoder? ← itype?.mapM InternalType.decoder?
     let decoder? := decoder?.getD (mkIdentFrom proto_type (proto_type.getId.str "decoder?"))
@@ -262,6 +274,17 @@ private def construct_fromMessage (name : Ident) (push_name : String → Ident) 
         `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num <&> (fun x => Option.getD x Inhabited.default)))
       else
         `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num))
+    | .required =>
+      if is_scalar then
+        `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num >>= (fun x => Option.getDM x
+          (throw (Protobuf.Encoding.ProtoError.missingRequiredField s!"required field `{$(quote field_proj.getId.toString)}` is missing when decoding the message")))))
+      else
+        `(Parser.Term.doSeqItem| let $var ← do
+          let t? ← ($decoder? $msg $field_num:num)
+          if t?.isNone then
+            throw (Protobuf.Encoding.ProtoError.missingRequiredField s!"required field `{$(quote field_proj.getId.toString)}` is missing when decoding the message")
+          pure t?
+          )
     | .optional =>
       `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num))
     | .repeated =>
@@ -279,7 +302,7 @@ private def construct_fromMessage (name : Ident) (push_name : String → Ident) 
   let structInst ← `({ $[$ps:ident := $vs]* : $name })
   let ret ← `(Parser.Term.doSeqItem| return $structInst)
   let fromMessageId := push_name "fromMessage"
-  let fromMessage ← `(partial def $fromMessageId:ident : Protobuf.Encoding.Message → Except Protobuf.Encoding.ProtoDecodeError $name := fun $msg => do
+  let fromMessage ← `(partial def $fromMessageId:ident : Protobuf.Encoding.Message → Except Protobuf.Encoding.ProtoError $name := fun $msg => do
     $(decoder.unzip.snd)*
     $ret
     )
@@ -288,7 +311,7 @@ private def construct_fromMessage (name : Ident) (push_name : String → Ident) 
 private def construct_decoder_rep (name : Ident) (push_name : String → Ident) (fromMessage : Ident) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let decoderRepId := push_name "decoder_rep"
-  let decoderRep ← `(partial def $decoderRepId:ident : Protobuf.Encoding.Message → Nat → Except Protobuf.Encoding.ProtoDecodeError (Array $name) := fun $msg field_num => do
+  let decoderRep ← `(partial def $decoderRepId:ident : Protobuf.Encoding.Message → Nat → Except Protobuf.Encoding.ProtoError (Array $name) := fun $msg field_num => do
     let xs ← Encoding.Message.getExpandedMessage $msg field_num
     xs.mapM $fromMessage:ident
     )
@@ -303,7 +326,7 @@ private def construct_merge (name : Ident) (push_name : String → Ident) (field
     let vb ← `($field_proj $b)
     let merger := mkIdentFrom proto_type (proto_type.getId.append `merge)
     let stx ← match mod with
-    | .default =>
+    | .default | .required =>
       if is_scalar then
         `(Parser.Term.doSeqItem| let $var := $vb)
       else if (proto_type matches `(string) | `(bytes)) then
@@ -339,7 +362,7 @@ private def construct_merge (name : Ident) (push_name : String → Ident) (field
 private def construct_decoder? (name : Ident) (push_name : String → Ident) (fromMessage merge : Ident) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let decoder?Id := push_name "decoder?"
-  let decoder? ← `(partial def $decoder?Id:ident : Protobuf.Encoding.Message → Nat → Except Protobuf.Encoding.ProtoDecodeError (Option $name) := fun $msg field_num => do
+  let decoder? ← `(partial def $decoder?Id:ident : Protobuf.Encoding.Message → Nat → Except Protobuf.Encoding.ProtoError (Option $name) := fun $msg field_num => do
     let xs? ← Encoding.Message.getExpandedMessage $msg field_num
     let ms ← xs?.mapM $fromMessage:ident
     if let m :: ms := ms.toList then
@@ -362,11 +385,12 @@ public def elabMessageDec : CommandElab := fun stx => do
     match mod with
     | `(message_entry_modifier| optional) => return Modifier.optional
     | `(message_entry_modifier| repeated) => return Modifier.repeated
+    | `(message_entry_modifier| required) => return Modifier.required
     | _ => unreachable!
   let ss ← t' |>.mapM fun t' => isScalarType t'
   let ts ← ms.zip (t.zip ss) |>.mapM fun (mod, t, scalar) => do
       match mod with
-      | .default =>
+      | .default | .required =>
         if scalar then
           `($t)
         else

@@ -9,11 +9,12 @@ namespace Protobuf.Encoding
 
 open Binary
 
-inductive ProtoDecodeError where
+inductive ProtoError where
   | truncated
   | invalidVarint
   | invalidWireType (err : String)
   | invalidBuffer (err : String)
+  | missingRequiredField (err : String)
   | userError (err : String)
 deriving Repr
 

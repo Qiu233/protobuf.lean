@@ -64,17 +64,18 @@ def isTypeMessage (t? : Option FieldDescriptorProto.Type) : Bool :=
   | some .TYPE_MESSAGE => true
   | _ => false
 
-def protoDecodeErrorToString : ProtoDecodeError → String
+def ProtoError.toString : ProtoError → String
   | .truncated => "proto decode error: truncated input"
   | .invalidVarint => "proto decode error: invalid varint"
   | .invalidWireType err => s!"proto decode error: invalid wire type: {err}"
   | .invalidBuffer err => s!"proto decode error: invalid buffer: {err}"
+  | .missingRequiredField err => s!"proto decode error: missing required field: {err}"
   | .userError err => s!"proto decode error: {err}"
 
-def ofProtoExcept {α} (e : Except ProtoDecodeError α) : IO α := do
+def ofProtoExcept {α} (e : Except ProtoError α) : IO α := do
   match e with
   | .ok v => pure v
-  | .error err => throw (IO.userError (protoDecodeErrorToString err))
+  | .error err => throw (IO.userError (ProtoError.toString err))
 
 def isEdition2023 (edition? : Option Edition) : Bool :=
   match edition? with

@@ -29,7 +29,7 @@ syntax (name := enumDec) "enum " ident "{" enum_entry* "}" : command
 private def construct_builder (name : Ident) (push_name : String → Ident) (toInt32 : Ident) : CommandElabM (Ident × Command) := do
   let val ← mkIdent <$> mkFreshUserName `val
   let builderId := push_name "builder"
-  let builder ← `(def $builderId:ident : $name → Protobuf.Encoding.ProtoVal := fun $val =>
+  let builder ← `(def $builderId:ident : $name → Except Protobuf.Encoding.ProtoError Protobuf.Encoding.ProtoVal := fun $val =>
     Encoding.ProtoVal.ofVarint_int32 ($toInt32 $val)
     )
   return (builderId, builder)
@@ -37,7 +37,7 @@ private def construct_builder (name : Ident) (push_name : String → Ident) (toI
 private def construct_decoder? (name : Ident) (push_name : String → Ident) (fromInt32 : Ident) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let decoder?Id := push_name "decoder?"
-  let decoder? ← `(def $decoder?Id:ident : Protobuf.Encoding.Message → Nat → Except Protobuf.Encoding.ProtoDecodeError (Option $name) := fun $msg field_num => do
+  let decoder? ← `(def $decoder?Id:ident : Protobuf.Encoding.Message → Nat → Except Protobuf.Encoding.ProtoError (Option $name) := fun $msg field_num => do
     let x? ← Encoding.Message.getVarint_int32? $msg field_num
     return x?.map $fromInt32
     )
@@ -46,7 +46,7 @@ private def construct_decoder? (name : Ident) (push_name : String → Ident) (fr
 private def construct_decoder_rep (name : Ident) (push_name : String → Ident) (fromInt32 : Ident) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let decoderRepId := push_name "decoder_rep"
-  let decoderRep ← `(def $decoderRepId:ident : Protobuf.Encoding.Message → Nat → Except Protobuf.Encoding.ProtoDecodeError (Array $name) := fun $msg field_num => do
+  let decoderRep ← `(def $decoderRepId:ident : Protobuf.Encoding.Message → Nat → Except Protobuf.Encoding.ProtoError (Array $name) := fun $msg field_num => do
     let xs ← Encoding.Message.getRepeatedVarint_int32 $msg field_num
     return xs.map $fromInt32
     )
@@ -55,7 +55,7 @@ private def construct_decoder_rep (name : Ident) (push_name : String → Ident) 
 private def construct_decoder_rep_packed (name : Ident) (push_name : String → Ident) (fromInt32 : Ident) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let decoderRepId := push_name "decoder_rep_packed"
-  let decoderRep ← `(def $decoderRepId:ident : Protobuf.Encoding.Message → Nat → Except Protobuf.Encoding.ProtoDecodeError (Array $name) := fun $msg field_num => do
+  let decoderRep ← `(def $decoderRepId:ident : Protobuf.Encoding.Message → Nat → Except Protobuf.Encoding.ProtoError (Array $name) := fun $msg field_num => do
     let xs ← Encoding.Message.getPackedVarint_int32 $msg field_num
     return xs.map $fromInt32
     )
