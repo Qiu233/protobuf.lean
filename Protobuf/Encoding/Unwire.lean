@@ -63,6 +63,10 @@ def protoDecodeParseResultExcept : Except Binary.DecodeError α → Except Proto
   | .error .eoi => throw .truncated
   | .error (.userError e) => throwUserError! s!"error occured when parsing protobuf data: {e}"
 
+@[always_inline]
+private def decodePacked (data : ByteArray) : Except ProtoDecodeError (Array ProtoVal) := do
+  protoDecodeParseResultExcept (Binary.Get.run getPackedValues data).toExcept
+
 def Message.concatPacked (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array ProtoVal) := do
   let xs := msg.getValuesOf fieldNum
   if xs.any (fun x => x.wireType != 2) then
@@ -70,9 +74,7 @@ def Message.concatPacked (msg : Message) (fieldNum : Nat) : Except ProtoDecodeEr
   let xs := xs.map fun
     | .LEN data => data
     | _ => unreachable!
-  let ys := xs.map fun x =>
-    (Binary.Get.run getPackedValues x).toExcept
-  let rs ← ys.mapM protoDecodeParseResultExcept
+  let rs ← xs.mapM decodePacked
   return rs.flatten
 
 @[always_inline]
@@ -100,7 +102,7 @@ def Message.getBool? (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError 
     return v != 0
 
 @[always_inline]
-def Message.getRepeatedNonPacked (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array ProtoVal) := do
+def Message.getExpandedNonPacked (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array ProtoVal) := do
   let xs := msg.getValuesOf fieldNum
   if xs.size == 0 then return #[]
   let ks := xs.groupByKey ProtoVal.wireType
@@ -296,8 +298,130 @@ def Message.getPackedI32_sfixed32 (msg : Message) (fieldNum : Nat) : Except Prot
   return xs.map Int32.ofBitVec
 
 @[always_inline]
+private def Message.getExpandedVarint (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array Nat) := do
+  let xs ← msg.getExpandedNonPacked fieldNum
+  xs.mapM fun x =>
+    match x.isVARINT? with
+    | some v => return v
+    | none => throwWireType! "expected VARINT"
+
+@[always_inline]
+private def Message.getExpandedI64 (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array (BitVec 64)) := do
+  let xs ← msg.getExpandedNonPacked fieldNum
+  xs.mapM fun x =>
+    match x.isI64? with
+    | some v => return v
+    | none => throwWireType! "expected I64"
+
+@[always_inline]
+private def Message.getExpandedI32 (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array (BitVec 32)) := do
+  let xs ← msg.getExpandedNonPacked fieldNum
+  xs.mapM fun x =>
+    match x.isI32? with
+    | some v => return v
+    | none => throwWireType! "expected I32"
+
+@[always_inline]
+private def Message.getExpandedLen (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array ByteArray) := do
+  let xs ← msg.getExpandedNonPacked fieldNum
+  xs.mapM fun x =>
+    match x.isLEN? with
+    | some v => return v
+    | none => throwWireType! "expected LEN"
+
+@[always_inline]
+def Message.getExpandedString (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array String) := do
+  let xs ← msg.getExpandedLen fieldNum
+  xs.mapM fun x => (String.fromUTF8? x).getDM (throwInvalidBuffer! "invalid UTF-8 data")
+
+@[always_inline]
+def Message.getExpandedBytes (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array ByteArray) := do
+  msg.getExpandedLen fieldNum
+
+@[always_inline]
+def Message.getExpandedBool (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array Bool) := do
+  let xs ← msg.getExpandedVarint fieldNum
+  return xs.map (fun v => v != 0)
+
+@[always_inline]
+def Message.getExpandedVarint_int32 (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array Int32) := do
+  let xs ← msg.getExpandedVarint fieldNum
+  return xs.map fun n => Int32.ofBitVec (UInt32.ofNat n).toBitVec
+
+@[always_inline]
+def Message.getExpandedVarint_uint32 (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array UInt32) := do
+  let xs ← msg.getExpandedVarint fieldNum
+  return xs.map UInt32.ofNat
+
+@[always_inline]
+def Message.getExpandedVarint_int64 (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array Int64) := do
+  let xs ← msg.getExpandedVarint fieldNum
+  return xs.map fun n => Int64.ofBitVec (UInt64.ofNat n).toBitVec
+
+@[always_inline]
+def Message.getExpandedVarint_uint64 (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array UInt64) := do
+  let xs ← msg.getExpandedVarint fieldNum
+  return xs.map UInt64.ofNat
+
+@[always_inline]
+def Message.getExpandedVarint_sint32 (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array Int32) := do
+  let xs ← msg.getExpandedVarint fieldNum
+  return xs.map zigzagDecode32
+
+@[always_inline]
+def Message.getExpandedVarint_sint64 (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array Int64) := do
+  let xs ← msg.getExpandedVarint fieldNum
+  return xs.map zigzagDecode64
+
+@[always_inline]
+def Message.getExpandedI64_double (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array Float) := do
+  let xs ← msg.getExpandedI64 fieldNum
+  return xs.map fun n => Float.ofBits (UInt64.ofBitVec n)
+
+@[always_inline]
+def Message.getExpandedI64_fixed64 (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array UInt64) := do
+  let xs ← msg.getExpandedI64 fieldNum
+  return xs.map UInt64.ofBitVec
+
+@[always_inline]
+def Message.getExpandedI64_sfixed64 (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array Int64) := do
+  let xs ← msg.getExpandedI64 fieldNum
+  return xs.map Int64.ofBitVec
+
+@[always_inline]
+def Message.getExpandedI32_float (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array Float32) := do
+  let xs ← msg.getExpandedI32 fieldNum
+  return xs.map fun n => Float32.ofBits (UInt32.ofBitVec n)
+
+@[always_inline]
+def Message.getExpandedI32_fixed32 (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array UInt32) := do
+  let xs ← msg.getExpandedI32 fieldNum
+  return xs.map UInt32.ofBitVec
+
+@[always_inline]
+def Message.getExpandedI32_sfixed32 (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array Int32) := do
+  let xs ← msg.getExpandedI32 fieldNum
+  return xs.map Int32.ofBitVec
+
+@[always_inline]
+private def Message.getExpandedScalarMixed (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array ProtoVal) := do
+  let rs := msg.getRecordsOf fieldNum
+  let mut out := #[]
+  for r in rs do
+    match r.value with
+    | .VARINT _ | .I64 _ | .I32 _ => out := out.push r.value
+    | .LEN data =>
+      let xs ← decodePacked data
+      out := out ++ xs
+  if out.size == 0 then return out
+  let ty := out[0]!.wireType
+  if out.any (fun v => v.wireType != ty) then
+    throwWireType! "values of repeated field have more than one wire type"
+  return out
+
+@[always_inline]
 private def Message.getRepeatedVarint (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array Nat) := do
-  let xs ← msg.getRepeatedNonPacked fieldNum
+  let xs ← msg.getExpandedScalarMixed fieldNum
   xs.mapM fun x =>
     match x.isVARINT? with
     | some v => return v
@@ -305,7 +429,7 @@ private def Message.getRepeatedVarint (msg : Message) (fieldNum : Nat) : Except 
 
 @[always_inline]
 private def Message.getRepeatedI64 (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array (BitVec 64)) := do
-  let xs ← msg.getRepeatedNonPacked fieldNum
+  let xs ← msg.getExpandedScalarMixed fieldNum
   xs.mapM fun x =>
     match x.isI64? with
     | some v => return v
@@ -313,28 +437,11 @@ private def Message.getRepeatedI64 (msg : Message) (fieldNum : Nat) : Except Pro
 
 @[always_inline]
 private def Message.getRepeatedI32 (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array (BitVec 32)) := do
-  let xs ← msg.getRepeatedNonPacked fieldNum
+  let xs ← msg.getExpandedScalarMixed fieldNum
   xs.mapM fun x =>
     match x.isI32? with
     | some v => return v
     | none => throwWireType! "expected I32"
-
-@[always_inline]
-private def Message.getRepeatedLen (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array ByteArray) := do
-  let xs ← msg.getRepeatedNonPacked fieldNum
-  xs.mapM fun x =>
-    match x.isLEN? with
-    | some v => return v
-    | none => throwWireType! "expected LEN"
-
-@[always_inline]
-def Message.getRepeatedString (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array String) := do
-  let xs ← msg.getRepeatedLen fieldNum
-  xs.mapM fun x => (String.fromUTF8? x).getDM (throwInvalidBuffer! "invalid UTF-8 data")
-
-@[always_inline]
-def Message.getRepeatedBytes (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array ByteArray) := do
-  msg.getRepeatedLen fieldNum
 
 @[always_inline]
 def Message.getRepeatedBool (msg : Message) (fieldNum : Nat) : Except ProtoDecodeError (Array Bool) := do

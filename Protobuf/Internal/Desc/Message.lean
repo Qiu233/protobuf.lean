@@ -89,9 +89,14 @@ private def getInternalType? : TSyntax `ident → Option InternalType
   | `(sfixed32) => some .sfixed32
   | _ => none
 
-private def isScalarType [Monad m] [MonadEnv m] : TSyntax `ident → m Bool := fun x => do
-  let a := getInternalType? x |>.map (fun x => x != InternalType.string && x != InternalType.bytes) |>.getD false
-  return a || (← isProtoEnum x.getId)
+private def isScalarType : TSyntax `ident → CommandElabM Bool := fun x => do
+  if let some x := getInternalType? x then
+    return x != InternalType.string && x != InternalType.bytes
+  let ns ← try resolveGlobalConst x
+    catch _ => return false
+  if ns.length > 1 then
+    throwErrorAt x "{x} is ambiguous"
+  isProtoEnum ns[0]!
 
 private def InternalType.builder [Monad m] [MonadQuotation m] : InternalType → m Ident
   | .string =>  ``(Encoding.ProtoVal.ofString)
@@ -148,8 +153,8 @@ private def InternalType.decoder_rep_packed [Monad m] [MonadQuotation m] : Inter
   | .sfixed32 =>  ``(Encoding.Message.getPackedI32_sfixed32)
 
 private def InternalType.decoder_rep [Monad m] [MonadQuotation m] : InternalType → m Ident
-  | .string =>  ``(Encoding.Message.getRepeatedString)
-  | .bytes =>   ``(Encoding.Message.getRepeatedBytes)
+  | .string =>  ``(Encoding.Message.getExpandedString)
+  | .bytes =>   ``(Encoding.Message.getExpandedBytes)
   | .bool =>    ``(Encoding.Message.getRepeatedBool)
   | .int32 =>   ``(Encoding.Message.getRepeatedVarint_int32)
   | .uint32 =>  ``(Encoding.Message.getRepeatedVarint_uint32)
@@ -280,29 +285,78 @@ private def construct_fromMessage (name : Ident) (push_name : String → Ident) 
     )
   return (fromMessageId, fromMessage)
 
-private def construct_decoder? (name : Ident) (push_name : String → Ident) (fromMessage : Ident) : CommandElabM (Ident × Command) := do
-  let msg ← mkIdent <$> mkFreshUserName `msg
-  let decoder?Id := push_name "decoder?"
-  let decoder? ← `(partial def $decoder?Id:ident : Protobuf.Encoding.Message → Nat → Except Protobuf.Encoding.ProtoDecodeError (Option $name) := fun $msg field_num => do
-    let bytes? ← Encoding.Message.getBytes? $msg field_num
-    bytes?.mapM fun bytes => do
-      let r := Binary.Get.run (Binary.getThe Protobuf.Encoding.Message) bytes
-      let m ← Encoding.protoDecodeParseResultExcept r.toExcept
-      $fromMessage:ident m
-    )
-  return (decoder?Id, decoder?)
-
 private def construct_decoder_rep (name : Ident) (push_name : String → Ident) (fromMessage : Ident) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let decoderRepId := push_name "decoder_rep"
   let decoderRep ← `(partial def $decoderRepId:ident : Protobuf.Encoding.Message → Nat → Except Protobuf.Encoding.ProtoDecodeError (Array $name) := fun $msg field_num => do
-    let xs ← Encoding.Message.getRepeatedBytes $msg field_num
+    let xs ← Encoding.Message.getExpandedBytes $msg field_num
     xs.mapM fun bytes => do
       let r := Binary.Get.run (Binary.getThe Protobuf.Encoding.Message) bytes
       let m ← Encoding.protoDecodeParseResultExcept r.toExcept
       $fromMessage:ident m
     )
   return (decoderRepId, decoderRep)
+
+private def construct_merge (name : Ident) (push_name : String → Ident) (fields : Array MData) : CommandElabM (Ident × Command) := do
+  let a ← mkIdent <$> mkFreshUserName `a
+  let b ← mkIdent <$> mkFreshUserName `b
+  let mergeBody ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, proto_type, lean_type_inner := _, lean_type := _, field_name, field_proj := field_proj, field_num := _, options := _, is_scalar} => do
+    let var ← mkIdent <$> mkFreshUserName (field_name.getId)
+    let va ← `($field_proj $a)
+    let vb ← `($field_proj $b)
+    let merger := mkIdentFrom proto_type (proto_type.getId.append `merge)
+    let stx ← match mod with
+    | .default =>
+      if is_scalar then
+        `(Parser.Term.doSeqItem| let $var := $vb)
+      else if (proto_type matches `(string) | `(bytes)) then
+        `(Parser.Term.doSeqItem| let $var := $vb <|> $va) -- optional, last first
+      else
+        `(Parser.Term.doSeqItem| let $var := match $va:term, $vb:term with
+          | Option.some x, Option.some y => Option.some ($merger x y)
+          | Option.some x, _ => Option.some x
+          | _, Option.some y => Option.some y
+          | _, _ => Option.none)
+    | .optional =>
+      if is_scalar || (proto_type matches `(string) | `(bytes)) then
+        `(Parser.Term.doSeqItem| let $var := $vb <|> $va)
+      else
+        `(Parser.Term.doSeqItem| let $var := match $va:term, $vb:term with
+          | Option.some x, Option.some y => Option.some ($merger x y)
+          | Option.some x, _ => Option.some x
+          | _, Option.some y => Option.some y
+          | _, _ => Option.none)
+    | .repeated => `(Parser.Term.doSeqItem| let $var := $va ++ $vb) -- concatenate
+    return (var, stx)
+  let ps := fields.map MData.field_name
+  let (vs, mergeBody) := mergeBody.unzip
+  let structInst ← `({ $[$ps:ident := $vs]* : $name })
+  let ret ← `(Parser.Term.doSeqItem| return $structInst)
+  let mergeId := push_name "merge"
+  let merge ← `(partial def $mergeId:ident : $name → $name → $name := fun $a $b => Id.run do
+    $mergeBody*
+    $ret
+    )
+  return (mergeId, merge)
+
+private def construct_decoder? (name : Ident) (push_name : String → Ident) (fromMessage merge : Ident) : CommandElabM (Ident × Command) := do
+  let msg ← mkIdent <$> mkFreshUserName `msg
+  let decoder?Id := push_name "decoder?"
+  let decoder? ← `(partial def $decoder?Id:ident : Protobuf.Encoding.Message → Nat → Except Protobuf.Encoding.ProtoDecodeError (Option $name) := fun $msg field_num => do
+    let bytes? ← Encoding.Message.getExpandedBytes $msg field_num
+    let ms ← bytes?.mapM fun bytes => do
+      let r := Binary.Get.run (Binary.getThe Protobuf.Encoding.Message) bytes
+      let m ← Encoding.protoDecodeParseResultExcept r.toExcept
+      $fromMessage:ident m
+    if let m :: ms := ms.toList then
+      if ms.isEmpty then
+        return some m
+      else
+        return some <| ms.foldl (init := m) $merge
+    else
+      return none
+    )
+  return (decoder?Id, decoder?)
 
 @[scoped command_elab messageDec]
 public def elabMessageDec : CommandElab := fun stx => do
@@ -335,13 +389,15 @@ public def elabMessageDec : CommandElab := fun stx => do
   let (toMessage', toMessage) ← construct_toMessage name push_name mdata
   let (_, builder) ← construct_builder name push_name toMessage'
   let (fromMessage', fromMessage) ← construct_fromMessage name push_name mdata
-  let (_, decoder?) ← construct_decoder? name push_name fromMessage'
+  let (merge', merge) ← construct_merge name push_name mdata
+  let (_, decoder?) ← construct_decoder? name push_name fromMessage' merge'
   let (_, decoder_rep) ← construct_decoder_rep name push_name fromMessage'
   if self_rec then
     let m ← `(mutual
         $toMessage
         $builder
         $fromMessage
+        $merge
         $decoder?
         $decoder_rep
       end)
@@ -352,5 +408,6 @@ public def elabMessageDec : CommandElab := fun stx => do
     elabCommand toMessage
     elabCommand builder
     elabCommand fromMessage
+    elabCommand merge
     elabCommand decoder?
     elabCommand decoder_rep
