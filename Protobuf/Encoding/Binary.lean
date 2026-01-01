@@ -25,12 +25,12 @@ private def get_varint_bytes : Get ByteArray := do
 @[always_inline]
 def get_varint : Get Nat := do
   let bs ← get_varint_bytes
-  let mut v := 0
-  let mut shift := 0
-  for b in bs do
-    v := v ||| ((b &&& 0x7F).toNat <<< shift)
-    shift := shift + 7
-  return v
+  let shifts := Array.range' 0 bs.size 7
+  return runST fun σ => do
+    let v ← ST.mkRef (σ := σ) 0
+    _ ← bs.data.zipWithM (bs := shifts) fun b shift => do
+      v.modify fun x => (x ||| ((b &&& 0x7F).toNat <<< shift))
+    v.get
 
 def put_varint (n : Nat) : Put := do
   let bv := BitVec.ofNat 64 n
