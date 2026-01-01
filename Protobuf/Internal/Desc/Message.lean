@@ -16,11 +16,11 @@ open Lean Meta Elab Term Command
 
 syntax message_entry_modifier := "optional" <|> "repeated"
 
-syntax message_entry_config_entry := ident " = " term
+syntax message_entry_options_entry := ident " = " term
 
-syntax message_entry_config := "[" message_entry_config_entry,*,? "]"
+syntax message_entry_options := "[" message_entry_options_entry,*,? "]"
 
-syntax message_entry := (message_entry_modifier)? ident ident " = " num (message_entry_config)? ";"
+syntax message_entry := (message_entry_modifier)? ident ident " = " num (message_entry_options)? ";"
 
 syntax (name := messageDec) "message " ident "{" message_entry* "}" : command
 
@@ -165,25 +165,30 @@ private def InternalType.decoder_rep [Monad m] [MonadQuotation m] : InternalType
   | .fixed32 =>   ``(Encoding.Message.getRepeatedI32_fixed32)
   | .sfixed32 =>  ``(Encoding.Message.getRepeatedI32_sfixed32)
 
-private structure FieldConfig where
+private structure FieldOptions where
   raw : Array (Ident × Term)
-  entries : Std.HashMap Name Term
+  entries : Std.HashMap Name (Array Term)
 deriving Inhabited
 
-private def FieldConfig.get? (cfg : FieldConfig) (x : Name) : Option Term := cfg.entries[x]?
+private def FieldOptions.first? (options : FieldOptions) (x : Name) : Option Term :=
+  if let some xs := options.entries[x]? then
+    xs[0]?
+  else
+    none
 
-private def FieldConfig.is_true (cfg : FieldConfig) (x : Name) : Bool :=
-  if let some y := cfg.get? x then
+private def FieldOptions.is_true (options : FieldOptions) (x : Name) : Bool :=
+  if let some y := options.first? x then
     y matches `(true)
   else false
 
-private def FieldConfig.packed (cfg : FieldConfig) : Bool := cfg.is_true `packed
+private def FieldOptions.packed (options : FieldOptions) : Bool := options.is_true `packed
 
-private def expandMessageEntryConfig (s : TSyntax ``message_entry_config) : FieldConfig :=
+private def expandMessageEntryOptions (s : TSyntax ``message_entry_options) : FieldOptions :=
   match s with
-  | `(message_entry_config| [ $[$name = $val],* ]) =>
+  | `(message_entry_options| [ $[$name = $val],* ]) =>
     let ls := name.zip val
-    let map := Std.HashMap.ofList <| ls.toList.map fun (x, v) => (x.getId, v)
+    let map := ls.map (fun (x, v) => (x.getId, v)) |>.groupByKey Prod.fst
+    let map := map.map (fun _ v => v.map Prod.snd)
     { raw := ls, entries := map }
   | _ => unreachable!
 
@@ -195,14 +200,14 @@ private structure MData where
   field_name : TSyntax `ident
   field_proj : TSyntax `ident
   field_num : TSyntax `num
-  config : FieldConfig
+  options : FieldOptions
   is_scalar : Bool
 
 
 private def construct_toMessage (name : Ident) (push_name : String → Ident) (fields : Array MData) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let val ← mkIdent <$> mkFreshUserName `val
-  let builder ← fields.mapM fun {mod, proto_type, lean_type_inner := _, lean_type := _, field_name := _, field_proj, field_num, config, is_scalar} => do
+  let builder ← fields.mapM fun {mod, proto_type, lean_type_inner := _, lean_type := _, field_name := _, field_proj, field_num, options, is_scalar} => do
     let itype? := getInternalType? proto_type
     let builder? ← itype?.mapM InternalType.builder
     let builder := builder?.getD (mkIdentFrom proto_type (proto_type.getId.str "builder"))
@@ -215,7 +220,7 @@ private def construct_toMessage (name : Ident) (push_name : String → Ident) (f
     | .optional =>
       ``($field_num:num <~? ($builder <$> ($field_proj $val)) # $msg)
     | .repeated =>
-      if config.packed then
+      if options.packed then
         ``($field_num:num <~p (Array.map $builder ($field_proj $val)) # $msg)
       else
         ``($field_num:num <~f (Array.map $builder ($field_proj $val)) # $msg)
@@ -237,7 +242,7 @@ private def construct_builder (name : Ident) (push_name : String → Ident) (toM
 
 private def construct_fromMessage (name : Ident) (push_name : String → Ident) (fields : Array MData) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
-  let decoder ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, proto_type, lean_type_inner := _, lean_type := _, field_name, field_proj, field_num, config, is_scalar} => do
+  let decoder ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, proto_type, lean_type_inner := _, lean_type := _, field_name, field_proj := _, field_num, options, is_scalar} => do
     let itype? := getInternalType? proto_type
     let decoder? ← itype?.mapM InternalType.decoder?
     let decoder? := decoder?.getD (mkIdentFrom proto_type (proto_type.getId.str "decoder?"))
@@ -255,7 +260,7 @@ private def construct_fromMessage (name : Ident) (push_name : String → Ident) 
     | .optional =>
       `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num))
     | .repeated =>
-      if config.packed then
+      if options.packed then
         assert! decoder_rep_packed?.isSome
         let decoder_rep_packed := decoder_rep_packed?.get!
         `(Parser.Term.doSeqItem| let $var ← ($decoder_rep_packed $msg $field_num:num))
@@ -301,7 +306,7 @@ private def construct_decoder_rep (name : Ident) (push_name : String → Ident) 
 
 @[scoped command_elab messageDec]
 public def elabMessageDec : CommandElab := fun stx => do
-  let `(messageDec| message $name { $[$[$mod]? $t' $n = $fidx $[$cfgStx]? ;]* }) := stx | throwUnsupportedSyntax
+  let `(messageDec| message $name { $[$[$mod]? $t' $n = $fidx $[$optionsStx]? ;]* }) := stx | throwUnsupportedSyntax
   let self_rec := t'.any fun t' => t'.getId == name.getId
   let t ← t'.mapM resolveInternalType
   let ms ← mod.mapM fun mod? => do
@@ -323,10 +328,10 @@ public def elabMessageDec : CommandElab := fun stx => do
   let struct ← `(structure $name where $[$n:ident : $ts]* deriving Inhabited)
   let push_name (component : String) := mkIdentFrom name (name.getId.str component)
   let dots ← n.mapM fun (x : Ident) => return mkIdentFrom x (name.getId.append x.getId)
-  let cfg := cfgStx.map (fun x => (x.map expandMessageEntryConfig).getD default)
-  let mdata := ms.zip (t'.zip (t.zip (ts.zip (n.zip (dots.zip (fidx.zip (cfg.zip ss))))))) |>.map
-    fun (mod, proto_type, lean_type_inner, lean_type, field_name, field_proj, field_num, config, is_scalar) =>
-      { mod, proto_type, lean_type_inner, lean_type, field_name, field_proj, field_num, config, is_scalar : MData}
+  let options := optionsStx.map (fun x => (x.map expandMessageEntryOptions).getD default)
+  let mdata := ms.zip (t'.zip (t.zip (ts.zip (n.zip (dots.zip (fidx.zip (options.zip ss))))))) |>.map
+    fun (mod, proto_type, lean_type_inner, lean_type, field_name, field_proj, field_num, options, is_scalar) =>
+      { mod, proto_type, lean_type_inner, lean_type, field_name, field_proj, field_num, options, is_scalar : MData}
   let (toMessage', toMessage) ← construct_toMessage name push_name mdata
   let (_, builder) ← construct_builder name push_name toMessage'
   let (fromMessage', fromMessage) ← construct_fromMessage name push_name mdata
