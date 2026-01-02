@@ -3,12 +3,12 @@ module
 import Protobuf.Encoding
 import Protobuf.Encoding.Builder
 import Protobuf.Encoding.Unwire
-public import Protobuf.Internal.Desc.Enum
+public import Protobuf.Internal.Notation.Enum
 public import Lean
 
 public meta section
 
-namespace Protobuf.Internal.Desc
+namespace Protobuf.Internal.Notation
 
 open Encoding Notation
 
@@ -244,6 +244,7 @@ private def construct_toMessage (name : Ident) (push_name : String → Ident) (f
   let toMessage ← `(partial def $toMessageId:ident : $name → Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message := fun $val => do
     let $msg:ident := Protobuf.Encoding.Message.emptyWithCapacity $(quote fields.size)
     $toMessageBody*
+    let $msg := Protobuf.Encoding.Message.wire_map $msg ($(push_name "Unknown.Fields") $val)
     return $msg
     )
   return (toMessageId, toMessage)
@@ -259,6 +260,7 @@ private def construct_builder (name : Ident) (push_name : String → Ident) (toM
 
 private def construct_fromMessage (name : Ident) (push_name : String → Ident) (fields : Array MData) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
+  let ns := fields.map MData.field_num
   let decoder ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, proto_type, lean_type_inner := _, lean_type := _, field_name, field_proj, field_num, options, is_scalar} => do
     let itype? := getInternalType? proto_type
     let decoder? ← itype?.mapM InternalType.decoder?
@@ -297,7 +299,19 @@ private def construct_fromMessage (name : Ident) (push_name : String → Ident) 
         let decoder_rep := decoder_rep?.getD (mkIdentFrom proto_type (proto_type.getId.str "decoder_rep"))
         `(Parser.Term.doSeqItem| let $var ← ($decoder_rep $msg $field_num:num))
     return (var, stx)
-  let ps := fields.map MData.field_name
+  let u := mkIdent `«Unknown.Fields»
+  let decoder := decoder.push (← do
+    let s ← `(Parser.Term.doSeqItem| let $u:ident ← do
+      let idxs : Array Nat := #[$ns,*]
+      let rs := Protobuf.Encoding.Message.records $msg
+      let rem := rs.filter (fun x => x.fieldNum ∉ idxs)
+      let rem := rem.map fun x => (x.fieldNum, x.value)
+      let rem := rem.groupByKey Prod.fst
+      let rem := rem.map (fun _ x => x.unzip.snd)
+      pure rem
+      )
+    pure (u, s))
+  let ps := fields.map MData.field_name |>.push u
   let vs := decoder.unzip.fst
   let structInst ← `({ $[$ps:ident := $vs]* : $name })
   let ret ← `(Parser.Term.doSeqItem| return $structInst)
@@ -348,7 +362,14 @@ private def construct_merge (name : Ident) (push_name : String → Ident) (field
           | _, _ => Option.none)
     | .repeated => `(Parser.Term.doSeqItem| let $var := $va ++ $vb) -- concatenate
     return (var, stx)
-  let ps := fields.map MData.field_name
+  let u := mkIdent `«Unknown.Fields»
+  let mergeBody := mergeBody.push (← do
+    let field_proj := push_name "Unknown.Fields"
+    let va ← `($field_proj $a)
+    let vb ← `($field_proj $b)
+    let s ← `(Parser.Term.doSeqItem| let $u:ident := Protobuf.Encoding.merge_map $va $vb)
+    pure (u, s))
+  let ps := fields.map MData.field_name |>.push u
   let (vs, mergeBody) := mergeBody.unzip
   let structInst ← `({ $[$ps:ident := $vs]* : $name })
   let ret ← `(Parser.Term.doSeqItem| return $structInst)
@@ -397,7 +418,10 @@ public def elabMessageDec : CommandElab := fun stx => do
           `(Option $t)
       | .optional => `(Option $t)
       | .repeated => `(Array $t)
-  let struct ← `(structure $name where $[$n:ident : $ts]* deriving Inhabited)
+  let struct ← `(structure $name where
+    $[$n:ident : $ts]*
+    «Unknown.Fields» : Std.HashMap Nat (Array Encoding.ProtoVal)
+    deriving Inhabited)
   let push_name (component : String) := mkIdentFrom name (name.getId.str component)
   let dots ← n.mapM fun (x : Ident) => return mkIdentFrom x (name.getId.append x.getId)
   let options := optionsStx.map (fun x => (x.map expandMessageEntryOptions).getD default)

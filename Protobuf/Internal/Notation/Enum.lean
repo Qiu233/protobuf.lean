@@ -1,13 +1,13 @@
 module
 
 public import Lean
-public import Protobuf.Internal.Desc.Basic
+public import Protobuf.Internal.Notation.Basic
 import Protobuf.Encoding.Builder
 import Protobuf.Encoding.Unwire
 
 meta section
 
-namespace Protobuf.Internal.Desc
+namespace Protobuf.Internal.Notation
 
 open Lean Meta Elab Term Command
 
@@ -23,8 +23,11 @@ public def isProtoEnum [Monad m] [MonadEnv m] (x : Name) : m Bool := do
   return protoEnumAttr.hasTag env x
 
 syntax enum_entry := ident " = " num ";"
-
 syntax (name := enumDec) "enum " ident "{" enum_entry* "}" : command
+
+-- syntax enumClosedness := &"open" <|> &"closed"
+
+syntax (name := enumDec') "enum' " ident "{" enum_entry* "}" : command
 
 private def construct_builder (name : Ident) (push_name : String → Ident) (toInt32 : Ident) : CommandElabM (Ident × Command) := do
   let val ← mkIdent <$> mkFreshUserName `val
@@ -66,8 +69,6 @@ public def elabEnumDef : CommandElab := fun stx => do
   let `(enumDec| enum $name { $[$e = $n;]* }) := stx | throwUnsupportedSyntax
   if e.isEmpty then
     throwError "enum declaration must have variant(s)"
-  -- if !(n.any (fun n => n.getNat == 0)) then
-  --   throwError "enum declaration must have a variant equal to 0"
   let unknownName := `«Unknown.Value»
   let unknownIdent := mkIdent unknownName
   let ind ← `(@[proto_enum] inductive $name where $[| $e:ident]* | $unknownIdent:ident (raw : Int32) )
@@ -96,3 +97,29 @@ public def elabEnumDef : CommandElab := fun stx => do
   elabCommand decoder?
   elabCommand decoder_rep
   elabCommand decoder_rep_packed
+
+@[scoped command_elab enumDec']
+public def elabEnumDef' : CommandElab := fun stx => do
+  let `(enumDec'| enum' $name { $[$e = $n;]* }) := stx | throwUnsupportedSyntax
+  if e.isEmpty then
+    throwError "enum declaration must have variant(s)"
+  let unknownName := `«Unknown.Value»
+  let unknownIdent := mkIdent unknownName
+  let ind ← `(@[proto_enum] inductive $name where $[| $e:ident]* | $unknownIdent:ident (raw : Int32) )
+  let push_name (component : String) := mkIdentFrom name (name.getId.str component)
+  let dots ← e.mapM fun x => `(.$x)
+  let toInt32Id := push_name "toInt32"
+  let toInt32 ← `(def $toInt32Id:ident : $name → Int32
+    $[| $dots:term => $n:num]*
+    | .$unknownIdent raw => raw
+    )
+  let fromInt32Id := push_name "fromInt32"
+  let fromInt32 ← `(def $fromInt32Id:ident : Int32 → $name
+    $[| $n:num => $dots:term]*
+    | raw => .$unknownIdent raw
+    )
+  let inhabited ← `(instance : Inhabited $name where default := .$unknownIdent 0)
+  elabCommand ind
+  elabCommand toInt32
+  elabCommand fromInt32
+  elabCommand inhabited

@@ -3,6 +3,24 @@ syntax = "proto3";
 
 // edition = "2023";
 
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.EnumValueOptions {
+  string my_option = 1000;
+}
+
 message A {
     repeated int32 t = 1;
+}
+
+message T {
+    enum N {
+        A = 0;
+        B = 2 [(my_option) = "hello"];
+    }
+    optional N n = 1;
+}
+
+message S {
+    optional T.N n = 2;
 }

@@ -3,6 +3,7 @@ module
 import Binary
 public import Protobuf.Encoding.Basic
 public import Protobuf.Encoding.Binary
+import Std
 
 public section
 
@@ -83,6 +84,14 @@ def ProtoVal.of_packed : Array ProtoVal → ProtoVal := fun xs =>
   let data := Binary.Put.run 128 do
     xs.forM put_packed!
   ProtoVal.LEN data
+
+@[always_inline]
+def Message.wire_map (msg : Message) : Std.HashMap Nat (Array ProtoVal) → Message := fun m =>
+  let xs := m.toArray.map fun (n, xs) => xs.map fun x => Record.mk n x
+  {msg with records := msg.records.append xs.flatten}
+
+def merge_map (a b : Std.HashMap Nat (Array ProtoVal)) : Std.HashMap Nat (Array ProtoVal) :=
+  b.fold (init := a) (fun a n v => a.alter n (fun | .none => some v | .some arr => some (arr ++ v)))
 
 namespace Notation
 

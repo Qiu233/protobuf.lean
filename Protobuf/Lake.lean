@@ -64,13 +64,25 @@ def compile_proto_ (srcFile : FilePath) (targetLeanPath : FilePath) : FetchM (Jo
     return a.path
 
 structure M.Context where
-  currentMacroScope : Nat
-  ref : Syntax
+  currentMacroScope : Nat := 0
+  ref : Syntax := mkNullNode
+  currentNamePrefixRev : List String := []
 
 abbrev M := ReaderT M.Context <| StateRefT Nat IO
 
 @[inline]
-def M.run : M α → IO α := fun x => x { currentMacroScope := 0, ref := mkNullNode } |>.run' 0
+def M.run : M α → IO α := fun x => x { } |>.run' 0
+
+@[inline]
+def wrapName : String → M Name := fun s c =>
+  let rec go (ns : List String) : Name :=
+    match ns with
+    | [] => Name.anonymous
+    | x :: ns => (go ns).str x
+  return (go c.currentNamePrefixRev).str s
+
+@[specialize]
+def withNewNameLevel (n : String) (x : M α) : M α := fun c => x { c with currentNamePrefixRev := n :: c.currentNamePrefixRev }
 
 @[specialize, always_inline]
 protected def M.withFreshMacroScope {α} (x : M α) : M α := do
@@ -100,20 +112,21 @@ def read_proto (srcFile : FilePath) : IO FileDescriptorSet := do
     | .error e => error s!"failed to parse protoc output: {e}"
 
 def compile_proto (desc : FileDescriptorSet) : M Unit := do
-  for file in desc.file do
-    -- let t := file.name
-    println! "{file.name}"
-    -- println! "{repr file.}"
-    for m in file.message_type do
-      println! "{m.name}"
-      -- println! "{repr m.options}"
-      for f in m.field do
-        println! "{f.name}"
-        println! "{repr f.options}"
-        println! "{repr f.proto3_optional}"
-    -- println! "{file.syntax}"
-    -- println! "{repr file.edition}"
-    -- println! "{repr file.options}"
+  println! "{repr desc}"
+  -- for file in desc.file do
+  --   -- let t := file.name
+  --   println! "{file.name}"
+  --   -- println! "{repr file.}"
+  --   for m in file.message_type do
+  --     println! "{m.name}"
+  --     -- println! "{repr m.options}"
+  --     for f in m.field do
+  --       println! "{f.name}"
+  --       println! "{repr f.options}"
+  --       println! "{repr f.proto3_optional}"
+  --   -- println! "{file.syntax}"
+  --   -- println! "{repr file.edition}"
+  --   -- println! "{repr file.options}"
 
 def test : M Unit := do
   let x ← read_proto "Test/A.proto"
@@ -125,3 +138,46 @@ def test : M Unit := do
 #check Workspace.runFetchM
 
 #eval test.run
+
+-- proto3
+
+def compile_message_field (field : FieldDescriptorProto) : M String := do
+  sorry
+
+local
+macro "get!! " src:term:max " ! " err:term : term =>
+  ``(Option.getDM $src (error s!"{decl_name%}: {$err}"))
+
+local
+macro "get!! " src:term:max : term => ``(Option.getDM $src (error s!"{decl_name%}"))
+
+@[inline]
+private def joinLines (xs : Array String) : String := String.intercalate "\n" xs.toList
+
+structure EnumValueMData where
+
+def compile_enum (e : EnumDescriptorProto) : M (Array Command) := do
+  let enumName ← get!! e.name ! "expected enum name"
+  let typeName ← wrapName enumName
+  let typeId := mkIdent typeName
+  let vNames ← e.value.mapM fun v => get!! v.name
+  let vNames := vNames.map fun x => typeName.str x
+  let vIds := vNames.map mkIdent
+  let vNums ← e.value.mapM fun v => get!! v.number
+  let vNumsQ := vNums.map fun x => quote x.toUInt32.toNat
+  let unknownName := `«Unknown.Value»
+  let unknownCtorId := mkIdent <| typeName.append unknownName
+  let typeDef ← `(enum' $typeId { $[$vIds = $vNumsQ;]* })
+  let t ← e.value.mapM fun v => do
+    let x := v.options
+    pure ()
+  sorry
+
+#exit
+
+#[{ name := some "N",
+    value := #[{ name := some "A", number := some 0, options := none },
+              { name := some "B", number := some 2, options := none }],
+    options := none,
+    reserved_range := #[],
+    reserved_name := #[] }]

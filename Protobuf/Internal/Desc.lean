@@ -2,8 +2,8 @@ module
 
 public import Protobuf.Encoding
 import Protobuf.Encoding.Builder
-import Protobuf.Internal.Desc.Enum
-import Protobuf.Internal.Desc.Message
+import Protobuf.Internal.Notation.Enum
+import Protobuf.Internal.Notation.Message
 
 public section
 
