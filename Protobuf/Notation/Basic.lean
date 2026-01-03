@@ -42,7 +42,7 @@ public section
 
 open Lean Meta Elab Term Command
 
-namespace Protobuf.Internal.Notation
+namespace Protobuf.Notation
 
 meta def mkFreshUserName (n : Name) : CommandElabM Name := do
   withFreshMacroScope do

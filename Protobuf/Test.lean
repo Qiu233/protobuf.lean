@@ -2,7 +2,7 @@ module
 
 public import Protobuf.Encoding
 public import Binary
-meta import Protobuf.Internal.Notation
+meta import Protobuf.Notation
 meta import Protobuf.Elab
 import Binary.Hex
 

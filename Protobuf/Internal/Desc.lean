@@ -1,7 +1,7 @@
 module
 
 public import Protobuf.Encoding
-meta import Protobuf.Internal.Notation
+meta import Protobuf.Notation
 
 public section
 

@@ -1,6 +1,6 @@
 module
 
-import Protobuf.Internal.Notation
+import Protobuf.Notation
 public import Protobuf.Internal.Desc
 
 open System Lean
@@ -9,7 +9,7 @@ public section
 
 namespace Protobuf.Versions
 
-open Internal Desc Encoding Notation
+open Internal.Desc Encoding Notation
 
 protected def packagePrefixRev (pkg : String) : List String :=
   let pkg := pkg.trim

@@ -1,14 +1,14 @@
 module
 
 public import Lean
-public meta import Protobuf.Internal.Notation.Basic
+public meta import Protobuf.Notation.Basic
 import Protobuf.Encoding.Builder
 import Protobuf.Encoding.Unwire
 public meta import Protobuf.Utils
 
 public meta section
 
-namespace Protobuf.Internal.Notation
+namespace Protobuf.Notation
 
 open Lean Meta Elab Term Command
 

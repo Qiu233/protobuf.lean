@@ -1,4 +1,4 @@
-import Protobuf.Internal.Notation
+import Protobuf.Notation
 
 namespace Protobuf.Internal
 

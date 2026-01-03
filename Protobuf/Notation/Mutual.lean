@@ -3,14 +3,14 @@ module
 import Protobuf.Encoding
 import Protobuf.Encoding.Builder
 import Protobuf.Encoding.Unwire
-public meta import Protobuf.Internal.Notation.Basic
-public import Protobuf.Internal.Notation.Enum
-public import Protobuf.Internal.Notation.Message
+public meta import Protobuf.Notation.Basic
+public import Protobuf.Notation.Enum
+public import Protobuf.Notation.Message
 public import Lean
 
 public meta section
 
-namespace Protobuf.Internal.Notation
+namespace Protobuf.Notation
 
 open Encoding Notation
 

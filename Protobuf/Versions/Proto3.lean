@@ -1,6 +1,6 @@
 module
 
-import Protobuf.Internal.Notation
+import Protobuf.Notation
 public import Protobuf.Internal.Desc
 public import Protobuf.Utils
 public import Protobuf.Versions.Basic
@@ -11,7 +11,7 @@ public section
 
 namespace Protobuf.Versions.Proto3
 
-open Internal Desc Encoding Notation
+open Internal.Desc Encoding Notation
 
 structure DeclOutput where
   decl : Command

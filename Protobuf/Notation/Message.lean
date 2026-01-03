@@ -3,13 +3,13 @@ module
 import Protobuf.Encoding
 import Protobuf.Encoding.Builder
 import Protobuf.Encoding.Unwire
-public meta import Protobuf.Internal.Notation.Basic
-public import Protobuf.Internal.Notation.Enum
+public meta import Protobuf.Notation.Basic
+public import Protobuf.Notation.Enum
 public import Lean
 
 public meta section
 
-namespace Protobuf.Internal.Notation
+namespace Protobuf.Notation
 
 open Encoding Notation
 
@@ -242,8 +242,8 @@ deriving Inhabited
 
 def computeMData [Monad m] [MonadQuotation m] [MonadError m] [MonadEnv m] [MonadOptions m] [MonadLog m] [MonadRef m] [AddMessageContext m] [MonadResolveName m]
     (mutEnums mutOneofs messages : NameSet) (name : Ident)
-    (mod : Array (Option (TSyntax `Protobuf.Internal.Notation.message_entry_modifier)))
-    (t' n : Array (TSyntax `ident)) (fidx : Array (TSyntax `num)) (optionsStx : Array (Option (TSyntax `Protobuf.Internal.Notation.options))) : m (Array ProtoFieldMData) := do
+    (mod : Array (Option (TSyntax `Protobuf.Notation.message_entry_modifier)))
+    (t' n : Array (TSyntax `ident)) (fidx : Array (TSyntax `num)) (optionsStx : Array (Option (TSyntax `Protobuf.Notation.options))) : m (Array ProtoFieldMData) := do
   let t ← t'.mapM resolveInternalType
   let ss ← t' |>.mapM fun t' => getProtoTypeMData mutEnums mutOneofs messages t'
   let ms ← mod.mapM fun mod? => do

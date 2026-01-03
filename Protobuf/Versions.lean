@@ -1,6 +1,6 @@
 module
 
-import Protobuf.Internal.Notation
+import Protobuf.Notation
 public import Protobuf.Versions.Proto3
 
 open System
@@ -10,7 +10,7 @@ public section
 
 namespace Protobuf.Versions
 
-open Internal Desc Encoding Notation
+open Internal.Desc Encoding Notation
 
 def compile_proto (desc : FileDescriptorSet) : M (Array Command) := do
   let names ← desc.file.mapM fun x => get!! x.name
@@ -34,7 +34,7 @@ def compile_proto (desc : FileDescriptorSet) : M (Array Command) := do
 
 private def renderCommands (cmds : Array Command) : IO String := do
   unsafe Lean.enableInitializersExecution
-  let env ← Lean.importModules #[`Protobuf.Internal.Notation] {} (loadExts := true)
+  let env ← Lean.importModules #[`Protobuf.Notation] {} (loadExts := true)
   let ctx : Core.Context := { fileName := "<proto>", fileMap := default }
   let st : Core.State := { env := env }
   let mut out := ""

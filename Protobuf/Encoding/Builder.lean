@@ -93,30 +93,32 @@ def Message.wire_map (msg : Message) : Std.HashMap Nat (Array ProtoVal) → Mess
 def merge_map (a b : Std.HashMap Nat (Array ProtoVal)) : Std.HashMap Nat (Array ProtoVal) :=
   b.fold (init := a) (fun a n v => a.alter n (fun | .none => some v | .some arr => some (arr ++ v)))
 
-namespace Notation
+end Protobuf.Encoding
+
+namespace Protobuf.Notation
 
 set_option quotPrecheck false
 
 scoped notation n " <~ " val " # " msg => show Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message from do
   let v ← val
-  pure (Message.set msg n v)
+  pure (Protobuf.Encoding.Message.set msg n v)
 
 scoped notation n " <~? " val " # " msg =>
   show Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message from do
     if let Option.some v ← val then
-      pure (Message.set msg n v)
+      pure (Protobuf.Encoding.Message.set msg n v)
     else
       pure msg
 
 /-- flattened repeated -/
 scoped notation n " <~f " vs " # " msg => show Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message from do
   let xs ← vs
-  pure (Array.foldl (init := msg) (fun acc x => Message.set acc n x) xs)
+  pure (Array.foldl (init := msg) (fun acc x => Protobuf.Encoding.Message.set acc n x) xs)
 
 /-- packed repeated -/
 scoped notation n " <~p " vs " # " msg => show Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message from do
   let xs ← vs
-  pure (Message.set msg n (ProtoVal.of_packed xs))
+  pure (Protobuf.Encoding.Message.set msg n (Protobuf.Encoding.ProtoVal.of_packed xs))
 
 set_option quotPrecheck true
 
