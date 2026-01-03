@@ -1,11 +1,12 @@
 module
 
 public import Lean
-public import Protobuf.Internal.Notation.Basic
+public meta import Protobuf.Internal.Notation.Basic
 import Protobuf.Encoding.Builder
 import Protobuf.Encoding.Unwire
+public meta import Protobuf.Utils
 
-meta section
+public meta section
 
 namespace Protobuf.Internal.Notation
 
@@ -23,11 +24,8 @@ public def isProtoEnum [Monad m] [MonadEnv m] (x : Name) : m Bool := do
   return protoEnumAttr.hasTag env x
 
 syntax enum_entry := ident " = " num ";"
-syntax (name := enumDec) "enum " ident "{" enum_entry* "}" : command
 
--- syntax enumClosedness := &"open" <|> &"closed"
-
-syntax (name := enumDec') "enum' " ident "{" enum_entry* "}" : command
+syntax (name := enumDec) "enum " ident (options)? "{" enum_entry* "}" : command
 
 private def construct_builder (name : Ident) (push_name : String → Ident) (toInt32 : Ident) : CommandElabM (Ident × Command) := do
   let val ← mkIdent <$> mkFreshUserName `val
@@ -65,10 +63,11 @@ private def construct_decoder_rep_packed (name : Ident) (push_name : String → 
   return (decoderRepId, decoderRep)
 
 @[scoped command_elab enumDec]
-public def elabEnumDef : CommandElab := fun stx => do
-  let `(enumDec| enum $name { $[$e = $n;]* }) := stx | throwUnsupportedSyntax
+public def elabEnumDec : CommandElab := fun stx => do
+  let `(enumDec| enum $name $[$opts?]? { $[$e = $n;]* }) := stx | throwUnsupportedSyntax
   if e.isEmpty then
     throwError "enum declaration must have variant(s)"
+  let options := opts?.map Options.parse |>.getD default
   let unknownName := `«Unknown.Value»
   let unknownIdent := mkIdent unknownName
   let ind ← `(@[proto_enum] inductive $name where $[| $e:ident]* | $unknownIdent:ident (raw : Int32) )
@@ -80,8 +79,21 @@ public def elabEnumDef : CommandElab := fun stx => do
     | .$unknownIdent raw => raw
     )
   let fromInt32Id := push_name "fromInt32"
+  let fromInt32Alts ← do
+    let allow_alias := options.allow_alias? |>.getD false
+    if !allow_alias then
+      let gs := (n.zip e).map (fun (n, x) => (n.getNat, x)) |>.groupKeyed
+      let ds := gs.filter (fun _ y => y.size > 1)
+      for (n, xs) in ds do
+        let dup := xs[1]!
+        logErrorAt dup m!"{n} is duplicated for {dup}"
+      if !ds.isEmpty then
+        throwError "option `allow_alias` is not enabled but alias(es) exist"
+    let t := n.zip dots
+    let t := t.eraseDupsBy (fun a b => a.fst.getNat == b.fst.getNat)
+    t.mapM fun (n, d) => `(Parser.Term.matchAltExpr| | $n:num => $d:term)
   let fromInt32 ← `(def $fromInt32Id:ident : Int32 → $name
-    $[| $n:num => $dots:term]*
+    $fromInt32Alts:matchAlt*
     | raw => .$unknownIdent raw
     )
   let inhabited ← `(instance : Inhabited $name where default := .$unknownIdent 0)
@@ -97,29 +109,3 @@ public def elabEnumDef : CommandElab := fun stx => do
   elabCommand decoder?
   elabCommand decoder_rep
   elabCommand decoder_rep_packed
-
-@[scoped command_elab enumDec']
-public def elabEnumDef' : CommandElab := fun stx => do
-  let `(enumDec'| enum' $name { $[$e = $n;]* }) := stx | throwUnsupportedSyntax
-  if e.isEmpty then
-    throwError "enum declaration must have variant(s)"
-  let unknownName := `«Unknown.Value»
-  let unknownIdent := mkIdent unknownName
-  let ind ← `(@[proto_enum] inductive $name where $[| $e:ident]* | $unknownIdent:ident (raw : Int32) )
-  let push_name (component : String) := mkIdentFrom name (name.getId.str component)
-  let dots ← e.mapM fun x => `(.$x)
-  let toInt32Id := push_name "toInt32"
-  let toInt32 ← `(def $toInt32Id:ident : $name → Int32
-    $[| $dots:term => $n:num]*
-    | .$unknownIdent raw => raw
-    )
-  let fromInt32Id := push_name "fromInt32"
-  let fromInt32 ← `(def $fromInt32Id:ident : Int32 → $name
-    $[| $n:num => $dots:term]*
-    | raw => .$unknownIdent raw
-    )
-  let inhabited ← `(instance : Inhabited $name where default := .$unknownIdent 0)
-  elabCommand ind
-  elabCommand toInt32
-  elabCommand fromInt32
-  elabCommand inhabited

@@ -3,6 +3,7 @@ module
 import Protobuf.Encoding
 import Protobuf.Encoding.Builder
 import Protobuf.Encoding.Unwire
+public meta import Protobuf.Internal.Notation.Basic
 public import Protobuf.Internal.Notation.Enum
 public import Lean
 
@@ -16,13 +17,9 @@ open Lean Meta Elab Term Command
 
 syntax message_entry_modifier := &"optional" <|> &"repeated" <|> &"required"
 
-syntax message_entry_options_entry := ident " = " term
+syntax message_entry := (message_entry_modifier)? ident ident " = " num (options)? ";"
 
-syntax message_entry_options := "[" message_entry_options_entry,*,? "]"
-
-syntax message_entry := (message_entry_modifier)? ident ident " = " num (message_entry_options)? ";"
-
-syntax (name := messageDec) "message " ident "{" message_entry* "}" : command
+syntax (name := messageDec) "message " ident (options)? "{" message_entry* "}" : command
 
 private def resolveInternalType [Monad m] [MonadQuotation m] : TSyntax `ident → m (TSyntax `ident) := fun stx =>
   match stx with
@@ -171,33 +168,6 @@ private def InternalType.decoder_rep [Monad m] [MonadQuotation m] : InternalType
   | .fixed32 =>   ``(Encoding.Message.getRepeatedI32_fixed32)
   | .sfixed32 =>  ``(Encoding.Message.getRepeatedI32_sfixed32)
 
-private structure FieldOptions where
-  raw : Array (Ident × Term)
-  entries : Std.HashMap Name (Array Term)
-deriving Inhabited
-
-private def FieldOptions.first? (options : FieldOptions) (x : Name) : Option Term :=
-  if let some xs := options.entries[x]? then
-    xs[0]?
-  else
-    none
-
-private def FieldOptions.is_true? (options : FieldOptions) (x : Name) : Option Bool :=
-  if let some y := options.first? x then
-    y matches `(true)
-  else false
-
-private def FieldOptions.packed? (options : FieldOptions) : Option Bool := options.is_true? `packed
-
-private def expandMessageEntryOptions (s : TSyntax ``message_entry_options) : FieldOptions :=
-  match s with
-  | `(message_entry_options| [ $[$name = $val],* ]) =>
-    let ls := name.zip val
-    let map := ls.map (fun (x, v) => (x.getId, v)) |>.groupByKey Prod.fst
-    let map := map.map (fun _ v => v.map Prod.snd)
-    { raw := ls, entries := map }
-  | _ => unreachable!
-
 private structure MData where
   mod : Modifier
   proto_type : TSyntax `ident
@@ -206,7 +176,7 @@ private structure MData where
   field_name : TSyntax `ident
   field_proj : TSyntax `ident
   field_num : TSyntax `num
-  options : FieldOptions
+  options : Options
   is_scalar : Bool
 
 private def construct_toMessage (name : Ident) (push_name : String → Ident) (fields : Array MData) : CommandElabM (Ident × Command) := do
@@ -398,7 +368,8 @@ private def construct_decoder? (name : Ident) (push_name : String → Ident) (fr
 
 @[scoped command_elab messageDec]
 public def elabMessageDec : CommandElab := fun stx => do
-  let `(messageDec| message $name { $[$[$mod]? $t' $n = $fidx $[$optionsStx]? ;]* }) := stx | throwUnsupportedSyntax
+  let `(messageDec| message $name $[$msgOptions?]? { $[$[$mod]? $t' $n = $fidx $[$optionsStx]? ;]* }) := stx | throwUnsupportedSyntax
+  -- let msgOptions := Options.parseD msgOptions?
   let self_rec := t'.any fun t' => t'.getId == name.getId
   let t ← t'.mapM resolveInternalType
   let ms ← mod.mapM fun mod? => do
@@ -424,7 +395,7 @@ public def elabMessageDec : CommandElab := fun stx => do
     deriving Inhabited)
   let push_name (component : String) := mkIdentFrom name (name.getId.str component)
   let dots ← n.mapM fun (x : Ident) => return mkIdentFrom x (name.getId.append x.getId)
-  let options := optionsStx.map (fun x => (x.map expandMessageEntryOptions).getD default)
+  let options := optionsStx.map Options.parseD
   let mdata := ms.zip (t'.zip (t.zip (ts.zip (n.zip (dots.zip (fidx.zip (options.zip ss))))))) |>.map
     fun (mod, proto_type, lean_type_inner, lean_type, field_name, field_proj, field_num, options, is_scalar) =>
       { mod, proto_type, lean_type_inner, lean_type, field_name, field_proj, field_num, options, is_scalar : MData}

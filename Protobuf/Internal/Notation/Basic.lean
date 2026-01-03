@@ -1,11 +1,117 @@
 module
 
 public import Lean
+import Protobuf.Utils
+
+/-!
+# DESIGN NOTE
+
+The Lean side meta-programming based protobuf language (we may call it *proto-lean*) is non-standard.
+
+*proto-lean* is protobuf version-invariant and edition-invariant, that is, who writes *proto-lean* code
+  is responsible to decide the specifics.
+A typical "writer" is a protoc plugin which targets Lean 4 as the host language.
+
+Nevertheless, we still provide this happy path to define immediate messages
+  without needing to fall back to the encoding/decoding primitives.
+
+## There are no nested declarations
+Instead, we flatten all declaration to the top level (in the sense of Lean 4).
+
+## Qualified names are allowed at declaration places
+
+2. Options are not set inside the declaration body
+Options setting block is adjacent to the declaration name, like
+```
+message A [...] {
+  ...
+}
+```
+
+3. Semantics of options are not the same as protobuf standard
+We use options to instruct the very specific behavior of the stuff.
+
+For example, when `packed` is true, we **always** generate seralizing code which
+  **always** serializes that field in the packed wire format.
+When `wired_as_group` is true, the field is **always** wired in the delimited way.
+
+-/
+
+
+public section
 
 open Lean Meta Elab Term Command
 
 namespace Protobuf.Internal.Notation
 
-public meta def mkFreshUserName (n : Name) : CommandElabM Name := do
+meta def mkFreshUserName (n : Name) : CommandElabM Name := do
   withFreshMacroScope do
     MonadQuotation.addMacroScope n
+
+structure Options where
+  raw : Array (Ident × Term)
+  entries : Std.HashMap Name (Array Term)
+deriving Inhabited
+
+-- TODO: maybe force this?
+private def Options.recognized : Array Name :=
+  #[`packed,
+    `deprecated,
+    `allow_alias,
+
+    --
+    `wired_as_group,
+  ]
+
+@[always_inline]
+private def Options.zip : Array Ident → Array Term → Options := fun name val =>
+  let raw := name.zip val
+  let entries := raw.map (fun (x, v) => (x.getId, v)) |>.groupKeyed
+  { raw, entries }
+
+@[always_inline]
+local instance : GetElem? Options Name (Array Term) (fun options name => name ∈ options.entries) where
+  getElem xs i h := xs.entries[i]
+  getElem? xs i := xs.entries[i]?
+
+@[always_inline]
+private def Options.first? (options : Options) (x : Name) : Option Term :=
+  if let some xs := options[x]? then
+    xs[0]?
+  else
+    none
+
+@[always_inline]
+private def Options.is_true? (options : Options) (x : Name) : Option Bool :=
+  if let some y := options.first? x then
+    y matches `(true)
+  else false
+
+syntax options_entry := ident " = " term
+
+syntax options := "[" options_entry,*,? "]"
+
+@[always_inline]
+def Options.parse : TSyntax ``options → Options
+  | `(options| [ $[$name = $val],* ]) => Options.zip name val
+  | _ => unreachable!
+
+@[always_inline]
+def Options.parseD : Option (TSyntax ``options) → Options
+  | some s =>
+    match s with
+    | `(options| [ $[$name = $val],* ]) => Options.zip name val
+    | _ => unreachable!
+  | none => default
+
+@[always_inline]
+def Options.packed? (options : Options) : Option Bool := options.is_true? `packed
+
+@[always_inline]
+def Options.deprecated (options : Options) : Bool := options.is_true? `deprecated |>.getD false
+
+@[always_inline]
+def Options.allow_alias? (options : Options) : Option Bool := options.is_true? `allow_alias
+
+@[always_inline]
+def Options.wired_as_group? (options : Options) : Option Bool := options.is_true? `wired_as_group
