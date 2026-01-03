@@ -19,9 +19,9 @@ syntax message_entry_modifier := &"optional" <|> &"repeated" <|> &"required"
 
 syntax message_entry := (message_entry_modifier)? ident ident " = " num (options)? ";"
 
-syntax (name := messageDec) "message " ident (options)? "{" message_entry* "}" : command
+syntax (name := messageDec) "message " ident (options)? " {" ppLine (message_entry ppLine)* "}" : command
 
-syntax (name := oneofDec) "oneof " ident "{" message_entry*  "}" : command
+syntax (name := oneofDec) "oneof " ident " {" ppLine (message_entry ppLine)*  "}" : command
 
 -- scoped syntax "options% " options : term
 

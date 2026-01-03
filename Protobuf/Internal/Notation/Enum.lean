@@ -25,7 +25,7 @@ public def isProtoEnum [Monad m] [MonadEnv m] (x : Name) : m Bool := do
 
 syntax enum_entry := ident " = " num ";"
 
-syntax (name := enumDec) "enum " ident (options)? "{" enum_entry* "}" : command
+syntax (name := enumDec) "enum " ident (options)? " {" ppLine (enum_entry ppLine)* "}" : command
 
 private def construct_builder (name : Ident) (push_name : String → Ident) (toInt32 : Ident) : CommandElabM (Ident × Command) := do
   let val ← mkIdent <$> mkFreshUserName `val

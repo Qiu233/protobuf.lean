@@ -10,7 +10,7 @@ extend google.protobuf.EnumValueOptions {
 }
 
 message A {
-    repeated int32 t = 1;
+    optional int32 t = 1;
 }
 
 message T {
@@ -33,9 +33,9 @@ message S {
 //     P p = 1;
 // }
 
-// message Q {
-//     oneof q {
-//         string a = 1;
-//         Q b = 2;
-//     }
-// }
+message Q {
+    oneof q {
+        string a = 1;
+        Q b = 2;
+    }
+}
