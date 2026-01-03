@@ -24,3 +24,18 @@ message T {
 message S {
     optional T.N n = 2;
 }
+
+// message P {
+//     Q q = 1;
+// }
+
+// message Q {
+//     P p = 1;
+// }
+
+// message Q {
+//     oneof q {
+//         string a = 1;
+//         Q b = 2;
+//     }
+// }

@@ -27,6 +27,9 @@ deriving Inhabited
 end
 
 @[always_inline]
+def Message.combine : Message → Message → Message := fun a b => Message.mk (a.records ++ b.records)
+
+@[always_inline]
 def ProtoVal.isVARINT : ProtoVal → Bool
   | .VARINT .. => true
   | _ => false
