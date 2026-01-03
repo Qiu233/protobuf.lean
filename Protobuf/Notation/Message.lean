@@ -635,7 +635,7 @@ public def elabMessageDecCore (mutEnums mutOneofs messages : NameSet) : Syntax �
         throwErrorAt x.field_num "oneof field can only have dummy field number 0, but got {x.field_num.getNat}"
   let struct ← `(structure $name where
     $[$n:ident : $(mdata.map fun x => x.lean_type)]*
-    «Unknown.Fields» : Std.HashMap Nat (Array Encoding.ProtoVal))
+    «Unknown.Fields» : Std.HashMap Nat (Array Encoding.ProtoVal) := {})
   let push_name (component : String) := mkIdentFrom name (name.getId.str component)
   let (default', default) ← construct_default name push_name mdata
   let inhInst ← `(instance : Inhabited $name := ⟨$default'⟩)
