@@ -112,14 +112,23 @@ private def getInternalType? : TSyntax `ident → Option InternalType
 
 /-- (is_scalar, internal_type?, enum_type?, oneof_type?) -/
 @[specialize]
-private def getProtoTypeMData [Monad m] [MonadError m] [MonadEnv m] [MonadOptions m] [MonadLog m] [MonadRef m] [AddMessageContext m] [MonadResolveName m] :
-    TSyntax `ident → m (Bool × Option InternalType × Option Name × Option Name) := fun x => do
+private def getProtoTypeMData [Monad m] [MonadError m] [MonadEnv m] [MonadOptions m] [MonadLog m] [MonadRef m] [AddMessageContext m] [MonadResolveName m]
+    (mutEnums mutOneofs messages : NameSet) : TSyntax `ident → m (Bool × Option InternalType × Option Name × Option Name) := fun x => do
   let internal_type? := getInternalType? x
   if let some x := internal_type? then
     if x != InternalType.string && x != InternalType.bytes then
       return (true, internal_type?, none, none)
+    else
+      return (false, internal_type?, none, none)
+  if mutEnums.contains x.getId then
+    return (true, none, some x.getId, none)
+  if mutOneofs.contains x.getId then
+    return (false, none, none, some x.getId)
+  if messages.contains x.getId then
+    return (false, none, none, none)
   let ns ← try resolveGlobalConst x
-    catch _ => return (false, internal_type?, none, none)
+    catch _ => throwErrorAt x "Type {x} is not one of mutual declarations but cannot be resolved.\n  Note: if a mutual declaration has qualified name, then it must also be qualified when used in the same mutual block."
+      -- return (false, internal_type?, none, none)
   if ns.length > 1 then
     throwErrorAt x "{x} is ambiguous"
   if ← isProtoEnum ns[0]! then
@@ -232,11 +241,11 @@ structure ProtoFieldMData where
 deriving Inhabited
 
 def computeMData [Monad m] [MonadQuotation m] [MonadError m] [MonadEnv m] [MonadOptions m] [MonadLog m] [MonadRef m] [AddMessageContext m] [MonadResolveName m]
-    (name : Ident)
+    (mutEnums mutOneofs messages : NameSet) (name : Ident)
     (mod : Array (Option (TSyntax `Protobuf.Internal.Notation.message_entry_modifier)))
     (t' n : Array (TSyntax `ident)) (fidx : Array (TSyntax `num)) (optionsStx : Array (Option (TSyntax `Protobuf.Internal.Notation.options))) : m (Array ProtoFieldMData) := do
   let t ← t'.mapM resolveInternalType
-  let ss ← t' |>.mapM fun t' => getProtoTypeMData t'
+  let ss ← t' |>.mapM fun t' => getProtoTypeMData mutEnums mutOneofs messages t'
   let ms ← mod.mapM fun mod? => do
     let some mod := mod? | return Modifier.default
     match mod with
@@ -353,9 +362,9 @@ public meta section
 
 
 
-public def elabOneofDecCore : Syntax → CommandElabM ProtobufDeclBlock := fun stx => do
+public def elabOneofDecCore (mutEnums mutOneofs messages : NameSet) : Syntax → CommandElabM ProtobufDeclBlock := fun stx => do
   let `(oneofDec| oneof $name { $[$[$mod]? $t' $n = $fidx $[$optionsStx]? ;]* }) := stx | throwUnsupportedSyntax
-  let mdata ← computeMData name mod t' n fidx optionsStx
+  let mdata ← computeMData mutEnums mutOneofs messages name mod t' n fidx optionsStx
   mdata.forM fun x =>
     match x.mod with
     | .default => pure ()
@@ -401,7 +410,7 @@ public def elabOneofDecCore : Syntax → CommandElabM ProtobufDeclBlock := fun s
 
 @[scoped command_elab oneofDec]
 public def elabOneofDec : CommandElab := fun stx => do
-  let r ← elabOneofDecCore stx
+  let r ← elabOneofDecCore {} {} {} stx
   r.elaborate
 
 end
@@ -616,10 +625,10 @@ private def construct_default (name : Ident) (push_name : String → Ident) (fie
   let default ← `(partial def $defaultId:ident : $name := $structInst)
   return (defaultId, default)
 
-public def elabMessageDecCore : Syntax → CommandElabM ProtobufDeclBlock := fun stx => do
+public def elabMessageDecCore (mutEnums mutOneofs messages : NameSet) : Syntax → CommandElabM ProtobufDeclBlock := fun stx => do
   let `(messageDec| message $name $[$msgOptions?]? { $[$[$mod]? $t' $n = $fidx $[$optionsStx]? ;]* }) := stx | throwUnsupportedSyntax
   -- let msgOptions := Options.parseD msgOptions?
-  let mdata ← computeMData name mod t' n fidx optionsStx
+  let mdata ← computeMData mutEnums mutOneofs messages name mod t' n fidx optionsStx
   mdata.forM fun x => do
     if x.oneof_type?.isSome then
       if x.field_num.getNat != 0 then
@@ -640,5 +649,6 @@ public def elabMessageDecCore : Syntax → CommandElabM ProtobufDeclBlock := fun
 
 @[scoped command_elab messageDec]
 public def elabMessageDec : CommandElab := fun stx => do
-  let r ← elabMessageDecCore stx
+  let `(messageDec| message $name $[$msgOptions?]? { $[$[$mod]? $t' $n = $fidx $[$optionsStx]? ;]* }) := stx | throwUnsupportedSyntax
+  let r ← elabMessageDecCore {} {} {name.getId} stx
   r.elaborate
