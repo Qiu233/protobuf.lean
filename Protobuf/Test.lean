@@ -2,10 +2,12 @@ module
 
 public import Protobuf.Encoding
 public import Binary
+meta import Protobuf.Internal.Notation
+meta import Protobuf.Elab
 import Binary.Hex
 
 open Binary
-open Protobuf Encoding
+open Protobuf Encoding Internal Notation
 
 local instance : Repr ByteArray where
   reprPrec x p := reprPrec x.data p
@@ -17,3 +19,5 @@ local instance : Repr ByteArray where
 #eval Get.run get_varint ⟨#[0b10010110, 0b00000001]⟩ |>.toExcept
 
 #eval put_varint 150 ⟨#[]⟩
+
+#load_proto_file "Test/A.proto"
