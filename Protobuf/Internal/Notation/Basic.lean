@@ -115,3 +115,44 @@ def Options.allow_alias? (options : Options) : Option Bool := options.is_true? `
 
 @[always_inline]
 def Options.wired_as_group? (options : Options) : Option Bool := options.is_true? `wired_as_group
+
+structure ProtobufDeclBlock where
+  decls : Array Command := #[]
+  inhabitedFunctions : Array Command := #[]
+  inhabitedInsts : Array Command := #[]
+  functions : Array Command := #[]
+  insts : Array Command := #[]
+deriving Inhabited, Repr
+
+def ProtobufDeclBlock.elaborate (block : ProtobufDeclBlock) : CommandElabM Unit := do
+  let { decls, inhabitedFunctions, inhabitedInsts, functions, insts } := block
+  let inhabitedFunctionsMut ← `(mutual
+      $inhabitedFunctions:command*
+    end)
+  let inhabitedInstsMut ← `(mutual
+      $inhabitedInsts:command*
+    end)
+  let functionsMut ← `(mutual
+      $functions:command*
+    end)
+  let instsMut ← `(mutual
+      $insts:command*
+    end)
+  if decls.size == 1 then
+    decls.forM elabCommand
+  else
+    let declMut ← `(mutual
+        $decls:command*
+      end)
+    elabCommand declMut
+  elabCommand inhabitedFunctionsMut
+  elabCommand inhabitedInstsMut
+  elabCommand functionsMut
+  elabCommand instsMut
+
+def ProtobufDeclBlock.merge : ProtobufDeclBlock → ProtobufDeclBlock → ProtobufDeclBlock := fun a b =>
+  { decls := a.decls ++ b.decls,
+    inhabitedFunctions := a.inhabitedFunctions ++ b.inhabitedFunctions,
+    inhabitedInsts := a.inhabitedInsts ++ b.inhabitedInsts,
+    functions := a.functions ++ b.functions,
+    insts := a.insts ++ b.insts }

@@ -201,6 +201,12 @@ private def InternalType.decoder_rep [Monad m] [MonadQuotation m] : InternalType
   | .fixed32 =>   ``(Encoding.Message.getRepeatedI32_fixed32)
   | .sfixed32 =>  ``(Encoding.Message.getRepeatedI32_sfixed32)
 
+inductive LeanShape where
+  | strict
+  | option
+  | array
+deriving Inhabited
+
 structure ProtoFieldMData where
   mod : Modifier
   proto_type : Ident
@@ -210,8 +216,10 @@ structure ProtoFieldMData where
   field_proj : Ident
   field_num : TSyntax `num
   options : Options
+  lean_shape : LeanShape
   is_scalar : Bool
   internal_type? : Option InternalType
+  default_lean_value : Term
   enum_type? : Option Name
   oneof_type? : Option Name
   builder? : Option Ident
@@ -239,18 +247,18 @@ def computeMData [Monad m] [MonadQuotation m] [MonadError m] [MonadEnv m] [Monad
   let ts ← ms.zip (t.zip ss) |>.mapM fun (mod, t, (is_scalar, _, _, oneof_type?)) => do
       if oneof_type?.isSome && !(mod matches .default) then
         throwErrorAt name "oneof field cannot have cardinality modifier: {oneof_type?.get!}"
-      match mod with
+      let s ← match mod with
       | .default | .required =>
         if is_scalar then
-          `($t)
+          return (← `($t), LeanShape.strict)
         else
-          `(Option $t)
-      | .optional => `(Option $t)
-      | .repeated => `(Array $t)
+          return (← `(Option $t), LeanShape.option)
+      | .optional => return (← `(Option $t), LeanShape.option)
+      | .repeated => return (← `(Array $t), LeanShape.array)
   let dots ← n.mapM fun (x : Ident) => return mkIdentFrom x (name.getId.append x.getId)
   let options := optionsStx.map Options.parseD
   ms.zip (t'.zip (t.zip (ts.zip (n.zip (dots.zip (fidx.zip (options.zip ss))))))) |>.mapM
-    fun (mod, proto_type, lean_type_inner, lean_type, field_name, field_proj, field_num, options, (is_scalar, internal_type?, enum_type?, oneof_type?)) => do
+    fun (mod, proto_type, lean_type_inner, (lean_type, lean_shape), field_name, field_proj, field_num, options, (is_scalar, internal_type?, enum_type?, oneof_type?)) => do
       let builder? ← internal_type?.mapM InternalType.builder
       let builder? := if oneof_type?.isNone then some (builder?.getD (mkIdentFrom proto_type (proto_type.getId.str "builder"))) else none
       let toMessage? := if is_scalar then none else some (mkIdentFrom proto_type (proto_type.getId.str "toMessage"))
@@ -264,7 +272,14 @@ def computeMData [Monad m] [MonadQuotation m] [MonadError m] [MonadEnv m] [Monad
         else none
       let decoder_rep? ← internal_type?.mapM InternalType.decoder_rep
       let decoder_rep? := if oneof_type?.isSome then none else some <| decoder_rep?.getD (mkIdentFrom proto_type (proto_type.getId.str "decoder_rep"))
-      return { mod, proto_type, lean_type_inner, lean_type, field_name, field_proj, field_num, options,
+      let default_lean_value ← match lean_shape with
+        | .strict =>
+          if internal_type?.isSome then
+            `(Inhabited.default)
+          else pure (mkIdentFrom proto_type (proto_type.getId.str "Default.Value"))
+        | .option => `(Option.none) -- oneofs always go here
+        | .array => `(#[])
+      return { mod, proto_type, lean_type_inner, lean_type, field_name, field_proj, field_num, options, lean_shape, default_lean_value,
                is_scalar, internal_type?, enum_type?, oneof_type?, builder?, toMessage?, decoder??, fromMessage?, fromMessage??, decoder_rep_packed?, decoder_rep? }
 
 
@@ -336,8 +351,9 @@ public meta section
 --   let env ← getEnv
 --   return protoOneOfVariantField.getParam? env x
 
-@[scoped command_elab oneofDec]
-public def elabOneofDec : CommandElab := fun stx => do
+
+
+public def elabOneofDecCore : Syntax → CommandElabM ProtobufDeclBlock := fun stx => do
   let `(oneofDec| oneof $name { $[$[$mod]? $t' $n = $fidx $[$optionsStx]? ;]* }) := stx | throwUnsupportedSyntax
   let mdata ← computeMData name mod t' n fidx optionsStx
   mdata.forM fun x =>
@@ -355,7 +371,6 @@ public def elabOneofDec : CommandElab := fun stx => do
   --         options := options% [$opts,*] })
   let ind ← `(@[proto_oneof] inductive $name where
     $[| $n:ident : $ts:term → $(ts.map (fun _ => name)):ident]*
-    deriving Inhabited
     )
   -- let attrs ← mdata.zip mdataAttr |>.mapM fun (x, attr) =>
   --   `(attribute [$attr:attr] $(x.field_proj))
@@ -382,9 +397,12 @@ public def elabOneofDec : CommandElab := fun stx => do
   let fused ← ds.foldrM (init := ← `(pure Option.none)) (fun x acc => `($x <|> $acc))
   let fromMessage?Id := push_name "fromMessage?"
   let fromMessage? ← `(partial def $fromMessage?Id:ident : Protobuf.Encoding.Message → Except Protobuf.Encoding.ProtoError (Option $name) := fun $msg => $fused:term)
-  elabCommand ind
-  elabCommand toMessage
-  elabCommand fromMessage?
+  return { decls := #[ind], functions := #[toMessage, fromMessage?] }
+
+@[scoped command_elab oneofDec]
+public def elabOneofDec : CommandElab := fun stx => do
+  let r ← elabOneofDecCore stx
+  r.elaborate
 
 end
 
@@ -449,7 +467,7 @@ private def construct_builder (name : Ident) (push_name : String → Ident) (toM
 private def construct_fromMessage (name : Ident) (push_name : String → Ident) (fields : Array ProtoFieldMData) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let ns := fields.map ProtoFieldMData.field_num
-  let decoder ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, proto_type, field_name, field_proj, field_num, options, is_scalar, enum_type?, oneof_type?, decoder??, decoder_rep?, decoder_rep_packed?, fromMessage?? ..} => do
+  let decoder ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, field_name, field_proj, field_num, options, is_scalar, oneof_type?, decoder??, decoder_rep?, decoder_rep_packed?, fromMessage?? ..} => do
     let var ← mkIdent <$> mkFreshUserName (field_name.getId)
     if oneof_type?.isSome then
       assert! fromMessage??.isSome
@@ -589,11 +607,18 @@ private def construct_decoder? (name : Ident) (push_name : String → Ident) (fr
     )
   return (decoder?Id, decoder?)
 
-@[scoped command_elab messageDec]
-public def elabMessageDec : CommandElab := fun stx => do
+private def construct_default (name : Ident) (push_name : String → Ident) (fields : Array ProtoFieldMData) : CommandElabM (Ident × Command) := do
+  let u := mkIdent `«Unknown.Fields»
+  let ps := fields.map ProtoFieldMData.field_name |>.push u
+  let vs := fields.map (fun x => x.default_lean_value) |>.push (← ``(Std.HashMap.emptyWithCapacity 8))
+  let structInst ← `({ $[$ps:ident := $vs]* : $name })
+  let defaultId := push_name "Default.Value"
+  let default ← `(partial def $defaultId:ident : $name := $structInst)
+  return (defaultId, default)
+
+public def elabMessageDecCore : Syntax → CommandElabM ProtobufDeclBlock := fun stx => do
   let `(messageDec| message $name $[$msgOptions?]? { $[$[$mod]? $t' $n = $fidx $[$optionsStx]? ;]* }) := stx | throwUnsupportedSyntax
   -- let msgOptions := Options.parseD msgOptions?
-  let self_rec := t'.any fun t' => t'.getId == name.getId
   let mdata ← computeMData name mod t' n fidx optionsStx
   mdata.forM fun x => do
     if x.oneof_type?.isSome then
@@ -601,31 +626,19 @@ public def elabMessageDec : CommandElab := fun stx => do
         throwErrorAt x.field_num "oneof field can only have dummy field number 0, but got {x.field_num.getNat}"
   let struct ← `(structure $name where
     $[$n:ident : $(mdata.map fun x => x.lean_type)]*
-    «Unknown.Fields» : Std.HashMap Nat (Array Encoding.ProtoVal)
-    deriving Inhabited)
+    «Unknown.Fields» : Std.HashMap Nat (Array Encoding.ProtoVal))
   let push_name (component : String) := mkIdentFrom name (name.getId.str component)
+  let (default', default) ← construct_default name push_name mdata
+  let inhInst ← `(instance : Inhabited $name := ⟨$default'⟩)
   let (toMessage', toMessage) ← construct_toMessage name push_name mdata
   let (_, builder) ← construct_builder name push_name toMessage'
   let (fromMessage', fromMessage) ← construct_fromMessage name push_name mdata
   let (merge', merge) ← construct_merge name push_name mdata
   let (_, decoder?) ← construct_decoder? name push_name fromMessage' merge'
   let (_, decoder_rep) ← construct_decoder_rep name push_name fromMessage'
-  if self_rec then
-    let m ← `(mutual
-        $toMessage
-        $builder
-        $fromMessage
-        $merge
-        $decoder?
-        $decoder_rep
-      end)
-    elabCommand struct
-    elabCommand m
-  else
-    elabCommand struct
-    elabCommand toMessage
-    elabCommand builder
-    elabCommand fromMessage
-    elabCommand merge
-    elabCommand decoder?
-    elabCommand decoder_rep
+  return { decls := #[struct], inhabitedFunctions := #[default], inhabitedInsts := #[inhInst], functions := #[toMessage, builder, fromMessage, merge, decoder?, decoder_rep] }
+
+@[scoped command_elab messageDec]
+public def elabMessageDec : CommandElab := fun stx => do
+  let r ← elabMessageDecCore stx
+  r.elaborate

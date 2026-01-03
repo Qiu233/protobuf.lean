@@ -62,15 +62,14 @@ private def construct_decoder_rep_packed (name : Ident) (push_name : String → 
     )
   return (decoderRepId, decoderRep)
 
-@[scoped command_elab enumDec]
-public def elabEnumDec : CommandElab := fun stx => do
+public def elabEnumDecCore : Syntax → CommandElabM ProtobufDeclBlock := fun stx => do
   let `(enumDec| enum $name $[$opts?]? { $[$e = $n;]* }) := stx | throwUnsupportedSyntax
   if e.isEmpty then
     throwError "enum declaration must have variant(s)"
   let options := opts?.map Options.parse |>.getD default
   let unknownName := `«Unknown.Value»
   let unknownIdent := mkIdent unknownName
-  let ind ← `(@[proto_enum] inductive $name where $[| $e:ident]* | $unknownIdent:ident (raw : Int32) )
+  let ind ← `(@[proto_enum] inductive $name where $[| $e:ident]* | $unknownIdent:ident (raw : Int32))
   let push_name (component : String) := mkIdentFrom name (name.getId.str component)
   let dots ← e.mapM fun x => `(.$x)
   let toInt32Id := push_name "toInt32"
@@ -97,15 +96,22 @@ public def elabEnumDec : CommandElab := fun stx => do
     | raw => .$unknownIdent raw
     )
   let inhabited ← `(instance : Inhabited $name where default := .$unknownIdent 0)
+  let default_valueId := push_name "Default.Value"
+  let default_value ← `(partial def $default_valueId : $name := .$unknownIdent 0)
   let (_, builder) ← construct_builder name push_name toInt32Id
   let (_, decoder?) ← construct_decoder? name push_name fromInt32Id
   let (_, decoder_rep) ← construct_decoder_rep name push_name fromInt32Id
   let (_, decoder_rep_packed) ← construct_decoder_rep_packed name push_name fromInt32Id
-  elabCommand ind
-  elabCommand toInt32
-  elabCommand fromInt32
-  elabCommand inhabited
-  elabCommand builder
-  elabCommand decoder?
-  elabCommand decoder_rep
-  elabCommand decoder_rep_packed
+  return { decls := #[ind], functions := #[
+          toInt32,
+          fromInt32,
+          builder,
+          decoder?,
+          decoder_rep,
+          decoder_rep_packed,
+        ], inhabitedFunctions := #[default_value], inhabitedInsts := #[inhabited] }
+
+@[scoped command_elab enumDec]
+public def elabEnumDec : CommandElab := fun stx => do
+  let r ← elabEnumDecCore stx
+  r.elaborate

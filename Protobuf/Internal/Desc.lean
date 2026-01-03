@@ -1,9 +1,7 @@
 module
 
 public import Protobuf.Encoding
-import Protobuf.Encoding.Builder
-import Protobuf.Internal.Notation.Enum
-import Protobuf.Internal.Notation.Message
+meta import Protobuf.Internal.Notation
 
 public section
 

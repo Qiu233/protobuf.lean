@@ -1,5 +1,4 @@
-import Protobuf.Internal.Notation.Enum
-import Protobuf.Internal.Notation.Message
+import Protobuf.Internal.Notation
 
 namespace Protobuf.Internal
 
@@ -51,3 +50,67 @@ oneof A {
 message T {
   A v = 0;
 }
+
+proto_mutual {
+  message B {
+    C c = 1;
+  }
+
+  oneof C.T {
+    C t = 1;
+  }
+
+  message C {
+    B b = 1;
+  }
+}
+
+
+#check C.T
+-- #check C.instInhabited
+
+inductive O.O where
+  | a
+deriving Inhabited
+
+-- #check O.instInhabitedO
+-- #check C.instInhabitedT
+
+@[proto_oneof]
+inductive C.Y where
+  | t : C → C.Y
+  deriving Inhabited
+
+-- #synth Inhabited C
+
+#check instInhabitedB
+
+mutual
+
+structure P where
+  a : Option Q
+deriving Inhabited
+
+structure Q where
+  a : Option P
+  t : Q.T
+deriving Inhabited
+
+inductive Q.T where
+  | t : Q → Q.T
+deriving Inhabited
+
+end
+
+deriving instance Inhabited for P
+deriving instance Inhabited for Q.T
+deriving instance Inhabited for Q
+
+
+
+-- structure I where
+--   (p : Option Empty)
+
+-- inductive J where
+--   | i (a : I)
+-- deriving Inhabited
