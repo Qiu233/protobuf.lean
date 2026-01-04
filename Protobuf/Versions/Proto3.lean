@@ -206,10 +206,15 @@ private def field_modifier? (field : FieldDescriptorProto) : M (Option (TSyntax 
     else
       return none
 
+set_option hygiene false in
 private def field_options? (field : FieldDescriptorProto) : M (Option (TSyntax ``options)) := do
   let mut entries := #[]
   if let some packed := field.options&.packed then
     entries := entries.push (← `(options_entry| packed = $(quote packed)))
+  else
+    if let some type := field.type then
+      unless type matches .TYPE_STRING | .TYPE_GROUP | .TYPE_MESSAGE | .TYPE_BYTES do
+        entries := entries.push (← `(options_entry| packed = true)) -- NOTE: proto3 defaults to packed
   if !! field.options&.deprecated then
     entries := entries.push (← `(options_entry| deprecated = true))
   if entries.isEmpty then

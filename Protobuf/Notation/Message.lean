@@ -367,10 +367,10 @@ def computeMData.map [Monad m] [MonadQuotation m] [MonadError m] [MonadEnv m] [M
   }
 
 def computeMData.ordinary.computeShape [Monad m] [MonadQuotation m] [MonadError m] [MonadEnv m] [MonadOptions m] [MonadLog m] [MonadRef m] [AddMessageContext m] [MonadResolveName m]
-    (mod? : Modifier) (is_scalar : Bool) (lean_type_inner : Ident) : m (TSyntax `term × LeanShape) := do
+    (mod? : Modifier) (internal_type? : Option InternalType) (enum_type? : Option Name) (lean_type_inner : Ident) : m (TSyntax `term × LeanShape) := do
   match mod? with
     | .default | .required =>
-      if is_scalar then
+      if internal_type?.isSome || enum_type?.isSome then
         pure (← `($lean_type_inner), LeanShape.strict)
       else
         pure (← `(Option $lean_type_inner), LeanShape.option)
@@ -424,7 +424,7 @@ def computeMData.ordinary [Monad m] [MonadQuotation m] [MonadError m] [MonadEnv 
   let (is_scalar, internal_type?, enum_type?, oneof_type?) ← getProtoTypeMData mutEnums mutOneofs messages proto_type
   if oneof_type?.isSome && !(mod? matches .default) then
     throwErrorAt name "oneof field cannot have cardinality modifier: {oneof_type?.get!}"
-  let (lean_type, lean_shape) ← computeMData.ordinary.computeShape mod? is_scalar lean_type_inner
+  let (lean_type, lean_shape) ← computeMData.ordinary.computeShape mod? internal_type? enum_type? lean_type_inner
   let builder? ← internal_type?.mapM InternalType.builder
   let builder? := if oneof_type?.isNone then some (builder?.getD (mkIdentFrom proto_type (proto_type.getId.str "builder"))) else none
   let toMessage? := if is_scalar then none else some (mkIdentFrom proto_type (proto_type.getId.str "toMessage"))
@@ -551,7 +551,7 @@ end
 private def construct_toMessage (name : Ident) (push_name : String → Ident) (fields : Array ProtoFieldMData) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let val ← mkIdent <$> mkFreshUserName `val
-  let toMessageBody ← fields.mapM fun {mod, field_proj, field_num, options, is_scalar, builder?, oneof_type?, toMessage?, test_unset, map_info?, ..} => do
+  let toMessageBody ← fields.mapM fun {mod, field_proj, field_num, options, is_scalar, internal_type?, builder?, enum_type?, oneof_type?, toMessage?, test_unset, map_info?, ..} => do
     if let some map_info := map_info? then
       let entries ← mkIdent <$> mkFreshUserName `entries
       let submsg ← mkIdent <$> mkFreshUserName `submsg
@@ -586,7 +586,7 @@ private def construct_toMessage (name : Ident) (push_name : String → Ident) (f
       let builder := builder?.get!
       match mod with
       | .default =>
-        if is_scalar then
+        if internal_type?.isSome || enum_type?.isSome then
           `(Parser.Term.doSeqItem| let $msg ← do
             if $test_unset ($field_proj $val) then
               pure $msg
@@ -595,7 +595,7 @@ private def construct_toMessage (name : Ident) (push_name : String → Ident) (f
         else
           `(Parser.Term.doSeqItem| let $msg ← $field_num:num <~? (Option.mapM $builder ($field_proj $val)) # $msg)
       | .required =>
-        if is_scalar then
+        if internal_type?.isSome || enum_type?.isSome then
           `(Parser.Term.doSeqItem| let $msg ← do
             if $test_unset ($field_proj $val) then
               pure $msg
@@ -612,10 +612,20 @@ private def construct_toMessage (name : Ident) (push_name : String → Ident) (f
       | .optional =>
         `(Parser.Term.doSeqItem| let $msg ← $field_num:num <~? (Option.mapM $builder ($field_proj $val)) # $msg)
       | .repeated =>
-        if options.packed?.getD is_scalar then
-          `(Parser.Term.doSeqItem| let $msg ← $field_num:num <~p (Array.mapM $builder ($field_proj $val)) # $msg)
+        if options.packed?.isEqSome true then
+          `(Parser.Term.doSeqItem|
+            let $msg ← do
+              if $test_unset ($field_proj $val) then
+                pure $msg
+              else
+                $field_num:num <~p (Array.mapM $builder ($field_proj $val)) # $msg)
         else
-          `(Parser.Term.doSeqItem| let $msg ← $field_num:num <~f (Array.mapM $builder ($field_proj $val)) # $msg)
+          `(Parser.Term.doSeqItem|
+            let $msg ← do
+              if $test_unset ($field_proj $val) then
+                pure $msg
+              else
+                $field_num:num <~f (Array.mapM $builder ($field_proj $val)) # $msg)
   let toMessageId := push_name "toMessage"
   let toMessage ← `(partial def $toMessageId:ident : $name → Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message := fun $val => do
     let $msg:ident := Protobuf.Encoding.Message.emptyWithCapacity $(quote fields.size)
@@ -637,7 +647,7 @@ private def construct_builder (name : Ident) (push_name : String → Ident) (toM
 private def construct_fromMessage (name : Ident) (push_name : String → Ident) (fields : Array ProtoFieldMData) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let ns := fields.map ProtoFieldMData.field_num
-  let decoder ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, field_name, field_proj, field_num, options, is_scalar, oneof_type?, decoder??, decoder_rep?, decoder_rep_packed?, fromMessage??, map_info?, ..} => do
+  let decoder ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, field_name, field_proj, field_num, options, is_scalar, internal_type?, enum_type?, oneof_type?, decoder??, decoder_rep?, decoder_rep_packed?, fromMessage??, map_info?, ..} => do
     let var ← mkIdent <$> mkFreshUserName (field_name.getId)
     if let some map_info := map_info? then
       let key_decoder? := map_info.key_decoder?
@@ -668,12 +678,12 @@ private def construct_fromMessage (name : Ident) (push_name : String → Ident) 
       let decoder? := decoder??.get!
       let stx ← match mod with
         | .default =>
-          if is_scalar then
+          if internal_type?.isSome || enum_type?.isSome then
             `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num <&> (fun x => Option.getD x Inhabited.default)))
           else
             `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num))
         | .required =>
-          if is_scalar then
+          if internal_type?.isSome || enum_type?.isSome then
             `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num >>= (fun x => Option.getDM x
               (throw (Protobuf.Encoding.ProtoError.missingRequiredField s!"required field `{$(quote field_proj.getId.toString)}` is missing when decoding the message")))))
           else
@@ -686,7 +696,7 @@ private def construct_fromMessage (name : Ident) (push_name : String → Ident) 
         | .optional =>
           `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num))
         | .repeated =>
-          if options.packed?.getD is_scalar then
+          if options.packed?.isEqSome true then
             assert! decoder_rep_packed?.isSome
             let decoder_rep_packed := decoder_rep_packed?.get!
             `(Parser.Term.doSeqItem| let $var ← ($decoder_rep_packed $msg $field_num:num))
@@ -730,7 +740,7 @@ private def construct_decoder_rep (name : Ident) (push_name : String → Ident) 
 private def construct_merge (name : Ident) (push_name : String → Ident) (fields : Array ProtoFieldMData) : CommandElabM (Ident × Command) := do
   let a ← mkIdent <$> mkFreshUserName `a
   let b ← mkIdent <$> mkFreshUserName `b
-  let mergeBody ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, proto_type, field_name, field_proj := field_proj, is_scalar, oneof_type?, map_info?, ..} => do
+  let mergeBody ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, proto_type, field_name, field_proj, internal_type?, enum_type?, oneof_type?, map_info?, ..} => do
     let var ← mkIdent <$> mkFreshUserName (field_name.getId)
     let va ← `($field_proj $a)
     let vb ← `($field_proj $b)
@@ -744,10 +754,8 @@ private def construct_merge (name : Ident) (push_name : String → Ident) (field
     else
       let stx ← match mod with
         | .default | .required =>
-          if is_scalar then
+          if internal_type?.isSome || enum_type?.isSome then
             `(Parser.Term.doSeqItem| let $var := $vb)
-          else if (proto_type matches `(string) | `(bytes)) then
-            `(Parser.Term.doSeqItem| let $var := $vb <|> $va) -- optional, last first
           else
             `(Parser.Term.doSeqItem| let $var := match $va:term, $vb:term with
               | Option.some x, Option.some y => Option.some ($merger x y)
@@ -755,7 +763,7 @@ private def construct_merge (name : Ident) (push_name : String → Ident) (field
               | _, Option.some y => Option.some y
               | _, _ => Option.none)
         | .optional =>
-          if is_scalar || (proto_type matches `(string) | `(bytes)) then
+          if internal_type?.isSome || enum_type?.isSome then
             `(Parser.Term.doSeqItem| let $var := $vb <|> $va)
           else
             `(Parser.Term.doSeqItem| let $var := match $va:term, $vb:term with

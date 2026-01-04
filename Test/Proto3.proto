@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package test.proto3;
+
+message Sub {
+  int32 id = 1;
+}
+
+enum Color {
+  COLOR_UNSPECIFIED = 0;
+  RED = 1;
+  GREEN = 2;
+}
+
+message All {
+  int32 int32_field = 1;
+  string string_field = 2;
+  bool bool_field = 3;
+  bytes bytes_field = 4;
+  float float_field = 5;
+  double double_field = 6;
+  uint32 uint32_field = 7;
+  uint64 uint64_field = 8;
+  sint32 sint32_field = 9;
+  sint64 sint64_field = 10;
+  fixed32 fixed32_field = 11;
+  fixed64 fixed64_field = 12;
+  sfixed32 sfixed32_field = 13;
+  sfixed64 sfixed64_field = 14;
+  Color color = 15;
+  Sub sub = 16;
+  optional int32 opt_int32 = 17;
+  repeated int32 rep_int32 = 18;
+  repeated int32 rep_int32_unpacked = 19 [packed = false];
+  repeated Color rep_color = 20;
+  map<string, int32> map_str_int32 = 21;
+  oneof choice {
+    int32 oneof_int32 = 22;
+    string oneof_string = 23;
+    Sub oneof_sub = 24;
+  }
+  repeated Sub rep_sub = 25;
+}

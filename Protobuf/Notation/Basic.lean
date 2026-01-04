@@ -51,7 +51,7 @@ meta def mkFreshUserName (n : Name) : CommandElabM Name := do
 structure Options where
   raw : Array (Ident × Term)
   entries : Std.HashMap Name (Array Term)
-deriving Inhabited
+deriving Inhabited, Repr
 
 -- TODO: maybe force this?
 private def Options.recognized : Array Name :=
@@ -85,7 +85,7 @@ private def Options.first? (options : Options) (x : Name) : Option Term :=
 private def Options.is_true? (options : Options) (x : Name) : Option Bool :=
   if let some y := options.first? x then
     y matches `(true)
-  else false
+  else none
 
 syntax options_entry := ident " = " term
 
