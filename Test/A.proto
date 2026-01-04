@@ -39,3 +39,17 @@ message Q {
         Q b = 2;
     }
 }
+
+message M {
+    map<int32, int32> s = 4;
+}
+
+enum E {
+    E_A = 0;
+    E_B = 2;
+}
+
+message O {
+    int32 a = 1;
+    E e = 2;
+}

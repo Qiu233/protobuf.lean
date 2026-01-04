@@ -157,12 +157,16 @@ private def field_type_ident (field : FieldDescriptorProto) : M (TSyntax `ident)
   | .TYPE_SINT64 => pure <| Versions.builtinIdent "sint64"
 
 private def field_modifier? (field : FieldDescriptorProto) : M (Option (TSyntax ``message_entry_modifier)) := do
-  let label := field.label.getD .LABEL_OPTIONAL
+  let label ← field.label.getDM (throw s!"modifier is absent") -- always present
   match label with
   | .«Unknown.Value» _ => throw s!"{decl_name%}: unknown cardinality"
   | .LABEL_REPEATED => some <$> `(message_entry_modifier| repeated)
   | .LABEL_REQUIRED => some <$> `(message_entry_modifier| required)
-  | .LABEL_OPTIONAL => some <$> `(message_entry_modifier| optional)
+  | .LABEL_OPTIONAL => -- even when there is no cardinality specifier
+    if !! field.proto3_optional then
+      some <$> `(message_entry_modifier| optional)
+    else
+      return none
 
 private def field_options? (field : FieldDescriptorProto) : M (Option (TSyntax ``options)) := do
   let mut entries := #[]

@@ -69,9 +69,9 @@ public def elabEnumDecCore : Syntax → CommandElabM ProtobufDeclBlock := fun st
   let options := opts?.map Options.parse |>.getD default
   let unknownName := `«Unknown.Value»
   let unknownIdent := mkIdent unknownName
-  let ind ← `(@[proto_enum] inductive $name where $[| $e:ident]* | $unknownIdent:ident (raw : Int32))
+  let ind ← `(@[proto_enum] inductive $name where $[| $e:ident]* | $unknownIdent:ident (raw : Int32) deriving BEq)
   let push_name (component : String) := mkIdentFrom name (name.getId.str component)
-  let dots ← e.mapM fun x => `(.$x)
+  let dots := e.map fun x => mkIdentFrom x (name.getId.append x.getId)
   let toInt32Id := push_name "toInt32"
   let toInt32 ← `(def $toInt32Id:ident : $name → Int32
     $[| $dots:term => $n:num]*
@@ -95,9 +95,12 @@ public def elabEnumDecCore : Syntax → CommandElabM ProtobufDeclBlock := fun st
     $fromInt32Alts:matchAlt*
     | raw => .$unknownIdent raw
     )
-  let inhabited ← `(instance : Inhabited $name where default := .$unknownIdent 0)
+  let nullVariant? := dots.zip n |>.find? fun (_, y) => y.getNat == 0
+  let nullVariant? ← nullVariant?.mapM (fun x => `($x.fst))
+  let nullVariant ← nullVariant?.getDM `(.$unknownIdent 0)
+  let inhabited ← `(instance : Inhabited $name where default := $nullVariant)
   let default_valueId := push_name "Default.Value"
-  let default_value ← `(partial def $default_valueId : $name := .$unknownIdent 0)
+  let default_value ← `(partial def $default_valueId : $name := $nullVariant)
   let (_, builder) ← construct_builder name push_name toInt32Id
   let (_, decoder?) ← construct_decoder? name push_name fromInt32Id
   let (_, decoder_rep) ← construct_decoder_rep name push_name fromInt32Id

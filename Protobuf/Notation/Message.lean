@@ -228,7 +228,12 @@ structure ProtoFieldMData where
   lean_shape : LeanShape
   is_scalar : Bool
   internal_type? : Option InternalType
+  /-- the `«Default.Value»` of the type -/
   default_lean_value : Term
+  /-- the default value term in constructor so that use-site `{...}` won't need to initialize everything -/
+  default_ctor_value : Term
+  /-- the code to test whether this fields should not be serialized to the wire -/
+  test_unset : Term
   enum_type? : Option Name
   oneof_type? : Option Name
   builder? : Option Ident
@@ -283,84 +288,42 @@ def computeMData [Monad m] [MonadQuotation m] [MonadError m] [MonadEnv m] [Monad
       let decoder_rep? := if oneof_type?.isSome then none else some <| decoder_rep?.getD (mkIdentFrom proto_type (proto_type.getId.str "decoder_rep"))
       let default_lean_value ← match lean_shape with
         | .strict =>
-          if internal_type?.isSome then
-            `(Inhabited.default)
+          if internal_type?.isSome then `(Inhabited.default)
           else pure (mkIdentFrom proto_type (proto_type.getId.str "Default.Value"))
         | .option => `(Option.none) -- oneofs always go here
         | .array => `(#[])
-      return { mod, proto_type, lean_type_inner, lean_type, field_name, field_proj, field_num, options, lean_shape, default_lean_value,
+      let default_ctor_value ← match lean_shape with
+        | .strict =>
+          if let some itype := internal_type? then
+            match itype with
+            | .bool => `(false)
+            | .string => `("")
+            | .bytes => `({})
+            | _ => `(0)
+          else if enum_type?.isSome then
+            pure (mkIdentFrom proto_type (proto_type.getId.str "Default.Value"))
+          else throwErrorAt name "{decl_name%}: internal error: strict non-scalar type"
+        | .option => `(Option.none) -- oneofs always go here
+        | .array => `(#[])
+      let test_unset ← match lean_shape with
+        | .strict =>
+          if let some itype := internal_type? then
+            match itype with
+            | .bool => `((· == false))
+            | .string => `(String.isEmpty)
+            | .bytes => `(ByteArray.isEmpty)
+            | _ => `((· == 0))
+          else if enum_type?.isSome then
+            let x := mkIdentFrom proto_type (proto_type.getId.str "Default.Value")
+            `((· == $x)) -- TODO: maybe make `Enum.«Default.Value»` a `@[match_pattern]`?
+          else throwErrorAt name "{decl_name%}: internal error: strict non-scalar type"
+        | .option => `(Option.isNone) -- oneofs always go here
+        | .array => `(Array.isEmpty)
+      return { mod, proto_type, lean_type_inner, lean_type, field_name, field_proj, field_num, options, lean_shape, default_lean_value, default_ctor_value, test_unset,
                is_scalar, internal_type?, enum_type?, oneof_type?, builder?, toMessage?, decoder??, fromMessage?, fromMessage??, decoder_rep_packed?, decoder_rep? }
 
 
 public meta section
-
--- syntax (name := proto_oneof_variant_attr) "proto_oneof_variant " term : attr
-
--- def elabProtoOneOfVariantField (declName : Name) (stx : Syntax) : AttrM ProtoFieldMData := do
---   let `(proto_oneof_variant_attr| proto_oneof_variant $arg) := stx | throwUnsupportedSyntax
---   let `(Parser.Term.structInst| { $fields,* }) := arg | throwUnsupportedSyntax
---   let fields := fields.getElems
---   let fields ← fields.mapM fun x =>
---     match x with
---     | `(Parser.Term.structInstField| $fname:ident := $fval) => pure (fname.getId, fval)
---     | _ => withRef x throwUnsupportedSyntax
---   let fields := fields.toList
---   let find (n : Name) := (fields.lookup n).getDM (throwError "{n} is absent")
---   let result ← IO.mkRef (default : ProtoFieldMData)
---   match ← find `mod with
---     | `(default) => result.modify fun r => {r with mod := .default}
---     | `(optional) => result.modify fun r => {r with mod := .optional}
---     | `(repeated) => result.modify fun r => {r with mod := .repeated}
---     | `(required) => result.modify fun r => {r with mod := .required}
---     | s => withRef s throwUnsupportedSyntax
---   match ← find `proto_type with
---     | `($x:ident) => result.modify fun r => {r with proto_type := x}
---     | s => withRef s throwUnsupportedSyntax
---   match ← find `lean_type_inner with
---     | `($x:ident) => result.modify fun r => {r with lean_type_inner := x}
---     | s => withRef s throwUnsupportedSyntax
---   match ← find `lean_type with
---     | x => result.modify fun r => {r with lean_type := x}
---   match ← find `field_name with
---     | `($x:ident) => result.modify fun r => {r with field_name := x}
---     | s => withRef s throwUnsupportedSyntax
---   match ← find `field_proj with
---     | `($x:ident) =>
---       if x.getId.isSuffixOf declName then
---         result.modify fun r => {r with field_proj := mkIdentFrom x declName}
---       else
---         throwErrorAt x "{x} is not suffix of {declName}"
---         -- result.modify fun r => {r with field_proj := x}
---     | s => withRef s throwUnsupportedSyntax
---   match ← find `field_num with
---     | `($x:num) => result.modify fun r => {r with field_num := x}
---     | s => withRef s throwUnsupportedSyntax
---   match ← find `options with
---     | `(options% $opts) => result.modify fun r => {r with options := Options.parse opts}
---     | s => withRef s throwUnsupportedSyntax
---   match ← find `is_scalar with
---     | `(true) => result.modify fun r => {r with is_scalar := true}
---     | `(false) => result.modify fun r => {r with is_scalar := false}
---     | s => withRef s throwUnsupportedSyntax
---   result.get
-
--- initialize protoOneOfVariantField : ParametricAttribute ProtoFieldMData ←
---   registerParametricAttribute
---     { name := `proto_oneof_variant_attr,
---       descr := "mark inductive type constructor to be a oneof variants",
---       getParam := fun declName stx => do
---         elabProtoOneOfVariantField declName stx
---       }
-
--- public def getProtoOneOfVariants [Monad m] [MonadEnv m] : m (NameMap ProtoFieldMData) := do
---   let env ← getEnv
---   return protoOneOfVariantField.ext.getState env |>.snd
-
--- public def isProtoOneOfVariant [Monad m] [MonadEnv m] (x : Name) : m (Option ProtoFieldMData) := do
---   let env ← getEnv
---   return protoOneOfVariantField.getParam? env x
-
-
 
 public def elabOneofDecCore (mutEnums mutOneofs messages : NameSet) : Syntax → CommandElabM ProtobufDeclBlock := fun stx => do
   let `(oneofDec| oneof $name { $[$[$mod]? $t' $n = $fidx $[$optionsStx]? ;]* }) := stx | throwUnsupportedSyntax
@@ -371,20 +334,9 @@ public def elabOneofDecCore (mutEnums mutOneofs messages : NameSet) : Syntax →
     | _ => throwErrorAt x.field_name "Fields in oneofs must not have cardinality modifier"
   let ts := mdata.map fun x => x.lean_type_inner
   let push_name (component : String) := mkIdentFrom name (name.getId.str component)
-  -- let mdataAttr ← mdata.mapM fun x => do
-  --   let opts ← x.options.raw.mapM fun (id, val) => `(options_entry| $id:ident = $val)
-  --   `(attr| proto_oneof_variant {
-  --         mod := $(mkIdent (Name.mkStr1 (toString x.mod))),
-  --         proto_type := $(x.proto_type), lean_type_inner := $(x.lean_type_inner), lean_type := $(x.lean_type),
-  --         field_proj := $(x.field_proj), field_name := $(x.field_name), field_num := $(x.field_num), is_scalar := $(quote x.is_scalar),
-  --         options := options% [$opts,*] })
   let ind ← `(@[proto_oneof] inductive $name where
     $[| $n:ident : $ts:term → $(ts.map (fun _ => name)):ident]*
     )
-  -- let attrs ← mdata.zip mdataAttr |>.mapM fun (x, attr) =>
-  --   `(attribute [$attr:attr] $(x.field_proj))
-  -- attrs.forM elabCommand
-  -- emplace : OneOf → Message → Message
   let builder ← mdata.mapM fun m =>
     m.builder?.getDM (throwError "{decl_name%}: builder is absent") -- NOTE: builder is absent when type is a oneof, while nested oneof is forbidden by protobuf
   let decoder? ← mdata.mapM fun m =>
@@ -418,7 +370,7 @@ end
 private def construct_toMessage (name : Ident) (push_name : String → Ident) (fields : Array ProtoFieldMData) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let val ← mkIdent <$> mkFreshUserName `val
-  let toMessageBody ← fields.mapM fun {mod, field_proj, field_num, options, is_scalar, builder?, oneof_type?, toMessage?, ..} => do
+  let toMessageBody ← fields.mapM fun {mod, field_proj, field_num, options, is_scalar, builder?, oneof_type?, toMessage?, test_unset, ..} => do
     if oneof_type?.isSome then
       assert! toMessage?.isSome
       let toMessage := toMessage?.get!
@@ -434,12 +386,20 @@ private def construct_toMessage (name : Ident) (push_name : String → Ident) (f
       match mod with
       | .default =>
         if is_scalar then
-          `(Parser.Term.doSeqItem| let $msg ← $field_num:num <~ ($builder ($field_proj $val)) # $msg)
+          `(Parser.Term.doSeqItem| let $msg ← do
+            if $test_unset ($field_proj $val) then
+              pure $msg
+            else
+              $field_num:num <~ ($builder ($field_proj $val)) # $msg)
         else
           `(Parser.Term.doSeqItem| let $msg ← $field_num:num <~? (Option.mapM $builder ($field_proj $val)) # $msg)
       | .required =>
         if is_scalar then
-          `(Parser.Term.doSeqItem| let $msg ← $field_num:num <~ ($builder ($field_proj $val)) # $msg)
+          `(Parser.Term.doSeqItem| let $msg ← do
+            if $test_unset ($field_proj $val) then
+              pure $msg
+            else
+              $field_num:num <~ ($builder ($field_proj $val)) # $msg)
         else
           `(Parser.Term.doSeqItem|
             let $msg ← do
@@ -633,8 +593,9 @@ public def elabMessageDecCore (mutEnums mutOneofs messages : NameSet) : Syntax �
     if x.oneof_type?.isSome then
       if x.field_num.getNat != 0 then
         throwErrorAt x.field_num "oneof field can only have dummy field number 0, but got {x.field_num.getNat}"
+  let defs := mdata.map fun x => x.default_ctor_value
   let struct ← `(structure $name where
-    $[$n:ident : $(mdata.map fun x => x.lean_type)]*
+    $[$n:ident : $(mdata.map fun x => x.lean_type) := $defs]*
     «Unknown.Fields» : Std.HashMap Nat (Array Encoding.ProtoVal) := {})
   let push_name (component : String) := mkIdentFrom name (name.getId.str component)
   let (default', default) ← construct_default name push_name mdata

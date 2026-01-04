@@ -20,4 +20,9 @@ local instance : Repr ByteArray where
 
 #eval put_varint 150 ⟨#[]⟩
 
+set_option protobuf.trace.descriptor true
+set_option protobuf.trace.notation true
+
 #load_proto_file "Test/A.proto"
+
+#check test.a.Q.q
