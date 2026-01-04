@@ -65,3 +65,10 @@ proto_mutual {
     C.T f = 0;
   }
 }
+
+
+message M {
+  map<int32, int32> a = 1;
+}
+
+#check { a := (Std.HashMap.ofList [(1, 1)]) : M }

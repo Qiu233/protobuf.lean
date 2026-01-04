@@ -23,6 +23,6 @@ local instance : Repr ByteArray where
 set_option protobuf.trace.descriptor true
 set_option protobuf.trace.notation true
 
-#load_proto_file "Test/A.proto"
+#load_proto_file "Test/B.proto"
 
-#check test.a.Q.q
+#check test.a.M.s

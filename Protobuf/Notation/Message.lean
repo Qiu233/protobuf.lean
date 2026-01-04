@@ -17,7 +17,12 @@ open Lean Meta Elab Term Command
 
 syntax message_entry_modifier := &"optional" <|> &"repeated" <|> &"required"
 
-syntax message_entry := (message_entry_modifier)? ident ident " = " num (options)? ";"
+syntax message_field_type_normal := ident
+syntax message_field_type_map := &"map" "<" ident "," ident ">"
+
+syntax message_field_type := message_field_type_map <|> message_field_type_normal
+
+syntax message_entry := (message_entry_modifier)? message_field_type ident " = " num (options)? ";"
 
 syntax (name := messageDec) "message " ident (options)? " {" ppLine (message_entry ppLine)* "}" : command
 
@@ -90,6 +95,23 @@ inductive InternalType where
   | fixed32
   | sfixed32
 deriving Inhabited, BEq
+
+private def InternalType.isMapKeyAllowed : InternalType → Bool
+  | .string
+  | .bool
+  | .int32
+  | .uint32
+  | .int64
+  | .uint64
+  | .sint32
+  | .sint64
+  | .fixed32
+  | .fixed64
+  | .sfixed32
+  | .sfixed64 => true
+  | .bytes
+  | .double
+  | .float => false
 
 private def getInternalType? : TSyntax `ident → Option InternalType
   | `(string) => some .string
@@ -214,6 +236,20 @@ inductive LeanShape where
   | strict
   | option
   | array
+  | map
+deriving Inhabited
+
+structure MapFieldMData where
+  key_proto_type : Ident
+  value_proto_type : Ident
+  key_lean_type : Ident
+  value_lean_type : Ident
+  key_builder : Ident
+  value_builder : Ident
+  key_decoder? : Ident
+  value_decoder? : Ident
+  key_default : Term
+  value_default : Term
 deriving Inhabited
 
 structure ProtoFieldMData where
@@ -226,6 +262,7 @@ structure ProtoFieldMData where
   field_num : TSyntax `num
   options : Options
   lean_shape : LeanShape
+  map_info? : Option MapFieldMData
   is_scalar : Bool
   internal_type? : Option InternalType
   /-- the `«Default.Value»` of the type -/
@@ -245,12 +282,203 @@ structure ProtoFieldMData where
   decoder_rep_packed? : Option Ident
 deriving Inhabited
 
+def computeMData.map [Monad m] [MonadQuotation m] [MonadError m] [MonadEnv m] [MonadOptions m] [MonadLog m] [MonadRef m] [AddMessageContext m] [MonadResolveName m]
+    (mutEnums mutOneofs messages : NameSet) (_name : Ident)
+    (key_proto_type : Ident) (value_proto_type : Ident) (mod? : Modifier)
+    (_proto_type : TSyntax `Protobuf.Notation.message_field_type)
+    (field_name : Ident)
+    (field_proj : Ident)
+    (field_num : TSyntax `num)
+    (options : Options) : m ProtoFieldMData := do
+  let hashMapIdent := mkIdent `Std.HashMap
+  if !(mod? matches .default) then
+    throwErrorAt field_name "map fields cannot have cardinality modifiers"
+  let key_lean_type ← resolveInternalType key_proto_type
+  let value_lean_type ← resolveInternalType value_proto_type
+  let (_, key_internal_type?, _, key_oneof_type?) ← getProtoTypeMData mutEnums mutOneofs messages key_proto_type
+  if key_oneof_type?.isSome then
+    throwErrorAt key_proto_type "map key type cannot be a oneof"
+  let some key_internal_type := key_internal_type?
+    | throwErrorAt key_proto_type "map key type must be a scalar type"
+  if !InternalType.isMapKeyAllowed key_internal_type then
+    throwErrorAt key_proto_type "map key type must be an integral type, bool, or string"
+  let (value_is_scalar, value_internal_type?, value_enum_type?, value_oneof_type?) ←
+    getProtoTypeMData mutEnums mutOneofs messages value_proto_type
+  if value_oneof_type?.isSome then
+    throwErrorAt value_proto_type "map value type cannot be a oneof"
+  let key_builder ← InternalType.builder key_internal_type
+  let key_decoder? ← InternalType.decoder? key_internal_type
+  let value_builder ←
+    if let some value_internal_type := value_internal_type? then
+      InternalType.builder value_internal_type
+    else
+      pure (mkIdentFrom value_proto_type (value_proto_type.getId.str "builder"))
+  let value_decoder? ←
+    if let some value_internal_type := value_internal_type? then
+      InternalType.decoder? value_internal_type
+    else
+      pure (mkIdentFrom value_proto_type (value_proto_type.getId.str "decoder?"))
+  let key_default : Term ← match key_internal_type with
+    | .bool => `(false)
+    | .string => `("")
+    | .bytes => `({})
+    | _ => `(0)
+  let value_default : Term ← match value_internal_type? with
+    | some itype =>
+      match itype with
+      | .bool => `(false)
+      | .string => `("")
+      | .bytes => `({})
+      | _ => `(0)
+    | none =>
+      if value_enum_type?.isSome || !value_is_scalar then
+        pure (mkIdentFrom value_proto_type (value_proto_type.getId.str "Default.Value"))
+      else
+        throwErrorAt value_proto_type "map value type must be scalar, enum, or message"
+  let map_info := { key_proto_type, value_proto_type, key_lean_type, value_lean_type, key_builder, value_builder, key_decoder?, value_decoder?, key_default, value_default }
+  let lean_type ← `(Std.HashMap $key_lean_type $value_lean_type)
+  let default_map := (← `({}))
+  return {
+    mod := .default,
+    proto_type := hashMapIdent,
+    lean_type_inner := hashMapIdent,
+    lean_type,
+    field_name,
+    field_proj,
+    field_num,
+    options,
+    lean_shape := .map,
+    map_info? := some map_info,
+    is_scalar := false,
+    internal_type? := none,
+    default_lean_value := default_map,
+    default_ctor_value := default_map,
+    test_unset := (← ``(Std.HashMap.isEmpty)),
+    enum_type? := none,
+    oneof_type? := none,
+    builder? := none,
+    toMessage? := none,
+    decoder?? := none,
+    fromMessage? := none,
+    fromMessage?? := none,
+    decoder_rep_packed? := none,
+    decoder_rep? := none,
+    : ProtoFieldMData
+  }
+
+def computeMData.ordinary.computeShape [Monad m] [MonadQuotation m] [MonadError m] [MonadEnv m] [MonadOptions m] [MonadLog m] [MonadRef m] [AddMessageContext m] [MonadResolveName m]
+    (mod? : Modifier) (is_scalar : Bool) (lean_type_inner : Ident) : m (TSyntax `term × LeanShape) := do
+  match mod? with
+    | .default | .required =>
+      if is_scalar then
+        pure (← `($lean_type_inner), LeanShape.strict)
+      else
+        pure (← `(Option $lean_type_inner), LeanShape.option)
+    | .optional => pure (← `(Option $lean_type_inner), LeanShape.option)
+    | .repeated => pure (← `(Array $lean_type_inner), LeanShape.array)
+
+def computeMData.ordinary.computeCtorValue [Monad m] [MonadQuotation m] [MonadError m] [MonadEnv m] [MonadOptions m] [MonadLog m] [MonadRef m] [AddMessageContext m] [MonadResolveName m]
+    (name : Ident) (internal_type? : Option InternalType) (lean_shape : LeanShape) (enum_type? : Option Name) (proto_type : Ident) : m Term := do
+  match lean_shape with
+    | .strict =>
+      if let some itype := internal_type? then
+        match itype with
+        | .bool => `(false)
+        | .string => `("")
+        | .bytes => `({})
+        | _ => `(0)
+      else if enum_type?.isSome then
+        pure (mkIdentFrom proto_type (proto_type.getId.str "Default.Value"))
+      else throwErrorAt name "{decl_name%}: internal error: strict non-scalar type"
+    | .option => `(Option.none) -- oneofs always go here
+    | .array => `(#[])
+    | .map => unreachable!
+
+def computeMData.ordinary.computeTestUnset [Monad m] [MonadQuotation m] [MonadError m] [MonadEnv m] [MonadOptions m] [MonadLog m] [MonadRef m] [AddMessageContext m] [MonadResolveName m]
+    (name : Ident) (internal_type? : Option InternalType) (lean_shape : LeanShape) (enum_type? : Option Name) (proto_type : Ident) : m Term := do
+  match lean_shape with
+    | .strict =>
+      if let some itype := internal_type? then
+        match itype with
+        | .bool => `((· == false))
+        | .string => `(String.isEmpty)
+        | .bytes => `(ByteArray.isEmpty)
+        | _ => `((· == 0))
+      else if enum_type?.isSome then
+        let x := mkIdentFrom proto_type (proto_type.getId.str "Default.Value")
+        `((· == $x)) -- TODO: maybe make `Enum.«Default.Value»` a `@[match_pattern]`?
+      else throwErrorAt name "{decl_name%}: internal error: strict non-scalar type"
+    | .option => `(Option.isNone) -- oneofs always go here
+    | .array => `(Array.isEmpty)
+    | .map => unreachable!
+
+def computeMData.ordinary [Monad m] [MonadQuotation m] [MonadError m] [MonadEnv m] [MonadOptions m] [MonadLog m] [MonadRef m] [AddMessageContext m] [MonadResolveName m]
+    (mutEnums mutOneofs messages : NameSet) (name : Ident)
+    (mod? : Modifier)
+    (proto_type : Ident)
+    (field_name : Ident)
+    (field_proj : Ident)
+    (field_num : TSyntax `num)
+    (options : Options) : m ProtoFieldMData := do
+  let lean_type_inner ← resolveInternalType proto_type
+  let (is_scalar, internal_type?, enum_type?, oneof_type?) ← getProtoTypeMData mutEnums mutOneofs messages proto_type
+  if oneof_type?.isSome && !(mod? matches .default) then
+    throwErrorAt name "oneof field cannot have cardinality modifier: {oneof_type?.get!}"
+  let (lean_type, lean_shape) ← computeMData.ordinary.computeShape mod? is_scalar lean_type_inner
+  let builder? ← internal_type?.mapM InternalType.builder
+  let builder? := if oneof_type?.isNone then some (builder?.getD (mkIdentFrom proto_type (proto_type.getId.str "builder"))) else none
+  let toMessage? := if is_scalar then none else some (mkIdentFrom proto_type (proto_type.getId.str "toMessage"))
+  let fromMessage? := if is_scalar then none else some (mkIdentFrom proto_type (proto_type.getId.str "fromMessage"))
+  let fromMessage?? := if oneof_type?.isSome then some (mkIdentFrom proto_type (proto_type.getId.str "fromMessage?")) else none
+  let decoder?? ← internal_type?.mapM InternalType.decoder?
+  let decoder?? := if oneof_type?.isNone then some (decoder??.getD (mkIdentFrom proto_type (proto_type.getId.str "decoder?"))) else none
+  let decoder_rep_packed? ← internal_type?.mapM fun x => x.decoder_rep
+  let decoder_rep_packed? :=
+    if is_scalar then (decoder_rep_packed? <|> some (mkIdentFrom proto_type (proto_type.getId.str "decoder_rep_packed")))
+    else none
+  let decoder_rep? ← internal_type?.mapM InternalType.decoder_rep
+  let decoder_rep? := if oneof_type?.isSome then none else some <| decoder_rep?.getD (mkIdentFrom proto_type (proto_type.getId.str "decoder_rep"))
+  let default_lean_value ← match lean_shape with
+    | .strict =>
+      if internal_type?.isSome then `(Inhabited.default)
+      else pure (mkIdentFrom proto_type (proto_type.getId.str "Default.Value"))
+    | .option => `(Option.none) -- oneofs always go here
+    | .array => `(#[])
+    | .map => unreachable!
+  let default_ctor_value ← computeMData.ordinary.computeCtorValue name internal_type? lean_shape enum_type? proto_type
+  let test_unset ← computeMData.ordinary.computeTestUnset name internal_type? lean_shape enum_type? proto_type
+  return {
+    mod := mod?,
+    proto_type,
+    lean_type_inner,
+    lean_type,
+    field_name,
+    field_proj,
+    field_num,
+    options,
+    lean_shape,
+    map_info? := none,
+    default_lean_value,
+    default_ctor_value,
+    test_unset,
+    is_scalar,
+    internal_type?,
+    enum_type?,
+    oneof_type?,
+    builder?,
+    toMessage?,
+    decoder??,
+    fromMessage?,
+    fromMessage??,
+    decoder_rep_packed?,
+    decoder_rep?,
+    : ProtoFieldMData
+  }
+
 def computeMData [Monad m] [MonadQuotation m] [MonadError m] [MonadEnv m] [MonadOptions m] [MonadLog m] [MonadRef m] [AddMessageContext m] [MonadResolveName m]
     (mutEnums mutOneofs messages : NameSet) (name : Ident)
     (mod : Array (Option (TSyntax `Protobuf.Notation.message_entry_modifier)))
-    (t' n : Array (TSyntax `ident)) (fidx : Array (TSyntax `num)) (optionsStx : Array (Option (TSyntax `Protobuf.Notation.options))) : m (Array ProtoFieldMData) := do
-  let t ← t'.mapM resolveInternalType
-  let ss ← t' |>.mapM fun t' => getProtoTypeMData mutEnums mutOneofs messages t'
+    (t' : Array (TSyntax `Protobuf.Notation.message_field_type)) (n : Array Ident) (fidx : Array (TSyntax `num)) (optionsStx : Array (Option (TSyntax `Protobuf.Notation.options))) : m (Array ProtoFieldMData) := do
   let ms ← mod.mapM fun mod? => do
     let some mod := mod? | return Modifier.default
     match mod with
@@ -258,70 +486,20 @@ def computeMData [Monad m] [MonadQuotation m] [MonadError m] [MonadEnv m] [Monad
     | `(message_entry_modifier| repeated) => return Modifier.repeated
     | `(message_entry_modifier| required) => return Modifier.required
     | _ => unreachable!
-  let ts ← ms.zip (t.zip ss) |>.mapM fun (mod, t, (is_scalar, _, _, oneof_type?)) => do
-      if oneof_type?.isSome && !(mod matches .default) then
-        throwErrorAt name "oneof field cannot have cardinality modifier: {oneof_type?.get!}"
-      let s ← match mod with
-      | .default | .required =>
-        if is_scalar then
-          return (← `($t), LeanShape.strict)
-        else
-          return (← `(Option $t), LeanShape.option)
-      | .optional => return (← `(Option $t), LeanShape.option)
-      | .repeated => return (← `(Array $t), LeanShape.array)
   let dots ← n.mapM fun (x : Ident) => return mkIdentFrom x (name.getId.append x.getId)
   let options := optionsStx.map Options.parseD
-  ms.zip (t'.zip (t.zip (ts.zip (n.zip (dots.zip (fidx.zip (options.zip ss))))))) |>.mapM
-    fun (mod, proto_type, lean_type_inner, (lean_type, lean_shape), field_name, field_proj, field_num, options, (is_scalar, internal_type?, enum_type?, oneof_type?)) => do
-      let builder? ← internal_type?.mapM InternalType.builder
-      let builder? := if oneof_type?.isNone then some (builder?.getD (mkIdentFrom proto_type (proto_type.getId.str "builder"))) else none
-      let toMessage? := if is_scalar then none else some (mkIdentFrom proto_type (proto_type.getId.str "toMessage"))
-      let fromMessage? := if is_scalar then none else some (mkIdentFrom proto_type (proto_type.getId.str "fromMessage"))
-      let fromMessage?? := if oneof_type?.isSome then some (mkIdentFrom proto_type (proto_type.getId.str "fromMessage?")) else none
-      let decoder?? ← internal_type?.mapM InternalType.decoder?
-      let decoder?? := if oneof_type?.isNone then some (decoder??.getD (mkIdentFrom proto_type (proto_type.getId.str "decoder?"))) else none
-      let decoder_rep_packed? ← internal_type?.mapM fun x => x.decoder_rep
-      let decoder_rep_packed? :=
-        if is_scalar then (decoder_rep_packed? <|> some (mkIdentFrom proto_type (proto_type.getId.str "decoder_rep_packed")))
-        else none
-      let decoder_rep? ← internal_type?.mapM InternalType.decoder_rep
-      let decoder_rep? := if oneof_type?.isSome then none else some <| decoder_rep?.getD (mkIdentFrom proto_type (proto_type.getId.str "decoder_rep"))
-      let default_lean_value ← match lean_shape with
-        | .strict =>
-          if internal_type?.isSome then `(Inhabited.default)
-          else pure (mkIdentFrom proto_type (proto_type.getId.str "Default.Value"))
-        | .option => `(Option.none) -- oneofs always go here
-        | .array => `(#[])
-      let default_ctor_value ← match lean_shape with
-        | .strict =>
-          if let some itype := internal_type? then
-            match itype with
-            | .bool => `(false)
-            | .string => `("")
-            | .bytes => `({})
-            | _ => `(0)
-          else if enum_type?.isSome then
-            pure (mkIdentFrom proto_type (proto_type.getId.str "Default.Value"))
-          else throwErrorAt name "{decl_name%}: internal error: strict non-scalar type"
-        | .option => `(Option.none) -- oneofs always go here
-        | .array => `(#[])
-      let test_unset ← match lean_shape with
-        | .strict =>
-          if let some itype := internal_type? then
-            match itype with
-            | .bool => `((· == false))
-            | .string => `(String.isEmpty)
-            | .bytes => `(ByteArray.isEmpty)
-            | _ => `((· == 0))
-          else if enum_type?.isSome then
-            let x := mkIdentFrom proto_type (proto_type.getId.str "Default.Value")
-            `((· == $x)) -- TODO: maybe make `Enum.«Default.Value»` a `@[match_pattern]`?
-          else throwErrorAt name "{decl_name%}: internal error: strict non-scalar type"
-        | .option => `(Option.isNone) -- oneofs always go here
-        | .array => `(Array.isEmpty)
-      return { mod, proto_type, lean_type_inner, lean_type, field_name, field_proj, field_num, options, lean_shape, default_lean_value, default_ctor_value, test_unset,
-               is_scalar, internal_type?, enum_type?, oneof_type?, builder?, toMessage?, decoder??, fromMessage?, fromMessage??, decoder_rep_packed?, decoder_rep? }
-
+  let mut out := #[]
+  for mod? in ms, proto_type in t', field_name in n, field_proj in dots, field_num in fidx, options in options do
+    match proto_type with
+    | `(message_field_type| $s:message_field_type_map) => do
+      let `(message_field_type_map| map<$key_proto_type:ident, $value_proto_type:ident>) := s | throwUnsupportedSyntax
+      let r ← computeMData.map mutEnums mutOneofs messages name key_proto_type value_proto_type mod? proto_type field_name field_proj field_num options
+      out := out.push r
+    | `(message_field_type| $proto_type:ident) => do
+      let r ← computeMData.ordinary mutEnums mutOneofs messages name mod? proto_type field_name field_proj field_num options
+      out := out.push r
+    | _ => throwUnsupportedSyntax
+  return out
 
 public meta section
 
@@ -332,6 +510,9 @@ public def elabOneofDecCore (mutEnums mutOneofs messages : NameSet) : Syntax →
     match x.mod with
     | .default => pure ()
     | _ => throwErrorAt x.field_name "Fields in oneofs must not have cardinality modifier"
+  mdata.forM fun x => do
+    if x.map_info?.isSome then
+      throwErrorAt x.field_name "map fields cannot appear in oneofs"
   let ts := mdata.map fun x => x.lean_type_inner
   let push_name (component : String) := mkIdentFrom name (name.getId.str component)
   let ind ← `(@[proto_oneof] inductive $name where
@@ -370,8 +551,28 @@ end
 private def construct_toMessage (name : Ident) (push_name : String → Ident) (fields : Array ProtoFieldMData) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let val ← mkIdent <$> mkFreshUserName `val
-  let toMessageBody ← fields.mapM fun {mod, field_proj, field_num, options, is_scalar, builder?, oneof_type?, toMessage?, test_unset, ..} => do
-    if oneof_type?.isSome then
+  let toMessageBody ← fields.mapM fun {mod, field_proj, field_num, options, is_scalar, builder?, oneof_type?, toMessage?, test_unset, map_info?, ..} => do
+    if let some map_info := map_info? then
+      let entries ← mkIdent <$> mkFreshUserName `entries
+      let submsg ← mkIdent <$> mkFreshUserName `submsg
+      let entry_key := mkIdent `entry_key
+      let entry_val := mkIdent `entry_val
+      let key_builder := map_info.key_builder
+      let value_builder := map_info.value_builder
+      `(Parser.Term.doSeqItem|
+        let $msg:ident ← do
+          if $test_unset ($field_proj $val) then
+            pure $msg
+          else
+            let $entries:ident ← ($field_proj $val).toArray.mapM (fun ($entry_key:ident, $entry_val:ident) => do
+              let $submsg:ident := Protobuf.Encoding.Message.emptyWithCapacity 2
+              let $submsg:ident ← (1 : Nat) <~ ($key_builder $entry_key) # $submsg
+              let $submsg:ident ← (2 : Nat) <~ ($value_builder $entry_val) # $submsg
+              Encoding.ProtoVal.ofMessage $submsg
+              )
+            $field_num:num <~f (pure $entries) # $msg
+        )
+    else if oneof_type?.isSome then
       assert! toMessage?.isSome
       let toMessage := toMessage?.get!
       `(Parser.Term.doSeqItem|
@@ -436,9 +637,28 @@ private def construct_builder (name : Ident) (push_name : String → Ident) (toM
 private def construct_fromMessage (name : Ident) (push_name : String → Ident) (fields : Array ProtoFieldMData) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let ns := fields.map ProtoFieldMData.field_num
-  let decoder ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, field_name, field_proj, field_num, options, is_scalar, oneof_type?, decoder??, decoder_rep?, decoder_rep_packed?, fromMessage?? ..} => do
+  let decoder ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, field_name, field_proj, field_num, options, is_scalar, oneof_type?, decoder??, decoder_rep?, decoder_rep_packed?, fromMessage??, map_info?, ..} => do
     let var ← mkIdent <$> mkFreshUserName (field_name.getId)
-    if oneof_type?.isSome then
+    if let some map_info := map_info? then
+      let key_decoder? := map_info.key_decoder?
+      let value_decoder? := map_info.value_decoder?
+      let key_default := map_info.key_default
+      let value_default := map_info.value_default
+      let entry := mkIdent `entry
+      let map := mkIdent `map
+      let stx ← `(Parser.Term.doSeqItem|
+        let $var ← do
+          let entries ← Encoding.Message.getExpandedMessage $msg $field_num:num
+          let $map:ident ← entries.foldlM (init := Std.HashMap.emptyWithCapacity 8) (fun $map:ident $entry:ident => do
+            let key? ← $key_decoder?:ident $entry 1
+            let value? ← $value_decoder?:ident $entry 2
+            let key := Option.getD key? $key_default
+            let value := Option.getD value? $value_default
+            pure (Std.HashMap.insert $map key value))
+          pure $map
+        )
+      return (var, stx)
+    else if oneof_type?.isSome then
       assert! fromMessage??.isSome
       let fromMessage? := fromMessage??.get!
       let stx ← `(Parser.Term.doSeqItem| let $var ← $fromMessage?:ident $msg)
@@ -510,12 +730,15 @@ private def construct_decoder_rep (name : Ident) (push_name : String → Ident) 
 private def construct_merge (name : Ident) (push_name : String → Ident) (fields : Array ProtoFieldMData) : CommandElabM (Ident × Command) := do
   let a ← mkIdent <$> mkFreshUserName `a
   let b ← mkIdent <$> mkFreshUserName `b
-  let mergeBody ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, proto_type, field_name, field_proj := field_proj, is_scalar, oneof_type?, ..} => do
+  let mergeBody ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, proto_type, field_name, field_proj := field_proj, is_scalar, oneof_type?, map_info?, ..} => do
     let var ← mkIdent <$> mkFreshUserName (field_name.getId)
     let va ← `($field_proj $a)
     let vb ← `($field_proj $b)
     let merger := mkIdentFrom proto_type (proto_type.getId.append `merge)
-    if oneof_type?.isSome then
+    if let some _ := map_info? then
+      let stx ← `(Parser.Term.doSeqItem| let $var := Std.HashMap.union $va $vb)
+      return (var, stx)
+    else if oneof_type?.isSome then
       let stx ← `(Parser.Term.doSeqItem| let $var := $vb <|> $va)
       return (var, stx)
     else

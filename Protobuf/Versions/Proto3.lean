@@ -156,6 +156,44 @@ private def field_type_ident (field : FieldDescriptorProto) : M (TSyntax `ident)
   | .TYPE_SINT32 => pure <| Versions.builtinIdent "sint32"
   | .TYPE_SINT64 => pure <| Versions.builtinIdent "sint64"
 
+private def map_entry_names (item : MsgItem) : M (Array (String × DescriptorProto)) := do
+  let mut out := #[]
+  for nested in item.desc.nested_type do
+    if !! nested.options&.map_entry then
+      let nested_name ← get!! nested.name
+      let full_name := Versions.nameFromPrefixRev (item.name :: item.prefixRev) nested_name
+      out := out.push ("." ++ full_name.toString, nested)
+  return out
+
+private def is_map_entry (desc : DescriptorProto) : Bool :=
+  !! desc.options&.map_entry
+
+private def map_entry_fields (entry : DescriptorProto) : M (FieldDescriptorProto × FieldDescriptorProto) := do
+  let key? := entry.field.find? fun f => f.number == some (1 : Int32)
+  let value? := entry.field.find? fun f => f.number == some (2 : Int32)
+  let key ← key?.getDM (throw s!"{decl_name%}: map entry is missing key field")
+  let value ← value?.getDM (throw s!"{decl_name%}: map entry is missing value field")
+  return (key, value)
+
+private def map_entry_desc? (map_entries : Array (String × DescriptorProto)) (field : FieldDescriptorProto) : M (Option DescriptorProto) := do
+  let t ← get!! field.type
+  if t != .TYPE_MESSAGE then
+    return none
+  let raw_type ← get!! field.type_name
+  return (map_entries.find? (fun (n, _) => n == raw_type)).map Prod.snd
+
+private def map_field_type? (item : MsgItem) (map_entries : Array (String × DescriptorProto)) (field : FieldDescriptorProto) : M (Option (TSyntax ``message_field_type)) := do
+  let entry? ← map_entry_desc? map_entries field
+  let some entry := entry? | return none
+  let label := field.label.getD .LABEL_OPTIONAL
+  if label != .LABEL_REPEATED then
+    throw s!"{decl_name%}: map field must be repeated"
+  let (key_field, value_field) ← map_entry_fields entry
+  let key_type ← field_type_ident key_field
+  let value_type ← field_type_ident value_field
+  let m ← `(message_field_type_map| map<$key_type, $value_type>)
+  some <$> `(message_field_type| $m:message_field_type_map)
+
 private def field_modifier? (field : FieldDescriptorProto) : M (Option (TSyntax ``message_entry_modifier)) := do
   let label ← field.label.getDM (throw s!"modifier is absent") -- always present
   match label with
@@ -195,7 +233,9 @@ private def compile_oneof (item : OneofItem) : M DeclOutput := do
   let ids := names.map fun x => Lean.mkIdent (Name.mkStr1 x)
   for field in item.fields do
     ensure_oneof_field_ok field
-  let types ← item.fields.mapM field_type_ident
+  let types ← item.fields.mapM fun field => do
+    let m ← `(message_field_type_normal| $(← field_type_ident field):ident)
+    `(message_field_type| $m:message_field_type_normal)
   let nums ← item.fields.mapM fun v => get!! v.number
   let numsQ := nums.map fun x => quote x.toUInt32.toNat
   let opts ← item.fields.mapM field_options?
@@ -211,17 +251,32 @@ partial def compile_message (item : MsgItem) : M DeclOutput := do
   registerType msgName
   let typeName := Versions.nameFromPrefixRev item.prefixRev msgName
   let typeId := mkIdent typeName
-  let names ← item.normalFields.mapM fun v => get!! v.name
-  let ids := names.map fun x => Lean.mkIdent (Name.mkStr1 x)
-  let mods ← item.normalFields.mapM field_modifier?
-  let types ← item.normalFields.mapM field_type_ident
-  let nums ← item.normalFields.mapM fun v => get!! v.number
+  let map_entries ← map_entry_names item
+  let mut names := #[]
+  let mut ids := #[]
+  let mut mods := #[]
+  let mut types : Array (TSyntax ``message_field_type) := #[]
+  let mut nums := #[]
+  let mut opts := #[]
+  for field in item.normalFields do
+    let name ← get!! field.name
+    names := names.push name
+    ids := ids.push (Lean.mkIdent (Name.mkStr1 name))
+    nums := nums.push (← get!! field.number)
+    opts := opts.push (← field_options? field)
+    if let some map_type ← map_field_type? item map_entries field then
+      types := types.push map_type
+      mods := mods.push none
+    else
+      types := types.push (← `(message_field_type| $(← field_type_ident field):ident))
+      mods := mods.push (← field_modifier? field)
   let numsQ := nums.map fun x => quote x.toUInt32.toNat
-  let opts ← item.normalFields.mapM field_options?
   let oneofNames := item.oneofGroups.map (·.name)
   let oneofIds := oneofNames.map fun x => Lean.mkIdent (Name.mkStr1 x)
-  let oneofTypes := item.oneofGroups.map fun g =>
-    mkIdent (Versions.nameFromPrefixRev (msgName :: item.prefixRev) g.leanType)
+  let oneofTypes ← item.oneofGroups.mapM fun g => do
+    let c := mkIdent (Versions.nameFromPrefixRev (msgName :: item.prefixRev) g.leanType)
+    let m ← `(message_field_type_normal| $c:ident)
+    `(message_field_type| $m:message_field_type_normal)
   let oneofNums := Array.replicate item.oneofGroups.size (quote (0 : Nat))
   let extras ← IO.mkRef #[]
   let commitM (c : M Command) := c >>= fun x => extras.modify fun cs => cs.push x
@@ -238,7 +293,8 @@ partial def compile_message (item : MsgItem) : M DeclOutput := do
 def compile_file (file : FileDescriptorProto) : M (Array Command) := do
   let prefixRev := Versions.packagePrefixRev (file.package.getD "")
   let enumItems := (← collect_enums prefixRev file.enum_type) ++ (← collect_enums_in_messages prefixRev file.message_type)
-  let msgItems ← collect_messages prefixRev file.message_type
+  let msgItemsAll ← collect_messages prefixRev file.message_type
+  let msgItems := msgItemsAll.filter (fun item => !is_map_entry item.desc)
   let oneofItems := collect_oneofs_from_messages msgItems
 
   for item in enumItems do
@@ -261,8 +317,16 @@ def compile_file (file : FileDescriptorProto) : M (Array Command) := do
   let mut deps : Std.HashMap Name (Array Name) := ∅
   for item in msgItems do
     let mut ds := #[]
+    let map_entries ← map_entry_names item
     for field in item.normalFields do
-      if field.type matches some .TYPE_MESSAGE then
+      if let some entry ← map_entry_desc? map_entries field then
+        let (_, value_field) ← map_entry_fields entry
+        if value_field.type matches some .TYPE_MESSAGE then
+          let raw ← get!! value_field.type_name
+          let dep ← withNamePrefix item.prefixRev (resolveName raw)
+          if msgNameSet.contains dep then
+            ds := ds.push dep
+      else if field.type matches some .TYPE_MESSAGE then
         let raw ← get!! field.type_name
         let dep ← withNamePrefix item.prefixRev (resolveName raw)
         if msgNameSet.contains dep then

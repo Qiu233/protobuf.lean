@@ -1,9 +1,7 @@
 syntax = "proto3";
 
-import "A.proto";
-
 package test.a;
 
-message B {
-    optional A a = 1;
+message M {
+    map<int32, int32> s = 4;
 }
