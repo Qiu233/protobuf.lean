@@ -1,6 +1,7 @@
 module
 
 import Protobuf.Notation
+public import Protobuf.Versions.Editions
 public import Protobuf.Versions.Proto2
 public import Protobuf.Versions.Proto3
 
@@ -30,6 +31,8 @@ def compile_proto (desc : FileDescriptorSet) : M (Array Command) := do
         Proto3.compile_file file
       else if stx == "proto2" then
         Proto2.compile_file file
+      else if stx == "editions" then
+        Editions.compile_file file
       else
         throw s!"{stx} is not supported yet"
     else

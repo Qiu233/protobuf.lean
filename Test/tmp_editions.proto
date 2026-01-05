@@ -1,0 +1,7 @@
+edition = "2023";
+package demo;
+message Foo {
+  string name = 1;
+  int32 count = 2;
+  repeated int32 nums = 3;
+}

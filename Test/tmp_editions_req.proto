@@ -1,0 +1,7 @@
+edition = "2023";
+package demo;
+message Foo {
+  int32 x = 1 [features.field_presence = LEGACY_REQUIRED];
+  int32 y = 2;
+  repeated int32 z = 3;
+}

@@ -27,3 +27,8 @@ set_option protobuf.trace.notation true
 #load_proto_file "Test/official/google/protobuf/descriptor.proto"
 
 #check google.protobuf.Edition.EDITION_2023
+
+
+#check String.fromUTF8
+
+#load_proto_file "Test/tmp_editions_req.proto"
