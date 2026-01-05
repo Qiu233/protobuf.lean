@@ -11,7 +11,7 @@ public section
 
 set_option hygiene false
 
-namespace Protobuf.Versions.Proto3
+namespace Protobuf.Versions.Proto2
 
 open Internal.Desc Encoding Notation
 
@@ -82,13 +82,10 @@ private def splitMessageFields (msg : DescriptorProto) : M (Array FieldDescripto
   let mut groups : Std.HashMap Nat (Array FieldDescriptorProto) := {}
   for field in msg.field do
     if let some idx := field.oneof_index then
-      if field.proto3_optional.getD false then
-        normalFields := normalFields.push field
-      else
-        let idxNat ← oneofIndexNat idx
-        if idxNat >= msg.oneof_decl.size then
-          throw s!"{decl_name%}: oneof_index {idxNat} out of bounds"
-        groups := groups.alter idxNat (some <| ·.getD #[] |>.push field)
+      let idxNat ← oneofIndexNat idx
+      if idxNat >= msg.oneof_decl.size then
+        throw s!"{decl_name%}: oneof_index {idxNat} out of bounds"
+      groups := groups.alter idxNat (some <| ·.getD #[] |>.push field)
     else
       normalFields := normalFields.push field
   let mut oneofGroups := #[]
@@ -202,20 +199,12 @@ private def field_modifier? (field : FieldDescriptorProto) : M (Option (TSyntax 
   | .«Unknown.Value» _ => throw s!"{decl_name%}: unknown cardinality"
   | .LABEL_REPEATED => some <$> `(message_entry_modifier| repeated)
   | .LABEL_REQUIRED => some <$> `(message_entry_modifier| required)
-  | .LABEL_OPTIONAL => -- even when there is no cardinality specifier
-    if !! field.proto3_optional then
-      some <$> `(message_entry_modifier| optional)
-    else
-      return none
+  | .LABEL_OPTIONAL => some <$> `(message_entry_modifier| optional)
 
 private def field_options? (field : FieldDescriptorProto) : M (Option (TSyntax ``options)) := do
   let mut entries := #[]
   if let some packed := field.options&.packed then
     entries := entries.push (← `(options_entry| packed = $(quote packed)))
-  else
-    if let some type := field.type then
-      unless type matches .TYPE_STRING | .TYPE_GROUP | .TYPE_MESSAGE | .TYPE_BYTES do
-        entries := entries.push (← `(options_entry| packed = true)) -- NOTE: proto3 defaults to packed
   if !! field.options&.deprecated then
     entries := entries.push (← `(options_entry| deprecated = true))
   if entries.isEmpty then

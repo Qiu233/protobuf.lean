@@ -1,6 +1,7 @@
 module
 
 import Protobuf.Notation
+public import Protobuf.Versions.Proto2
 public import Protobuf.Versions.Proto3
 
 open System
@@ -27,10 +28,12 @@ def compile_proto (desc : FileDescriptorSet) : M (Array Command) := do
     if let some stx := file.syntax then
       if stx == "proto3" then
         Proto3.compile_file file
+      else if stx == "proto2" then
+        Proto2.compile_file file
       else
         throw s!"{stx} is not supported yet"
     else
-      throw "proto2 is not supported yet"
+      Proto2.compile_file file
 
 private def renderCommands (cmds : Array Command) : IO String := do
   unsafe Lean.enableInitializersExecution

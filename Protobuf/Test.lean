@@ -23,6 +23,7 @@ local instance : Repr ByteArray where
 set_option protobuf.trace.descriptor true
 set_option protobuf.trace.notation true
 
-#load_proto_file "Test/B.proto"
+-- #load_proto_file "Test/B.proto"
+#load_proto_file "Test/official/google/protobuf/descriptor.proto"
 
-#check test.a.M.s
+#check google.protobuf.Edition.EDITION_2023

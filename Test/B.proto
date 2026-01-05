@@ -5,3 +5,7 @@ package test.a;
 message M {
     map<int32, int32> s = 4;
 }
+
+service S {
+    rpc T(M) returns (M);
+}
