@@ -1,0 +1,55 @@
+
+syntax = "proto3";
+
+package test.a;
+
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.EnumValueOptions {
+  string my_option = 1000;
+}
+
+message A {
+    optional int32 t = 1;
+}
+
+message T {
+    enum N {
+        A = 0;
+        B = 2 [(my_option) = "hello"];
+    }
+    optional N n = 1;
+}
+
+message S {
+    optional T.N n = 2;
+}
+
+// message P {
+//     Q q = 1;
+// }
+
+// message Q {
+//     P p = 1;
+// }
+
+message Q {
+    oneof q {
+        string a = 1;
+        Q b = 2;
+    }
+}
+
+message M {
+    map<int32, int32> s = 4;
+}
+
+enum E {
+    E_A = 0;
+    E_B = 2;
+}
+
+message O {
+    int32 a = 1;
+    E e = 2;
+}

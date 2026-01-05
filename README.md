@@ -21,7 +21,7 @@ Work in progress:
 There are 5 ways to use this library, and the first 4 can be mixed:
 
 1. Load a standalone .proto files.
-2. (WIP) Load a folder containing .proto files.
+2. Load a folder containing .proto files.
 3. Use the internal notation.
 4. Use the encoding/decoding utilities directly.
 5. (Planned, WIP) As a protoc plugin.
@@ -70,7 +70,14 @@ instance : Repr ByteArray where
 
 ## A folder of protobuf files
 
-*Work in progress*
+```lean
+import Protobuf
+
+open Protobuf Encoding Notation
+
+#load_proto_dir "folder"
+...
+```
 
 ## Internal notation
 

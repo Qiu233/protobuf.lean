@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+import "A.proto";
+
+package test.a;
+
+message BM {
+    map<int32, int32> s = 4;
+}
