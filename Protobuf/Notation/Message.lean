@@ -551,7 +551,7 @@ end
 private def construct_toMessage (name : Ident) (push_name : String → Ident) (fields : Array ProtoFieldMData) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let val ← mkIdent <$> mkFreshUserName `val
-  let toMessageBody ← fields.mapM fun {mod, field_proj, field_num, options, is_scalar, internal_type?, builder?, enum_type?, oneof_type?, toMessage?, test_unset, map_info?, ..} => do
+  let toMessageBody ← fields.mapM fun {mod, field_proj, field_num, options, internal_type?, builder?, enum_type?, oneof_type?, toMessage?, test_unset, map_info?, ..} => do
     if let some map_info := map_info? then
       let entries ← mkIdent <$> mkFreshUserName `entries
       let submsg ← mkIdent <$> mkFreshUserName `submsg
@@ -647,7 +647,7 @@ private def construct_builder (name : Ident) (push_name : String → Ident) (toM
 private def construct_fromMessage (name : Ident) (push_name : String → Ident) (fields : Array ProtoFieldMData) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let ns := fields.map ProtoFieldMData.field_num
-  let decoder ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, field_name, field_proj, field_num, options, is_scalar, internal_type?, enum_type?, oneof_type?, decoder??, decoder_rep?, decoder_rep_packed?, fromMessage??, map_info?, ..} => do
+  let decoder ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, field_name, field_proj, field_num, options, internal_type?, enum_type?, oneof_type?, decoder??, decoder_rep?, decoder_rep_packed?, fromMessage??, map_info?, ..} => do
     let var ← mkIdent <$> mkFreshUserName (field_name.getId)
     if let some map_info := map_info? then
       let key_decoder? := map_info.key_decoder?
@@ -816,9 +816,22 @@ private def construct_default (name : Ident) (push_name : String → Ident) (fie
   let default ← `(partial def $defaultId:ident : $name := $structInst)
   return (defaultId, default)
 
+private def construct_encode (name : Ident) (push_name : String → Ident) (toMessage : Ident) : CommandElabM (Ident × Command) := do
+  let encodeId := push_name "encode"
+  let s ← `(partial def $encodeId:ident : $name → Except Encoding.ProtoError ByteArray := fun x => do
+    return Binary.Put.run 128 (Binary.put (← $toMessage x)))
+  return (encodeId, s)
+
+private def construct_decode (name : Ident) (push_name : String → Ident) (fromMessage : Ident) : CommandElabM (Ident × Command) := do
+  let decodeId := push_name "decode"
+  let s ← `(partial def $decodeId:ident : ByteArray → Except Encoding.ProtoError $name := fun bs => do
+    let msg := Binary.Get.run (Binary.getThe Encoding.Message) bs |>.toExcept
+    let msg ← Encoding.protoDecodeParseResultExcept msg
+    $fromMessage:ident msg)
+  return (decodeId, s)
+
 public def elabMessageDecCore (mutEnums mutOneofs messages : NameSet) : Syntax → CommandElabM ProtobufDeclBlock := fun stx => do
   let `(messageDec| message $name $[$msgOptions?]? { $[$[$mod]? $t' $n = $fidx $[$optionsStx]? ;]* }) := stx | throwUnsupportedSyntax
-  -- let msgOptions := Options.parseD msgOptions?
   let mdata ← computeMData mutEnums mutOneofs messages name mod t' n fidx optionsStx
   mdata.forM fun x => do
     if x.oneof_type?.isSome then
@@ -837,7 +850,9 @@ public def elabMessageDecCore (mutEnums mutOneofs messages : NameSet) : Syntax �
   let (merge', merge) ← construct_merge name push_name mdata
   let (_, decoder?) ← construct_decoder? name push_name fromMessage' merge'
   let (_, decoder_rep) ← construct_decoder_rep name push_name fromMessage'
-  return { decls := #[struct], inhabitedFunctions := #[default], inhabitedInsts := #[inhInst], functions := #[toMessage, builder, fromMessage, merge, decoder?, decoder_rep] }
+  let (_, encode) ← construct_encode name push_name toMessage'
+  let (_, decode) ← construct_decode name push_name fromMessage'
+  return { decls := #[struct], inhabitedFunctions := #[default], inhabitedInsts := #[inhInst], functions := #[toMessage, builder, fromMessage, merge, decoder?, decoder_rep, encode, decode] }
 
 @[scoped command_elab messageDec]
 public def elabMessageDec : CommandElab := fun stx => do

@@ -32,3 +32,4 @@ set_option protobuf.trace.notation true
 #check String.fromUTF8
 
 #load_proto_file "Test/tmp_editions_req.proto"
+#check demo.Foo.encode
