@@ -8,4 +8,4 @@ package "protobuf" where
 @[default_target]
 lean_lib «Protobuf» where
 
-require binary from git "https://github.com/Qiu233/binary" @ "34c54ee3dda26c4bfaff0041464756df2ecc0760"
+require binary from git "https://github.com/Lean-zh/binary.git" @ "26cae831784e3135923c506be2b739f5db8bc3cf"
