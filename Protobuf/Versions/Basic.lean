@@ -108,6 +108,40 @@ def registerType (raw : String) : M Unit := do
   let x ← wrapName raw
   modifyThe M.State (fun s => { s with types := s.types.insert x raw })
 
+def reservedFieldNames : List String :=
+  [ "toMessage"
+  , "fromMessage"
+  , "fromMessage?"
+  , "builder"
+  , "merge"
+  , "decoder?"
+  , "decoder_rep"
+  , "decoder_rep_packed"
+  , "Default"
+  , "Unknown.Fields"
+  , "encode"
+  , "decode"
+  ]
+
+def reservedEnumValueNames : List String :=
+  [ "toInt32"
+  , "fromInt32"
+  , "builder"
+  , "decoder?"
+  , "decoder_rep"
+  , "decoder_rep_packed"
+  , "Default"
+  , "Unknown"
+  ]
+
+def checkFieldName (name : String) : M Unit := do
+  if reservedFieldNames.contains name then
+    throw s!"{decl_name%}: field name `{name}` is reserved for code generation"
+
+def checkEnumValueName (name : String) : M Unit := do
+  if reservedEnumValueNames.contains name then
+    throw s!"{decl_name%}: enum value name `{name}` is reserved for code generation"
+
 @[always_inline]
 instance : MonadRef M where
   getRef := fun c => return c.ref

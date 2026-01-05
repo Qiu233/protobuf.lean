@@ -24,7 +24,10 @@ def compile_enum (e : EnumDescriptorProto) : M DeclOutput := do
   registerType enumName
   let typeName ← wrapName enumName
   let typeId := mkIdent typeName
-  let vNames ← e.value.mapM fun v => get!! v.name
+  let vNames ← e.value.mapM fun v => do
+    let name ← get!! v.name
+    checkEnumValueName name
+    return name
   let vIds := vNames.map fun x => Lean.mkIdent (Name.mkStr1 x)
   let vNums ← e.value.mapM fun v => get!! v.number
   let vNumsQ := vNums.map fun x => quote x.toUInt32.toNat
@@ -235,7 +238,10 @@ private def compile_oneof (item : OneofItem) : M DeclOutput := do
   registerType oneofName
   let typeName := Versions.nameFromPrefixRev item.prefixRev item.leanType
   let typeId := mkIdent typeName
-  let names ← item.fields.mapM fun v => get!! v.name
+  let names ← item.fields.mapM fun v => do
+    let name ← get!! v.name
+    checkFieldName name
+    return name
   let ids := names.map fun x => Lean.mkIdent (Name.mkStr1 x)
   for field in item.fields do
     ensure_oneof_field_ok field
@@ -268,6 +274,7 @@ partial def compile_message (item : MsgItem) : M DeclOutput := do
   let mut opts := #[]
   for field in item.normalFields do
     let name ← get!! field.name
+    checkFieldName name
     names := names.push name
     ids := ids.push (Lean.mkIdent (Name.mkStr1 name))
     nums := nums.push (← get!! field.number)
