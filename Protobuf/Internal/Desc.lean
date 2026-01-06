@@ -5,10 +5,9 @@ meta import Protobuf.Notation
 
 public section
 
-namespace Protobuf.Internal.Desc
+namespace Protobuf.Internal.google.protobuf
 
 open Encoding Notation
-
 
 enum Edition {
     EDITION_UNKNOWN = 0;

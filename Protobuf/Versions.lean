@@ -12,7 +12,7 @@ public section
 
 namespace Protobuf.Versions
 
-open Internal.Desc Encoding Notation
+open Internal.google.protobuf Encoding Notation
 
 def compile_proto (desc : FileDescriptorSet) : M (Array Command) := do
   let names ← desc.file.mapM fun x => get!! x.name

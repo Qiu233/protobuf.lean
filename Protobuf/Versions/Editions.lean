@@ -13,7 +13,7 @@ set_option hygiene false
 
 namespace Protobuf.Versions.Editions
 
-open Internal.Desc Encoding Notation
+open Internal.google.protobuf Encoding Notation
 
 structure DeclOutput where
   decl : Command
