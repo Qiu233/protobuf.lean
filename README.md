@@ -24,7 +24,7 @@ There are 5 ways to use this library, and the first 4 can be mixed:
 2. Load a folder containing .proto files.
 3. Use the internal notation.
 4. Use the encoding/decoding utilities directly.
-5. (Planned, WIP) As a protoc plugin.
+5. As a protoc plugin.
 
 **To use in the first 2 ways, you must first install the `protoc` command.
 The last tested `protoc` version is `libprotoc 30.2`.**
@@ -104,6 +104,18 @@ Please read the source code under the folder `Encoding` to learn their usage.
 
 This usage is highly unrecommended and should only serve for debugging purposes.
 
-## protoc plugin
+## As a protoc plugin
 
-*Work in progress*
+This usage is highly uncommended, due to:
+* Currently (v4.26.0) Lean 4 compiler does not prune the `meta` imports, causing executables to be exceedingly **huge (180 MiB)**.
+* When compiling multiple files, there is no clear way to generate correct `import XXX` statements, since it simultaneously depends on the input and out directory you specify in the `protoc` command (see `-I` and `--lean4_out` below). So we choose to **not generate them** and leave to users to complete after putting the generated .lean files to the location they want.
+
+First prepare a folder to put the plugin, say `<folder>`.
+
+```bash
+clone https://github.com/Lean-zh/protobuf.git
+cd protobuf
+lake build Plugin
+cp ./.lake/build/bin/protoc-gen-lean4 <folder>
+protoc --plugin=protoc-gen-lean4=<folder>/protoc-gen-lean4 --lean4_out=<output_folder> -I=<input_folder> ...
+```
