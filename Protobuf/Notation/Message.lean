@@ -6,6 +6,7 @@ import Protobuf.Encoding.Unwire
 public meta import Protobuf.Notation.Basic
 public import Protobuf.Notation.Enum
 public import Lean
+import Protobuf.Notation.Syntax
 
 public meta section
 
@@ -14,21 +15,6 @@ namespace Protobuf.Notation
 open Encoding Notation
 
 open Lean Meta Elab Term Command
-
-syntax message_entry_modifier := &"optional" <|> &"repeated" <|> &"required"
-
-syntax message_field_type_normal := ident
-syntax message_field_type_map := &"map" "<" ident "," ident ">"
-
-syntax message_field_type := message_field_type_map <|> message_field_type_normal
-
-syntax message_entry := (message_entry_modifier)? message_field_type ident " = " num (options)? ";"
-
-syntax (name := messageDec) "message " ident (options)? " {" ppLine (message_entry ppLine)* "}" : command
-
-syntax (name := oneofDec) "oneof " ident " {" ppLine (message_entry ppLine)*  "}" : command
-
--- scoped syntax "options% " options : term
 
 initialize protoOneOfAttr : TagAttribute ←
   registerTagAttribute `proto_oneof "mark inductive type to be a protobuf oneof sum type"

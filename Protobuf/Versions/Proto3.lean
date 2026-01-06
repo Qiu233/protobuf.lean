@@ -1,7 +1,6 @@
 module
 
-import Protobuf.Notation
-public import Protobuf.Internal.Desc
+import Protobuf.Notation.Syntax
 public import Protobuf.Utils
 public import Protobuf.Versions.Basic
 
@@ -214,7 +213,10 @@ private def field_modifier? (field : FieldDescriptorProto) : M (Option (TSyntax 
 private def field_options? (field : FieldDescriptorProto) : M (Option (TSyntax ``options)) := do
   let mut entries := #[]
   if let some packed := field.options&.packed then
-    entries := entries.push (← `(options_entry| packed = $(quote packed)))
+    let stx ← match packed with
+      | true => `(options_value| true)
+      | false => `(options_value| false)
+    entries := entries.push (← `(options_entry| packed = $stx))
   else
     if let some type := field.type then
       unless type matches .TYPE_STRING | .TYPE_GROUP | .TYPE_MESSAGE | .TYPE_BYTES do

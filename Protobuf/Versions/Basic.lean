@@ -1,6 +1,6 @@
 module
 
-import Protobuf.Notation
+import Lean.Data.NameTrie
 public import Protobuf.Internal.Desc
 
 open System Lean

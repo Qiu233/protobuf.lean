@@ -1,7 +1,6 @@
 module
 
-import Protobuf.Notation
-public import Protobuf.Internal.Desc
+import Protobuf.Notation.Syntax
 public import Protobuf.Utils
 public import Protobuf.Versions.Basic
 
@@ -303,7 +302,10 @@ private def is_packable (field : FieldDescriptorProto) : M Bool := do
 private def field_options? (field : FieldDescriptorProto) (features : ResolvedFeatures) : M (Option (TSyntax ``options)) := do
   let mut entries := #[]
   if let some packed := field.options&.packed then
-    entries := entries.push (← `(options_entry| packed = $(quote packed)))
+    let stx ← match packed with
+      | true => `(options_value| true)
+      | false => `(options_value| false)
+    entries := entries.push (← `(options_entry| packed = $stx))
   else
     let label := field.label.getD .LABEL_OPTIONAL
     if label == .LABEL_REPEATED && (← is_packable field) then

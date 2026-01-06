@@ -7,6 +7,7 @@ public meta import Protobuf.Notation.Basic
 public import Protobuf.Notation.Enum
 public import Protobuf.Notation.Message
 public import Lean
+import Protobuf.Notation.Syntax
 
 public meta section
 
@@ -15,10 +16,6 @@ namespace Protobuf.Notation
 open Encoding Notation
 
 open Lean Meta Elab Term Command
-
-syntax proto_decl := enumDec <|> messageDec <|> oneofDec
-
-syntax (name := proto_mutual_stx) "proto_mutual " "{" ppLine (proto_decl ppLine)* "}" : command
 
 @[scoped command_elab proto_mutual_stx]
 public def elabProtoMutual : CommandElab := fun stx => do

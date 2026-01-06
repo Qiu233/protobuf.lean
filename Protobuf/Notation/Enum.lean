@@ -5,6 +5,7 @@ public meta import Protobuf.Notation.Basic
 import Protobuf.Encoding.Builder
 import Protobuf.Encoding.Unwire
 public meta import Protobuf.Utils
+import Protobuf.Notation.Syntax
 
 public meta section
 
@@ -22,10 +23,6 @@ public def getProtoEnums [Monad m] [MonadEnv m] : m NameSet := do
 public def isProtoEnum [Monad m] [MonadEnv m] (x : Name) : m Bool := do
   let env ← getEnv
   return protoEnumAttr.hasTag env x
-
-syntax enum_entry := ident " = " num ";"
-
-syntax (name := enumDec) "enum " ident (options)? " {" ppLine (enum_entry ppLine)* "}" : command
 
 private def construct_builder (name : Ident) (push_name : String → Ident) (toInt32 : Ident) : CommandElabM (Ident × Command) := do
   let val ← mkIdent <$> mkFreshUserName `val

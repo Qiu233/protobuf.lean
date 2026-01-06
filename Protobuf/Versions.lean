@@ -1,6 +1,6 @@
 module
 
-import Protobuf.Notation
+import Lean.Data.KVMap
 public import Protobuf.Versions.Editions
 public import Protobuf.Versions.Proto2
 public import Protobuf.Versions.Proto3
@@ -37,14 +37,3 @@ def compile_proto (desc : FileDescriptorSet) : M (Array Command) := do
         throw s!"{stx} is not supported yet"
     else
       Proto2.compile_file file
-
-private def renderCommands (cmds : Array Command) : IO String := do
-  unsafe Lean.enableInitializersExecution
-  let env ← Lean.importModules #[`Protobuf.Notation] {} (loadExts := true)
-  let ctx : Core.Context := { fileName := "<proto>", fileMap := default }
-  let st : Core.State := { env := env }
-  let mut out := ""
-  for cmd in cmds do
-    let (fmt, _) ← (Lean.PrettyPrinter.ppCommand cmd).toIO ctx st
-    out := out ++ fmt.pretty ++ "\n\n"
-  return out

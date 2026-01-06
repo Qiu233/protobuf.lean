@@ -2,6 +2,8 @@ module
 
 public import Lean
 import Protobuf.Utils
+import Protobuf.Notation.Syntax
+
 
 /-!
 # DESIGN NOTE
@@ -49,8 +51,8 @@ meta def mkFreshUserName (n : Name) : CommandElabM Name := do
     MonadQuotation.addMacroScope n
 
 structure Options where
-  raw : Array (Ident × Term)
-  entries : Std.HashMap Name (Array Term)
+  raw : Array (Ident × TSyntax `options_value)
+  entries : Std.HashMap Name (Array (TSyntax `options_value))
 deriving Inhabited, Repr
 
 -- TODO: maybe force this?
@@ -64,18 +66,18 @@ private def Options.recognized : Array Name :=
   ]
 
 @[always_inline]
-private def Options.zip : Array Ident → Array Term → Options := fun name val =>
+private def Options.zip : Array Ident → Array (TSyntax `options_value) → Options := fun name val =>
   let raw := name.zip val
   let entries := raw.map (fun (x, v) => (x.getId, v)) |>.groupKeyed
   { raw, entries }
 
 @[always_inline]
-local instance : GetElem? Options Name (Array Term) (fun options name => name ∈ options.entries) where
+local instance : GetElem? Options Name (Array (TSyntax `options_value)) (fun options name => name ∈ options.entries) where
   getElem xs i h := xs.entries[i]
   getElem? xs i := xs.entries[i]?
 
 @[always_inline]
-private def Options.first? (options : Options) (x : Name) : Option Term :=
+private def Options.first? (options : Options) (x : Name) : Option (TSyntax `options_value) :=
   if let some xs := options[x]? then
     xs[0]?
   else
@@ -84,12 +86,8 @@ private def Options.first? (options : Options) (x : Name) : Option Term :=
 @[always_inline]
 private def Options.is_true? (options : Options) (x : Name) : Option Bool :=
   if let some y := options.first? x then
-    y matches `(true)
+    y matches `(options_value| true)
   else none
-
-syntax options_entry := ident " = " term
-
-syntax options := "[" options_entry,*,? "]"
 
 @[always_inline]
 def Options.parse : TSyntax ``options → Options
