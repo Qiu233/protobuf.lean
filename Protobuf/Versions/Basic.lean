@@ -111,14 +111,14 @@ def registerType (raw : String) : M Unit := do
 def reservedFieldNames : List String :=
   [ "toMessage"
   , "fromMessage"
-  , "fromMessage?"
+  , "fromMessage?" -- invalid protobuf name
   , "builder"
   , "merge"
-  , "decoder?"
+  , "decoder?" -- invalid protobuf name
   , "decoder_rep"
   , "decoder_rep_packed"
-  , "Default"
-  , "Unknown.Fields"
+  , "Default.Value" -- invalid protobuf name
+  , "Unknown.Fields" -- invalid protobuf name
   , "encode"
   , "decode"
   ]
@@ -127,11 +127,11 @@ def reservedEnumValueNames : List String :=
   [ "toInt32"
   , "fromInt32"
   , "builder"
-  , "decoder?"
+  , "decoder?" -- invalid protobuf name
   , "decoder_rep"
   , "decoder_rep_packed"
-  , "Default"
-  , "Unknown"
+  , "Default.Value" -- invalid protobuf name
+  , "Unknown.Value" -- invalid protobuf name
   ]
 
 def checkFieldName (name : String) : M Unit := do

@@ -20,7 +20,7 @@ Work in progress:
 
 There are 5 ways to use this library, and the first 4 can be mixed:
 
-1. Load a standalone .proto files.
+1. Load a standalone .proto file.
 2. Load a folder containing .proto files.
 3. Use the internal notation.
 4. Use the encoding/decoding utilities directly.
@@ -97,7 +97,7 @@ message A {
 #eval A.encode { a := #[1, 2, 3] }
 ```
 
-With this you can define messages in a very convenient and compact way, and don't need the `protoc` command to be present.
+With this you can define messages in a very convenient and compact way, and it does not require the `protoc` command to be present.
 
 ## Using encoding/decoding API
 Please read the source code under the folder `Encoding` to learn their usage.
@@ -106,9 +106,9 @@ This usage is highly unrecommended and should only serve for debugging purposes.
 
 ## As a protoc plugin
 
-This usage is highly uncommended, due to:
+This usage is highly unrecommended, due to:
 * Currently (v4.26.0) Lean 4 compiler does not prune the `meta` imports, causing executables to be exceedingly **huge (180 MiB)**.
-* When compiling multiple files, there is no clear way to generate correct `import XXX` statements, since it simultaneously depends on the input and out directory you specify in the `protoc` command (see `-I` and `--lean4_out` below). So we choose to **not generate them** and leave to users to complete after putting the generated .lean files to the location they want.
+* When compiling multiple files, there is no clear way to generate correct `import XXX` statements, since it simultaneously depends on the in/out directory you specify in the `protoc` command (see `-I` and `--lean4_out` below). So we choose to **not generate them** and leave to users to complete after putting the generated .lean files to the location they want.
 
 First prepare a folder to put the plugin, say `<folder>`.
 
