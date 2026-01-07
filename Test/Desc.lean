@@ -1,9 +1,9 @@
-import Protobuf.Internal
+import Protobuf.Internal.Desc
 import Protobuf.Encoding
 import Binary
 
 open Protobuf
-open Protobuf.Internal
+open Protobuf.Internal google.protobuf
 open Protobuf.Encoding
 open Binary
 open System
