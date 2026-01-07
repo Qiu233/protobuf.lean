@@ -1,33 +1,37 @@
 # protobuf
-`protobuf` is an implementation of google's protobuf in Lean 4, supporting `proto2`, `proto3`, and `edition`.
+`protobuf` is an implementation of Google's Protocol Buffers in Lean 4, supporting `proto2`, `proto3`, and `edition`.
+
+The goal of this package is to be the standard choice among all Lean 4 protobuf implementations. So far (1/7/2026), this packages has been fully featured in terms of **all core protobuf features** a user would expect.
 
 # Missing features
-
-❌Won't support:
-
-* Proto1 behaviors: e.g. option `message_set_wire_format` is forbidden.
-* EGROUP/SGROUP: the delimited encoding of message is not allowed, though we are able to parse them from wire format. The `edition` `features` enabling this are forbidden.
-* proto2 group fields: things like `repeated group Result = 1 { fields... }` are not allowed. Use nested message instead.
-
 
 Work in progress:
 
 1. Reflection API: e.g. function `descriptor : MsgType -> Descriptor`. The option `no_standard_descriptor_accessor` is currently ignored.
 2. Json mapping: designing, likely to be an add-on after we have reflection API.
 3. Service/RPC: we will need to think through frameworking issues first. Currently services are ignored.
+4. proto2 `default` option of fields.
+
+Less likely to have (some of them may never be supported):
+
+* Proto1 behaviors: e.g. option `message_set_wire_format` is forbidden.
+* EGROUP/SGROUP: the delimited serialization of message is not allowed, though we are able to deserialize them from wire format. The `edition` `features` enabling this are forbidden.
+* proto2 group fields: things like `repeated group Result = 1 { fields... }` are not allowed. Use nested message instead.
 
 # Usage
 
-There are 5 ways to use this library, and the first 4 can be mixed:
+There are 5 methods to use this library:
 
 1. Load a standalone .proto file.
 2. Load a folder containing .proto files.
-3. Use the internal notation.
-4. Use the encoding/decoding utilities directly.
-5. As a protoc plugin.
+3. As a protoc plugin.
+4. Use the internal notation.
+5. Use the encoding/decoding utilities directly.
 
-**To use in the first 2 ways, you must first install the `protoc` command.
+**The first 3 methods require the `protoc` command.
 The last tested `protoc` version is `libprotoc 30.2`.**
+
+Downstream users of this package can expect the first 3 methods to be always reliable and production ready. The first two methods are highly recommended for production use.
 
 ## Standalone .proto file
 
@@ -79,9 +83,30 @@ open Protobuf Encoding Notation
 ...
 ```
 
+## As a protoc plugin
+
+**Warning: Currently (v4.26.0) Lean 4 compiler does not prune the `meta` imports, causing executables to be exceedingly huge (180 MiB).**
+
+First prepare a folder to contain the plugin, say `<plugin_folder>`.
+
+```bash
+clone https://github.com/Lean-zh/protobuf.git
+cd protobuf
+lake build Plugin
+cp ./.lake/build/bin/protoc-gen-lean4 <plugin_folder>
+```
+
+Then create a Lean 4 project, with name `Foo`.
+
+```bash
+cd <root_of_Foo>
+mkdir Foo/Proto
+protoc --plugin=protoc-gen-lean4=<plugin_folder>/protoc-gen-lean4 --lean4_out=./Foo/Proto --lean4_opt=lean4_prefix=Foo.Proto -I <proto_files_search_path> <proto_file>
+```
+
 ## Internal notation
 
-**NOTE: the internal notation is protobuf-version-neutral, that is, you have to control very specific behavior of the encoding.**
+**NOTE: the internal notation is protobuf-version-neutral, that is, you have to specify very specific behaviors of the encoding.**
 
 One example is, in any lean source file:
 
@@ -103,19 +128,3 @@ With this you can define messages in a very convenient and compact way, and it d
 Please read the source code under the folder `Encoding` to learn their usage.
 
 This usage is highly unrecommended and should only serve for debugging purposes.
-
-## As a protoc plugin
-
-This usage is highly unrecommended, due to:
-* Currently (v4.26.0) Lean 4 compiler does not prune the `meta` imports, causing executables to be exceedingly **huge (180 MiB)**.
-* When compiling multiple files, there is no clear way to generate correct `import XXX` statements, since it simultaneously depends on the in/out directory you specify in the `protoc` command (see `-I` and `--lean4_out` below). So we choose to **not generate them** and leave to users to complete after putting the generated .lean files to the location they want.
-
-First prepare a folder to put the plugin, say `<folder>`.
-
-```bash
-clone https://github.com/Lean-zh/protobuf.git
-cd protobuf
-lake build Plugin
-cp ./.lake/build/bin/protoc-gen-lean4 <folder>
-protoc --plugin=protoc-gen-lean4=<folder>/protoc-gen-lean4 --lean4_out=<output_folder> -I=<input_folder> ...
-```
