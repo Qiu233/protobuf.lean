@@ -9,7 +9,7 @@ public section
 
 namespace Protobuf.Versions
 
-open Encoding Notation
+open Encoding Notation google.protobuf
 
 protected def packagePrefixRev (pkg : String) : List String :=
   let pkg := pkg.trim
@@ -134,13 +134,58 @@ def reservedEnumValueNames : List String :=
   , "Unknown.Value" -- invalid protobuf name
   ]
 
-def checkFieldName (name : String) : M Unit := do
+def sanitizeFieldName (name : String) : String :=
   if reservedFieldNames.contains name then
-    throw s!"{decl_name%}: field name `{name}` is reserved for code generation"
+    s!"{name}_"
+  else
+    name
 
-def checkEnumValueName (name : String) : M Unit := do
+def sanitizeEnumValueName (name : String) : String :=
   if reservedEnumValueNames.contains name then
-    throw s!"{decl_name%}: enum value name `{name}` is reserved for code generation"
+    s!"{name}_"
+  else
+    name
+
+def sanitizeFieldDescriptor (field : FieldDescriptorProto) : FieldDescriptorProto :=
+  match field.name with
+  | some name =>
+      let name' := sanitizeFieldName name
+      if name' == name then field else { field with name := some name' }
+  | none => field
+
+def sanitizeEnumValueDescriptor (value : EnumValueDescriptorProto) : EnumValueDescriptorProto :=
+  match value.name with
+  | some name =>
+      let name' := sanitizeEnumValueName name
+      if name' == name then value else { value with name := some name' }
+  | none => value
+
+def sanitizeEnumDescriptor (e : EnumDescriptorProto) : EnumDescriptorProto :=
+  { e with value := e.value.map sanitizeEnumValueDescriptor }
+
+partial def sanitizeDescriptor (msg : DescriptorProto) : DescriptorProto :=
+  { msg with
+    field := msg.field.map sanitizeFieldDescriptor
+    extension := msg.extension.map sanitizeFieldDescriptor
+    nested_type := msg.nested_type.map sanitizeDescriptor
+    enum_type := msg.enum_type.map sanitizeEnumDescriptor
+  }
+
+def sanitizeFileDescriptor (file : FileDescriptorProto) : FileDescriptorProto :=
+  { file with
+    message_type := file.message_type.map sanitizeDescriptor
+    enum_type := file.enum_type.map sanitizeEnumDescriptor
+    extension := file.extension.map sanitizeFieldDescriptor
+  }
+
+def sanitizeFileDescriptorSet (desc : FileDescriptorSet) : FileDescriptorSet :=
+  { desc with file := desc.file.map sanitizeFileDescriptor }
+
+def checkFieldName (name : String) : M String := do
+  return sanitizeFieldName name
+
+def checkEnumValueName (name : String) : M String := do
+  return sanitizeEnumValueName name
 
 @[always_inline]
 instance : MonadRef M where

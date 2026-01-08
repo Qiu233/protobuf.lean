@@ -15,6 +15,7 @@ namespace Protobuf.Versions
 open google.protobuf Encoding Notation
 
 def compile_proto (desc : FileDescriptorSet) : M (Array Command) := do
+  let desc := sanitizeFileDescriptorSet desc
   let names ← desc.file.mapM fun x => get!! x.name
   let deps := names.zip <| desc.file.map fun x => x.dependency
   let deps := Std.HashMap.ofList deps.toList

@@ -72,7 +72,6 @@ def compile_enum (e : EnumDescriptorProto) (features : ResolvedFeatures) : M Dec
   let vNames ← e.value.mapM fun v => do
     let name ← get!! v.name
     checkEnumValueName name
-    return name
   let vIds := vNames.map fun x => Lean.mkIdent (Name.mkStr1 x)
   let vNums ← e.value.mapM fun v => get!! v.number
   let vNumsQ := vNums.map fun x => quote x.toUInt32.toNat
@@ -339,7 +338,6 @@ private def compile_oneof (item : OneofItem) : M DeclOutput := do
   let names ← item.fields.mapM fun v => do
     let name ← get!! v.name
     checkFieldName name
-    return name
   let ids := names.map fun x => Lean.mkIdent (Name.mkStr1 x)
   for field in item.fields do
     ensure_oneof_field_ok field
@@ -376,7 +374,7 @@ partial def compile_message (item : MsgItem) : M DeclOutput := do
   let mut opts := #[]
   for field in item.normalFields do
     let name ← get!! field.name
-    checkFieldName name
+    let name ← checkFieldName name
     let fieldFeatures := merge_features item.features (field.options&.features)
     ensure_message_encoding_supported field fieldFeatures
     names := names.push name

@@ -7,7 +7,7 @@ meta import Protobuf.Elab
 import Binary.Hex
 
 open Binary
-open Protobuf Encoding Internal Notation
+open Protobuf Encoding Notation
 
 local instance : Repr ByteArray where
   reprPrec x p := reprPrec x.data p
@@ -22,9 +22,6 @@ local instance : Repr ByteArray where
 
 set_option protobuf.trace.descriptor true
 set_option protobuf.trace.notation true
-
--- #load_proto_file "Test/B.proto"
-#load_proto_file "Test/official/google/protobuf/descriptor.proto"
 
 #check google.protobuf.Edition.EDITION_2023
 

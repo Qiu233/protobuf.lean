@@ -7,4 +7,5 @@ package test.a;
 message BM {
     A a = 1;
     map<int32, int32> s = 4;
+    int32 encode = 3;
 }
