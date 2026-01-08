@@ -7,7 +7,7 @@ meta import Protobuf.Elab
 import Protobuf.Notation.Syntax
 import Protobuf.Versions
 
-open Protobuf Encoding Notation Internal
+open Protobuf Encoding Notation
 open Lean
 
 section

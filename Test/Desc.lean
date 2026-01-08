@@ -3,7 +3,7 @@ import Protobuf.Encoding
 import Binary
 
 open Protobuf
-open Protobuf.Internal google.protobuf
+open google.protobuf
 open Protobuf.Encoding
 open Binary
 open System

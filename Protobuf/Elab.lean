@@ -16,20 +16,20 @@ public meta register_option protobuf.trace.descriptor : Bool := { defValue := fa
 syntax (name := loadProtoFileCommand) "#load_proto_file " str : command
 syntax (name := loadProtoDirCommand) "#load_proto_dir " str : command
 
-meta def read_proto (srcFile : FilePath) : ExceptT String IO Protobuf.Internal.google.protobuf.FileDescriptorSet := do
+meta def read_proto (srcFile : FilePath) : ExceptT String IO google.protobuf.FileDescriptorSet := do
   let bin ← IO.FS.withTempFile fun h tmp => do
     _ ← IO.Process.run { cmd := "protoc", args := #[srcFile.toString, "--descriptor_set_out", tmp.toString] }
     h.readBinToEnd -- TODO: may be too large, make it incremental
   let data ← match (Binary.Get.run (Binary.getThe Encoding.Message) bin |>.toExcept) with
     | .ok data => pure data
     | .error e => throw s!"failed to parse protoc output: {e}"
-  let desc ← match Protobuf.Internal.google.protobuf.FileDescriptorSet.fromMessage data with
+  let desc ← match google.protobuf.FileDescriptorSet.fromMessage data with
     | .ok d => pure d
     | .error e => throw s!"failed to parse protoc output: {e}"
   return desc
 
 meta def read_proto_files (srcFiles : Array FilePath) (protoPath : FilePath) :
-    ExceptT String IO Protobuf.Internal.google.protobuf.FileDescriptorSet := do
+    ExceptT String IO google.protobuf.FileDescriptorSet := do
   if srcFiles.isEmpty then
     throw "no .proto files found in directory"
   let bin ← IO.FS.withTempFile fun h tmp => do
@@ -40,7 +40,7 @@ meta def read_proto_files (srcFiles : Array FilePath) (protoPath : FilePath) :
   let data ← match (Binary.Get.run (Binary.getThe Encoding.Message) bin |>.toExcept) with
     | .ok data => pure data
     | .error e => throw s!"failed to parse protoc output: {e}"
-  let desc ← match Protobuf.Internal.google.protobuf.FileDescriptorSet.fromMessage data with
+  let desc ← match google.protobuf.FileDescriptorSet.fromMessage data with
     | .ok d => pure d
     | .error e => throw s!"failed to parse protoc output: {e}"
   return desc

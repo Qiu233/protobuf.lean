@@ -9,7 +9,7 @@ public section
 
 namespace Protobuf.Versions
 
-open Internal Encoding Notation
+open Encoding Notation
 
 protected def packagePrefixRev (pkg : String) : List String :=
   let pkg := pkg.trim
