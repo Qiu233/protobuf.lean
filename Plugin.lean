@@ -181,6 +181,7 @@ def generate_code (request : CodeGeneratorRequest) : ExceptT String IO CodeGener
       [ "module"
       , ""
       , "public import Protobuf.Encoding"
+      , "public import Protobuf.Base64"
       , "meta import Protobuf.Notation"
       , String.intercalate "\n" importLines
       , ""

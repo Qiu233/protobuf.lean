@@ -10,7 +10,6 @@ Work in progress:
 1. Reflection API: e.g. function `descriptor : MsgType -> Descriptor`. The option `no_standard_descriptor_accessor` is currently ignored.
 2. Json mapping: designing, likely to be an add-on after we have reflection API.
 3. Service/RPC: we will need to think through frameworking issues first. Currently services are ignored.
-4. proto2 `default` option of fields.
 
 Less likely to have (some of them may never be supported):
 

@@ -63,6 +63,7 @@ private def Options.recognized : Array Name :=
 
     --
     `wired_as_group,
+    `default,
   ]
 
 @[always_inline]
@@ -113,6 +114,9 @@ def Options.allow_alias? (options : Options) : Option Bool := options.is_true? `
 
 @[always_inline]
 def Options.wired_as_group? (options : Options) : Option Bool := options.is_true? `wired_as_group
+
+@[always_inline]
+def Options.default? (options : Options) : Option (TSyntax `options_value) := options.first? `default
 
 structure ProtobufDeclBlock where
   decls : Array Command := #[]

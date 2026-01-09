@@ -1,6 +1,7 @@
 module
 
 public import Std
+import Protobuf.Base64
 
 @[expose] public section
 

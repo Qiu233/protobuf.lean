@@ -30,3 +30,11 @@ set_option protobuf.trace.notation true
 
 #load_proto_file "Test/tmp_editions_req.proto"
 #check demo.Foo.encode
+
+message A {
+  optional int32 v = 1 [default = 1];
+}
+
+#eval A.«Default.Value»
+#eval default (α := A)
+#eval { : A}

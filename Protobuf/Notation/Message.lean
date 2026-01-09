@@ -3,6 +3,7 @@ module
 import Protobuf.Encoding
 import Protobuf.Encoding.Builder
 import Protobuf.Encoding.Unwire
+import Protobuf.Utils
 public meta import Protobuf.Notation.Basic
 public import Protobuf.Notation.Enum
 public import Lean
@@ -54,7 +55,7 @@ inductive Modifier where
   | optional
   | repeated
   | required
-deriving Inhabited
+deriving Inhabited, BEq
 
 instance : ToString Modifier where
   toString
@@ -223,7 +224,7 @@ inductive LeanShape where
   | option
   | array
   | map
-deriving Inhabited
+deriving Inhabited, BEq
 
 structure MapFieldMData where
   key_proto_type : Ident
@@ -267,6 +268,54 @@ structure ProtoFieldMData where
   decoder_rep? : Option Ident
   decoder_rep_packed? : Option Ident
 deriving Inhabited
+
+private def optionsValueToNumericTerm [Monad m] [MonadQuotation m] [MonadError m] [MonadRef m] [AddMessageContext m]
+    (field_name : Ident) (v : TSyntax `options_value) : m Term := do
+  match v with
+  | `(options_value| $x:scientific) => `($x:scientific)
+  | `(options_value| -$x:scientific) => `(-$x:scientific)
+  | `(options_value| +$x:scientific) => `($x:scientific)
+  | `(options_value| $x:num) => `($x:num)
+  | `(options_value| -$x:num) => `(-$x:num)
+  | `(options_value| +$x:num) => `($x:num)
+  | _ => throwErrorAt field_name "default option expects a numeric literal"
+
+private def optionsValueToTerm [Monad m] [MonadQuotation m] [MonadError m] [MonadRef m] [AddMessageContext m]
+    (field_name : Ident) (lean_shape : LeanShape) (proto_type : Ident) (internal_type : InternalType) (v : TSyntax `options_value) : m Term := do
+  match internal_type with
+  | .bool =>
+      match v with
+      | `(options_value| true) => `(true)
+      | `(options_value| false) => `(false)
+      | _ => throwErrorAt field_name "default option expects a boolean literal"
+  | .string =>
+      match v with
+      | `(options_value| $s:str) => `(Base64.decodeBase64String! $s)
+      | _ => throwErrorAt field_name "default option expects a string literal"
+  | .bytes =>
+      match v with
+      | `(options_value| $s:str) => `(Base64.decode! $s)
+      | _ => throwErrorAt field_name "default option expects a string literal"
+  | .double | .float =>
+      match v with
+      | `(options_value| $x:ident) => `($x:ident)
+      | _ => optionsValueToNumericTerm field_name v
+  | _ => optionsValueToNumericTerm field_name v
+
+private def defaultOverride? [Monad m] [MonadQuotation m] [MonadError m] [MonadRef m] [AddMessageContext m]
+    (field_name : Ident) (lean_shape : LeanShape) (proto_type : Ident) (internal_type? : Option InternalType) (enum_type? : Option Name)
+    (options : Options) : m (Option Term) := do
+  let some v := options.default? | return none
+  if let some internal_type := internal_type? then
+    some <$> optionsValueToTerm field_name lean_shape proto_type internal_type v
+  else if enum_type?.isSome then
+    match v with
+    | `(options_value| $x:ident) =>
+        let term := mkIdentFrom proto_type (proto_type.getId.append x.getId)
+        return some term
+    | _ => throwErrorAt field_name "default option expects an enum value identifier"
+  else
+    throwErrorAt field_name "default option is only supported for scalar or enum fields"
 
 def computeMData.map [Monad m] [MonadQuotation m] [MonadError m] [MonadEnv m] [MonadOptions m] [MonadLog m] [MonadRef m] [AddMessageContext m] [MonadResolveName m]
     (mutEnums mutOneofs messages : NameSet) (_name : Ident)
@@ -424,15 +473,32 @@ def computeMData.ordinary [Monad m] [MonadQuotation m] [MonadError m] [MonadEnv 
     else none
   let decoder_rep? ← internal_type?.mapM InternalType.decoder_rep
   let decoder_rep? := if oneof_type?.isSome then none else some <| decoder_rep?.getD (mkIdentFrom proto_type (proto_type.getId.str "decoder_rep"))
-  let default_lean_value ← match lean_shape with
+  let default_override? ← defaultOverride? field_name lean_shape proto_type internal_type? enum_type? options
+  if default_override?.isSome && mod? == Modifier.repeated then
+    throwErrorAt field_name "default option is not allowed for repeated fields"
+  let default_lean_value_base ← match lean_shape with
     | .strict =>
       if internal_type?.isSome then `(Inhabited.default)
       else pure (mkIdentFrom proto_type (proto_type.getId.str "Default.Value"))
     | .option => `(Option.none) -- oneofs always go here
     | .array => `(#[])
     | .map => unreachable!
-  let default_ctor_value ← computeMData.ordinary.computeCtorValue name internal_type? lean_shape enum_type? proto_type
-  let test_unset ← computeMData.ordinary.computeTestUnset name internal_type? lean_shape enum_type? proto_type
+  let default_ctor_value_base ← computeMData.ordinary.computeCtorValue name internal_type? lean_shape enum_type? proto_type
+  let test_unset_base ← computeMData.ordinary.computeTestUnset name internal_type? lean_shape enum_type? proto_type
+  let (default_lean_value, default_ctor_value, test_unset) ← do
+    match default_override? with
+    | some default_term =>
+        match lean_shape with
+        | .strict =>
+          let test_unset_override ← `((· == $default_term))
+          pure (default_term, default_term, test_unset_override)
+        | .option =>
+          let wrapped ← `(Option.some $default_term)
+          pure (wrapped, wrapped, test_unset_base)
+        | _ =>
+          pure (default_lean_value_base, default_ctor_value_base, test_unset_base)
+    | none =>
+        pure (default_lean_value_base, default_ctor_value_base, test_unset_base)
   return {
     mod := mod?,
     proto_type,
@@ -633,7 +699,7 @@ private def construct_builder (name : Ident) (push_name : String → Ident) (toM
 private def construct_fromMessage (name : Ident) (push_name : String → Ident) (fields : Array ProtoFieldMData) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let ns := fields.map ProtoFieldMData.field_num
-  let decoder ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, field_name, field_proj, field_num, options, internal_type?, enum_type?, oneof_type?, decoder??, decoder_rep?, decoder_rep_packed?, fromMessage??, map_info?, ..} => do
+  let decoder ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, field_name, field_proj, field_num, options, internal_type?, enum_type?, oneof_type?, default_lean_value, decoder??, decoder_rep?, decoder_rep_packed?, fromMessage??, map_info?, ..} => do
     let var ← mkIdent <$> mkFreshUserName (field_name.getId)
     if let some map_info := map_info? then
       let key_decoder? := map_info.key_decoder?
@@ -665,7 +731,7 @@ private def construct_fromMessage (name : Ident) (push_name : String → Ident) 
       let stx ← match mod with
         | .default =>
           if internal_type?.isSome || enum_type?.isSome then
-            `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num <&> (fun x => Option.getD x Inhabited.default)))
+            `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num <&> (fun x => Option.getD x $default_lean_value)))
           else
             `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num))
         | .required =>

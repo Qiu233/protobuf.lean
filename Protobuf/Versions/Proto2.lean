@@ -1,6 +1,7 @@
 module
 
 import Protobuf.Notation.Syntax
+import Protobuf.Base64
 public import Protobuf.Utils
 public import Protobuf.Versions.Basic
 
@@ -202,6 +203,71 @@ private def field_modifier? (field : FieldDescriptorProto) : M (Option (TSyntax 
   | .LABEL_REQUIRED => some <$> `(message_entry_modifier| required)
   | .LABEL_OPTIONAL => some <$> `(message_entry_modifier| optional)
 
+private def options_value_of_number (raw : String) : M (TSyntax `options_value) := do
+  let raw := raw.trim
+  let (sign?, body) :=
+    if raw.startsWith "-" then (some '-', raw.drop 1)
+    else if raw.startsWith "+" then (some '+', raw.drop 1)
+    else (none, raw)
+  let is_scientific :=
+    body.contains '.' || body.contains 'e' || body.contains 'E' || body == "inf" || body == "nan"
+  if is_scientific then
+    let lit : TSyntax `scientific := ⟨Lean.Syntax.mkScientificLit body⟩
+    match sign? with
+    | some '-' => `(options_value| -$lit:scientific)
+    | some '+' => `(options_value| +$lit:scientific)
+    | none => `(options_value| $lit:scientific)
+    | some _ => throw s!"{decl_name%}: internal error: unexpected sign character"
+  else
+    let lit : TSyntax `num := ⟨Lean.Syntax.mkNumLit body⟩
+    match sign? with
+    | some '-' => `(options_value| -$lit:num)
+    | some '+' => `(options_value| +$lit:num)
+    | none => `(options_value| $lit:num)
+    | some _ => throw s!"{decl_name%}: internal error: unexpected sign character"
+
+private def field_default_option? (field : FieldDescriptorProto) : M (Option (TSyntax ``options_entry)) := do
+  let some raw_value := field.default_value | return none
+  let t ← get!! field.type
+  let raw_value := raw_value.trim
+  let value ← match t with
+    | .TYPE_STRING =>
+        let b64 := Protobuf.Base64.encode raw_value.toUTF8
+        let lit : TSyntax `str := ⟨Lean.Syntax.mkStrLit b64⟩
+        `(options_value| $lit:str)
+    | .TYPE_BYTES =>
+        let b64 := Protobuf.Base64.encode raw_value.toUTF8
+        let lit : TSyntax `str := ⟨Lean.Syntax.mkStrLit b64⟩
+        `(options_value| $lit:str)
+    | .TYPE_BOOL =>
+        match raw_value with
+        | "true" => `(options_value| true)
+        | "false" => `(options_value| false)
+        | _ => throw s!"{decl_name%}: invalid boolean default value '{raw_value}'"
+    | .TYPE_ENUM =>
+        let id := Lean.mkIdent (Name.mkStr1 raw_value)
+        `(options_value| $id:ident)
+    | .TYPE_DOUBLE
+    | .TYPE_FLOAT
+    | .TYPE_INT64
+    | .TYPE_UINT64
+    | .TYPE_INT32
+    | .TYPE_FIXED64
+    | .TYPE_FIXED32
+    | .TYPE_UINT32
+    | .TYPE_SFIXED32
+    | .TYPE_SFIXED64
+    | .TYPE_SINT32
+    | .TYPE_SINT64 =>
+        options_value_of_number raw_value
+    | .TYPE_MESSAGE =>
+        throw s!"{decl_name%}: default option is not supported for message types"
+    | .TYPE_GROUP =>
+        throw s!"{decl_name%}: groups are not supported"
+    | .«Unknown.Value» _ =>
+        throw s!"{decl_name%}: unknown field type"
+  some <$> `(options_entry| default = $value)
+
 private def field_options? (field : FieldDescriptorProto) : M (Option (TSyntax ``options)) := do
   let mut entries := #[]
   if let some packed := field.options&.packed then
@@ -209,6 +275,8 @@ private def field_options? (field : FieldDescriptorProto) : M (Option (TSyntax `
       | true => `(options_value| true)
       | false => `(options_value| false)
     entries := entries.push (← `(options_entry| packed = $stx))
+  if let some default_entry ← field_default_option? field then
+    entries := entries.push default_entry
   if !! field.options&.deprecated then
     entries := entries.push (← `(options_entry| deprecated = true))
   if entries.isEmpty then
