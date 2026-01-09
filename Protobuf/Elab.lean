@@ -12,13 +12,15 @@ public meta register_option protobuf.trace.notation : Bool := { defValue := fals
 
 public meta register_option protobuf.trace.descriptor : Bool := { defValue := false }
 
+syntax inClause := " in " str
+
 /-- relative to package root -/
-syntax (name := loadProtoFileCommand) "#load_proto_file " str : command
+syntax (name := loadProtoFileCommand) "#load_proto_file " str (inClause)? : command
 syntax (name := loadProtoDirCommand) "#load_proto_dir " str : command
 
-meta def read_proto (srcFile : FilePath) : ExceptT String IO google.protobuf.FileDescriptorSet := do
+meta def read_proto (srcFile : FilePath) (protoPath : FilePath) : ExceptT String IO google.protobuf.FileDescriptorSet := do
   let bin ← IO.FS.withTempFile fun h tmp => do
-    _ ← IO.Process.run { cmd := "protoc", args := #[srcFile.toString, "--descriptor_set_out", tmp.toString] }
+    _ ← IO.Process.run { cmd := "protoc", args := #[srcFile.toString, "--descriptor_set_out", tmp.toString, s!"--proto_path={protoPath.toString}"] }
     h.readBinToEnd -- TODO: may be too large, make it incremental
   let data ← match (Binary.Get.run (Binary.getThe Encoding.Message) bin |>.toExcept) with
     | .ok data => pure data
@@ -60,13 +62,22 @@ meta partial def collect_proto_files (root : FilePath) : IO (Array FilePath) := 
 
 @[command_elab loadProtoFileCommand]
 public meta def elabLoadProtoFileCommand : CommandElab := fun stx => do
-  let `(loadProtoFileCommand| #load_proto_file $pathStx:str) := stx | throwUnsupportedSyntax
+  let `(loadProtoFileCommand| #load_proto_file $pathStx:str $[in $folderStx]?) := stx | throwUnsupportedSyntax
   let path := FilePath.mk pathStx.getString
   unless ← path.pathExists do
     throwErrorAt pathStx "file {path} does not exist"
   if ← path.isDir then
     throwErrorAt pathStx "path {path} is a directory"
-  let descExcept ← liftM (m := IO) <| read_proto path
+  let folder? ← folderStx.mapM fun (x : TSyntax `str) => do
+    let f := FilePath.mk x.getString
+    unless ← f.pathExists do
+      throwErrorAt x "file {f} does not exist"
+    if ← f.isDir then
+      throwErrorAt x "path {f} is a directory"
+    println! "{f}"
+    pure f
+  let protoPath ← (folder? <|> path.parent).getDM (throwError "failed to infer --proto_path")
+  let descExcept ← liftM (m := IO) <| read_proto path protoPath
   let desc ← match descExcept with
     | Except.ok d => pure d
     | Except.error e => throwError "{e}"
