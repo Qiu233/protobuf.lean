@@ -805,7 +805,7 @@ private def construct_default (name : Ident) (push_name : String → Ident) (fie
 private def construct_encode (name : Ident) (push_name : String → Ident) (toMessage : Ident) : CommandElabM (Ident × Command) := do
   let encodeId := push_name "encode"
   let s ← `(partial def $encodeId:ident : $name → Except Encoding.ProtoError ByteArray := fun x => do
-    return Binary.Put.run 128 (Binary.put (← $toMessage x)))
+    return Binary.Put.run (Binary.put (← $toMessage x)))
   return (encodeId, s)
 
 private def construct_decode (name : Ident) (push_name : String → Ident) (fromMessage : Ident) : CommandElabM (Ident × Command) := do

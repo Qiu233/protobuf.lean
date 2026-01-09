@@ -18,7 +18,7 @@ def Message.push (msg : Message) (r : Record) : Message := {msg with records := 
 def Message.set (msg : Message) (fieldNum : Nat) (value : ProtoVal) : Message := msg.push { fieldNum, value }
 
 @[always_inline]
-def ProtoVal.ofMessage : Message → Except Protobuf.Encoding.ProtoError ProtoVal := fun s => return ProtoVal.LEN (Put.run 128 (put s))
+def ProtoVal.ofMessage : Message → Except Protobuf.Encoding.ProtoError ProtoVal := fun s => return ProtoVal.LEN (Put.run (put s))
 
 @[always_inline]
 def ProtoVal.ofString : String → Except Protobuf.Encoding.ProtoError ProtoVal := fun s => return ProtoVal.LEN s.toUTF8
@@ -81,7 +81,7 @@ private def put_packed! : ProtoVal → Put
 @[always_inline]
 def ProtoVal.of_packed : Array ProtoVal → ProtoVal := fun xs =>
   assert! xs.all ProtoVal.canBePacked
-  let data := Binary.Put.run 128 do
+  let data := Binary.Put.run do
     xs.forM put_packed!
   ProtoVal.LEN data
 
