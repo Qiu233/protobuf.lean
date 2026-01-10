@@ -20,10 +20,6 @@ open Lean Meta Elab Term Command
 @[scoped command_elab proto_mutual_stx]
 public def elabProtoMutual : CommandElab := fun stx => do
   let `(proto_mutual_stx| proto_mutual { $ds* }) := stx | throwUnsupportedSyntax
-  let enums := NameSet.ofArray <| ds.filterMap fun x =>
-    match x with
-    | `(proto_decl| enum $name $[$opts?]? { $[$e = $n;]* }) => some name.getId
-    | _ => none
   let oneofs := NameSet.ofArray <| ds.filterMap fun x =>
     match x with
     | `(proto_decl| oneof $name { $[$[$mod]? $t' $n = $fidx $[$optionsStx]? ;]* }) => some name.getId
@@ -35,9 +31,9 @@ public def elabProtoMutual : CommandElab := fun stx => do
   let r ← ds.mapM fun x => do
     let inner := x.raw[0]
     match inner.getKind with
-    | ``enumDec => elabEnumDecCore inner
-    | ``messageDec => elabMessageDecCore enums oneofs messages inner
-    | ``oneofDec => elabOneofDecCore enums oneofs messages inner
+    | ``enumDec => throwErrorAt inner "enums cannot be inside proto_mutual"
+    | ``messageDec => elabMessageDecCore {} oneofs messages inner
+    | ``oneofDec => elabOneofDecCore {} oneofs messages inner
     | _ => throwErrorAt x "invalid kind"
   let block := r.foldl (init := (default : ProtobufDeclBlock)) ProtobufDeclBlock.merge
   -- runTermElabM fun _ => do

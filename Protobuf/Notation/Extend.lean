@@ -47,38 +47,38 @@ private def elabExtendField (extendee : Ident) (x : ProtoFieldMData) : CommandEl
   let vals ← mkIdent <$> mkFreshUserName `vals
   let getCmd ←
     if isRepeated then
-      `(def $getId:ident : $extendeeId → Except Protobuf.Encoding.ProtoError (Array $leanType) := fun $msg => do
+      `(partial def $getId:ident : $extendeeId → Except Protobuf.Encoding.ProtoError (Array $leanType) := fun $msg => do
         let $wire:ident := Protobuf.Encoding.Message.wire_map Protobuf.Encoding.Message.empty ($unknownAccessor $msg)
         $decoderRep:ident $wire $fieldNumTerm
         )
     else
-      `(def $getId:ident : $extendeeId → Except Protobuf.Encoding.ProtoError (Option $leanType) := fun $msg => do
+      `(partial def $getId:ident : $extendeeId → Except Protobuf.Encoding.ProtoError (Option $leanType) := fun $msg => do
         let $wire:ident := Protobuf.Encoding.Message.wire_map Protobuf.Encoding.Message.empty ($unknownAccessor $msg)
         $decoder?:ident $wire $fieldNumTerm
         )
   let setCmd ←
     if isRepeated then
       if packed then
-        `(def $setId:ident : $extendeeId → Array $leanType → Except Protobuf.Encoding.ProtoError $extendeeId := fun $msg $vals => do
+        `(partial def $setId:ident : $extendeeId → Array $leanType → Except Protobuf.Encoding.ProtoError $extendeeId := fun $msg $vals => do
           let $vals:ident ← Array.mapM $builder $vals
           let $vals:ident := #[Protobuf.Encoding.ProtoVal.of_packed $vals]
           let $map:ident := ($unknownAccessor $msg).insert $fieldNumTerm $vals
           return { $msg with $unknownFieldId:ident := $map }
           )
       else
-        `(def $setId:ident : $extendeeId → Array $leanType → Except Protobuf.Encoding.ProtoError $extendeeId := fun $msg $vals => do
+        `(partial def $setId:ident : $extendeeId → Array $leanType → Except Protobuf.Encoding.ProtoError $extendeeId := fun $msg $vals => do
           let $vals:ident ← Array.mapM $builder $vals
           let $map:ident := ($unknownAccessor $msg).insert $fieldNumTerm $vals
           return { $msg with $unknownFieldId:ident := $map }
           )
     else
-      `(def $setId:ident : $extendeeId → $leanType → Except Protobuf.Encoding.ProtoError $extendeeId := fun $msg $val => do
+      `(partial def $setId:ident : $extendeeId → $leanType → Except Protobuf.Encoding.ProtoError $extendeeId := fun $msg $val => do
         let $val:ident ← $builder:ident $val
         let $map:ident := ($unknownAccessor $msg).insert $fieldNumTerm #[$val]
         return { $msg with $unknownFieldId:ident := $map }
         )
   let hasCmd ←
-    `(def $hasId:ident : $extendeeId → Bool := fun $msg =>
+    `(partial def $hasId:ident : $extendeeId → Bool := fun $msg =>
       ((($unknownAccessor $msg)[$fieldNumTerm]?).isSome))
   return #[getCmd, setCmd, hasCmd]
 
