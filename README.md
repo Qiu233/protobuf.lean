@@ -3,20 +3,6 @@
 
 The goal of this package is to be the standard choice among all Lean 4 protobuf implementations. So far (1/7/2026), this packages has been fully featured in terms of **all core protobuf features** a user would expect.
 
-# Missing features
-
-Work in progress:
-
-1. Reflection API: e.g. function `descriptor : MsgType -> Descriptor`. The option `no_standard_descriptor_accessor` is currently ignored.
-2. Json mapping: designing, likely to be an add-on after we have reflection API.
-3. Service/RPC: we will need to think through frameworking issues first. Currently services are ignored.
-
-Less likely to have (some of them may never be supported):
-
-* Proto1 behaviors: e.g. option `message_set_wire_format` is forbidden.
-* EGROUP/SGROUP: the delimited serialization of message is not allowed, though we are able to deserialize them from wire format. The `edition` `features` enabling this are forbidden.
-* proto2 group fields: things like `repeated group Result = 1 { fields... }` are not allowed. Use nested message instead.
-
 # Usage
 
 There are 5 methods to use this library:
@@ -71,7 +57,7 @@ instance : Repr ByteArray where
 #eval test.a.Q.encode { q := test.a.Q.q_Type.a { t := some 1 } }
 ```
 
-## A folder of protobuf files
+## A folder of .proto files
 
 ```lean
 import Protobuf
@@ -127,3 +113,42 @@ With this you can define messages in a very convenient and compact way, and it d
 Please read the source code under the folder `Encoding` to learn their usage.
 
 This usage is highly unrecommended and should only serve for debugging purposes.
+
+# Missing features
+
+Work in progress:
+
+1. Reflection API: e.g. function `descriptor : MsgType -> Descriptor`. The option `no_standard_descriptor_accessor` is currently ignored.
+2. Json mapping: designing, likely to be an add-on after we have reflection API.
+3. Service/RPC: we will need to think through frameworking issues first. Currently services are ignored.
+
+## Less likely to have
+Some of them may never be supported:
+
+### -Proto1 behaviors
+`proto1` has been too old and is not worth an implementation.
+For example, option `message_set_wire_format` is forbidden.
+
+
+### -SGROUP/EGROUP in serialization 
+The delimited serialization of message is not allowed, though they can be deserialized from wire format. The `edition` `features` enabling this are forbidden.
+
+Note: It is indiscernible to an end user whether the wire format of a submessage is delimited or nested, since all protobuf implementations are expected to parse both, and so is this package.
+
+Thus the absence of this feature does not affect protobuf functionality in an observable way.
+### -Group fields
+Only `proto2` allows group fields, for example:
+```protobuf
+repeated group Result = 1 { fields... }
+```
+
+This is forbidden. Use nested messages instead.
+
+### -Options of extension fields
+For example:
+```protobuf
+extend A {
+  optional int32 a = 42 [default = 1];
+}
+```
+The `default` option (and other options) of `extend`ed field `a` has no effects.
