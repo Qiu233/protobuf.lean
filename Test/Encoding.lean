@@ -28,12 +28,18 @@ set_option protobuf.trace.notation true
 
 #check String.fromUTF8
 
-#load_proto_file "Test/tmp_editions_req.proto"
-#check demo.Foo.encode
+-- #load_proto_file "Test/tmp_editions_req.proto"
+-- #check demo.Foo.encode
 
 message A {
   optional int32 v = 1 [default = 1];
 }
+
+extend A {
+  optional int32 w = 2 [default = 2];
+}
+
+#check A.has_w
 
 #eval A.«Default.Value»
 #eval default (α := A)

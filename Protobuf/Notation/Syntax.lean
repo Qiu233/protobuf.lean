@@ -40,6 +40,8 @@ syntax (name := messageDec) "message " ident (options)? " {" ppLine (message_ent
 
 syntax (name := oneofDec) "oneof " ident " {" ppLine (message_entry ppLine)*  "}" : command
 
+syntax (name := extendDec) "extend " ident " {" ppLine (message_entry ppLine)* "}" : command
+
 syntax proto_decl := enumDec <|> messageDec <|> oneofDec
 
 syntax (name := proto_mutual_stx) "proto_mutual " "{" ppLine (proto_decl ppLine)* "}" : command
@@ -119,6 +121,12 @@ def oneofDec.pprint : TSyntax ``oneofDec → String
       let body := join_lines (entries.toList.map message_entry.pprint)
       s!"oneof {extract_id x} \{{body}}"
   | _ => panic! "oneofDec"
+
+def extendDec.pprint : TSyntax ``extendDec → String
+  | `(extendDec| extend $x:ident { $[$entries]* }) =>
+      let body := join_lines (entries.toList.map message_entry.pprint)
+      s!"extend {extract_id x} \{{body}}"
+  | _ => panic! "extendDec"
 
 def proto_decl.pprint : TSyntax ``proto_decl → String := fun s =>
   match s.raw[0].getKind with

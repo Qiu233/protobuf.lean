@@ -191,6 +191,28 @@ private def collect_oneofs_from_messages (msgs : Array MsgItem) : Array OneofIte
         features := g.features
       }
 
+private structure ExtensionItem where
+  prefixRev : List String
+  field : FieldDescriptorProto
+  features : ResolvedFeatures
+
+private def nameFromParts (parts : List String) : Name :=
+  parts.foldl (fun n p => n.str p) Name.anonymous
+
+private def ensure_google_protobuf_root (name : Name) : Name :=
+  let s := name.toString
+  if s == "google.protobuf" || s.startsWith "google.protobuf." then
+    nameFromParts ("_root_" :: s.splitOn ".")
+  else
+    name
+
+private def resolveExtendeeName (raw : String) : M Name := do
+  let trimmed := if raw.startsWith "." then raw.drop 1 else raw
+  if trimmed == "google.protobuf" || trimmed.startsWith "google.protobuf." then
+    return nameFromParts ("_root_" :: trimmed.splitOn ".")
+  let name ← resolveName raw
+  return ensure_google_protobuf_root name
+
 private def field_type_ident (field : FieldDescriptorProto) : M (TSyntax `ident) := do
   let t ← get!! field.type
   match t with
@@ -359,8 +381,6 @@ partial def compile_message (item : MsgItem) : M DeclOutput := do
   let msg := item.desc
   if !! msg.options&.message_set_wire_format then
     throw s!"{decl_name%}: message_set_wire_format is not supported"
-  if !msg.extension.isEmpty then
-    throw s!"{decl_name%}: extensions are not supported"
   let msgName := item.name
   registerType msgName
   let typeName := Versions.nameFromPrefixRev item.prefixRev msgName
@@ -407,6 +427,23 @@ partial def compile_message (item : MsgItem) : M DeclOutput := do
       commitM `(attribute [deprecated "protobuf: deprecated field"] $fieldId)
   return { decl, extra := (← extras.get) }
 
+private def compile_extension (item : ExtensionItem) : M Command := do
+  let field := item.field
+  let rawExtendee ← get!! field.extendee
+  let extendeeName ← resolveExtendeeName rawExtendee
+  let extendeeId := mkIdent extendeeName
+  let rawFieldName ← get!! field.name
+  let fieldName ← checkFieldName rawFieldName
+  let fieldId := mkIdent (Name.mkStr1 fieldName)
+  let fieldFeatures := merge_features item.features (field.options&.features)
+  ensure_message_encoding_supported field fieldFeatures
+  let mod? ← field_modifier? field fieldFeatures
+  let t ← `(message_field_type| $(← field_type_ident field):ident)
+  let num ← get!! field.number
+  let numQ := quote num.toUInt32.toNat
+  let opts ← field_options? field fieldFeatures
+  `(extend $extendeeId { $[$mod?]? $t $fieldId:ident = $numQ $[$opts]?; })
+
 def compile_file (file : FileDescriptorProto) : M (Array Command) := do
   let fileFeatures ← resolve_file_features file
   let prefixRev := Versions.packagePrefixRev (file.package.getD "")
@@ -415,6 +452,11 @@ def compile_file (file : FileDescriptorProto) : M (Array Command) := do
   let msgItemsAll ← collect_messages prefixRev file.message_type fileFeatures
   let msgItems := msgItemsAll.filter (fun item => !is_map_entry item.desc)
   let oneofItems := collect_oneofs_from_messages msgItems
+  let mut extensionItems := file.extension.map fun field =>
+    { prefixRev, field, features := fileFeatures }
+  for item in msgItemsAll do
+    for field in item.desc.extension do
+      extensionItems := extensionItems.push { prefixRev := item.name :: item.prefixRev, field, features := item.features }
 
   for item in enumItems do
     withNamePrefix item.prefixRev (registerType item.name)
@@ -497,4 +539,7 @@ def compile_file (file : FileDescriptorProto) : M (Array Command) := do
       let declsStx : Array (TSyntax ``proto_decl) := decls.map (fun c => mkNode ``proto_decl #[c.raw])
       let mutualCmd ← `(proto_mutual { $[$declsStx]* })
       out := out.push mutualCmd ++ extras
-  return enumsOut ++ out
+  let mut extOut := #[]
+  for item in extensionItems do
+    extOut := extOut.push (← withNamePrefix item.prefixRev (compile_extension item))
+  return enumsOut ++ out ++ extOut

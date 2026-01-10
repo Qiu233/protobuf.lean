@@ -171,6 +171,7 @@ def generate_code (request : CodeGeneratorRequest) : ExceptT String IO CodeGener
       | ``oneofDec => PrettyPrinter.oneofDec.pprint <| TSyntax.mk x.raw
       | ``messageDec => PrettyPrinter.messageDec.pprint <| TSyntax.mk x.raw
       | ``proto_mutual_stx => PrettyPrinter.proto_mutual_stx.pprint <| TSyntax.mk x.raw
+      | ``extendDec => PrettyPrinter.extendDec.pprint <| TSyntax.mk x.raw
       | kind => panic! s!"{decl_name%}: unknown kind {kind}"
     String.intercalate "\n\n" cmds.toList
 
