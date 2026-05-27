@@ -156,7 +156,7 @@ private def ensure_google_protobuf_root (name : Name) : Name :=
 private def resolveExtendeeName (raw : String) : M Name := do
   let trimmed := if raw.startsWith "." then raw.drop 1 else raw
   if trimmed == "google.protobuf" || trimmed.startsWith "google.protobuf." then
-    return nameFromParts ("_root_" :: trimmed.splitOn ".")
+    return nameFromParts ("_root_" :: (trimmed.split ".").toList.map String.Slice.toString)
   let name ← resolveName raw
   return ensure_google_protobuf_root name
 
@@ -238,8 +238,8 @@ private def field_modifier? (field : FieldDescriptorProto) : M (Option (TSyntax 
 private def options_value_of_number (raw : String) : M (TSyntax `options_value) := do
   let raw := raw.trim
   let (sign?, body) :=
-    if raw.startsWith "-" then (some '-', raw.drop 1)
-    else if raw.startsWith "+" then (some '+', raw.drop 1)
+    if raw.startsWith "-" then (some '-', raw.drop 1 |>.toString)
+    else if raw.startsWith "+" then (some '+', raw.drop 1 |>.toString)
     else (none, raw)
   let is_scientific :=
     body.contains '.' || body.contains 'e' || body.contains 'E' || body == "inf" || body == "nan"
