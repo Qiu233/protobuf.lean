@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package bench.perf;
+
+message Meta {
+  string source = 1;
+  uint64 created_at = 2;
+  bool active = 3;
+}
+
+message Item {
+  uint32 id = 1;
+  string name = 2;
+  repeated int32 scores = 3;
+  bytes payload = 4;
+  Meta meta = 5;
+  repeated string tags = 6;
+  string note = 7;
+}
+
+message Batch {
+  repeated Item items = 1;
+  string label = 2;
+}
