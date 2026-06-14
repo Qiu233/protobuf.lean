@@ -19,9 +19,9 @@ syntax (name := loadProtoFileCommand) "#load_proto_file " str (inClause)? : comm
 syntax (name := loadProtoDirCommand) "#load_proto_dir " str : command
 
 meta def read_proto (srcFile : FilePath) (protoPath : FilePath) : ExceptT String IO google.protobuf.FileDescriptorSet := do
-  let bin ← IO.FS.withTempFile fun h tmp => do
+  let bin ← IO.FS.withTempFile fun _h tmp => do
     _ ← IO.Process.run { cmd := "protoc", args := #[srcFile.toString, "--descriptor_set_out", tmp.toString, s!"--proto_path={protoPath.toString}"] }
-    h.readBinToEnd -- TODO: may be too large, make it incremental
+    IO.FS.readBinFile tmp -- TODO: may be too large, make it incremental
   let data ← match (Binary.Get.run (Binary.getThe Encoding.Message) bin |>.toExcept) with
     | .ok data => pure data
     | .error e => throw s!"failed to parse protoc output: {e}"
@@ -34,11 +34,11 @@ meta def read_proto_files (srcFiles : Array FilePath) (protoPath : FilePath) :
     ExceptT String IO google.protobuf.FileDescriptorSet := do
   if srcFiles.isEmpty then
     throw "no .proto files found in directory"
-  let bin ← IO.FS.withTempFile fun h tmp => do
+  let bin ← IO.FS.withTempFile fun _h tmp => do
     let mut args := #[s!"--proto_path={protoPath.toString}", s!"--descriptor_set_out={tmp.toString}"]
     args := args ++ srcFiles.map (·.toString)
     _ ← IO.Process.run { cmd := "protoc", args := args }
-    h.readBinToEnd -- TODO: may be too large, make it incremental
+    IO.FS.readBinFile tmp -- TODO: may be too large, make it incremental
   let data ← match (Binary.Get.run (Binary.getThe Encoding.Message) bin |>.toExcept) with
     | .ok data => pure data
     | .error e => throw s!"failed to parse protoc output: {e}"

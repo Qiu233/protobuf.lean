@@ -698,84 +698,193 @@ private def construct_builder (name : Ident) (push_name : String → Ident) (toM
 
 private def construct_fromMessage (name : Ident) (push_name : String → Ident) (fields : Array ProtoFieldMData) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
-  let ns := fields.map ProtoFieldMData.field_num
-  let decoder ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, field_name, field_proj, field_num, options, internal_type?, enum_type?, oneof_type?, default_lean_value, decoder??, decoder_rep?, decoder_rep_packed?, fromMessage??, map_info?, ..} => do
-    let var ← mkIdent <$> mkFreshUserName (field_name.getId)
-    if let some map_info := map_info? then
+  let recVar := mkIdent `r
+  let recMsg := mkIdent `recordMsg
+  let acc := mkIdent `acc
+  let state := mkIdent `st
+  let seen := mkIdent `seen
+  let state' := mkIdent `st'
+  let seen' := mkIdent `seen'
+  let unknownField := mkIdent `«Unknown.Fields»
+  let unknownProj := mkIdentFrom name (name.getId.append unknownField.getId)
+  let oneofFields := fields.filter (fun x => x.oneof_type?.isSome)
+  let regularFields := fields.filter (fun x => x.oneof_type?.isNone)
+  let requiredStrictFields := regularFields.filter (fun x =>
+    x.mod == .required && (x.internal_type?.isSome || x.enum_type?.isSome))
+  let requiredMessageFields := regularFields.filter (fun x =>
+    x.mod == .required && !(x.internal_type?.isSome || x.enum_type?.isSome))
+  let requiredStrictMeta := requiredStrictFields.zipIdx.map fun (x, i) => (x.field_name.getId, i)
+  let stateTy ← `(($name × Array Bool))
+  let mkStatePair : Term → Term → CommandElabM Term := fun st sn => do
+    `((($st, $sn) : $stateTy))
+  let mkSeenUpdate : ProtoFieldMData → CommandElabM Term := fun x => do
+    match requiredStrictMeta.findSome? (fun (fieldName, i) =>
+      if fieldName == x.field_name.getId then some i else none) with
+    | some i => `(($seen).set! $(quote i) true)
+    | none => `($seen)
+  let branchCases ← regularFields.mapM (β := Nat × Term) fun x => do
+    let seenUpdate ← mkSeenUpdate x
+    if let some map_info := x.map_info? then
       let key_decoder? := map_info.key_decoder?
       let value_decoder? := map_info.value_decoder?
       let key_default := map_info.key_default
       let value_default := map_info.value_default
       let entry := mkIdent `entry
       let map := mkIdent `map
-      let stx ← `(Parser.Term.doSeqItem|
-        let $var ← do
-          let entries ← Encoding.Message.getExpandedMessage $msg $field_num:num
-          let $map:ident ← entries.foldlM (init := Std.HashMap.emptyWithCapacity 8) (fun $map:ident $entry:ident => do
-            let key? ← $key_decoder?:ident $entry 1
-            let value? ← $value_decoder?:ident $entry 2
-            let key := Option.getD key? $key_default
-            let value := Option.getD value? $value_default
-            pure (Std.HashMap.insert $map key value))
-          pure $map
-        )
-      return (var, stx)
-    else if oneof_type?.isSome then
-      assert! fromMessage??.isSome
-      let fromMessage? := fromMessage??.get!
-      let stx ← `(Parser.Term.doSeqItem| let $var ← $fromMessage?:ident $msg)
-      return (var, stx)
+      let field_num_stx := x.field_num
+      let field := x.field_name
+      let body ← `(do
+        let entries ← Encoding.Message.getExpandedMessage $recMsg:ident $field_num_stx:num
+        let $map:ident ← entries.foldlM (init := $(x.field_proj) $state:ident) (fun $map:ident $entry:ident => do
+          let key? ← $key_decoder?:ident $entry 1
+          let value? ← $value_decoder?:ident $entry 2
+          let key := Option.getD key? $key_default
+          let value := Option.getD value? $value_default
+          pure (Std.HashMap.insert $map key value))
+        let $state':ident : $name := { $state:ident with $field:ident := $map:ident }
+        let $seen':ident := $seenUpdate:term
+        pure (($state':ident, $seen':ident) : $stateTy))
+      pure (x.field_num.getNat, body)
     else
-      assert! decoder??.isSome
-      let decoder? := decoder??.get!
-      let stx ← match mod with
-        | .default =>
-          if internal_type?.isSome || enum_type?.isSome then
-            `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num <&> (fun x => Option.getD x $default_lean_value)))
-          else
-            `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num))
-        | .required =>
-          if internal_type?.isSome || enum_type?.isSome then
-            `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num >>= (fun x => Option.getDM x
-              (throw (Protobuf.Encoding.ProtoError.missingRequiredField s!"required field `{$(quote field_proj.getId.toString)}` is missing when decoding the message")))))
-          else
-            `(Parser.Term.doSeqItem| let $var ← do
-              let t? ← ($decoder? $msg $field_num:num)
-              if t?.isNone then
-                throw (Protobuf.Encoding.ProtoError.missingRequiredField s!"required field `{$(quote field_proj.getId.toString)}` is missing when decoding the message")
-              pure t?
-              )
-        | .optional =>
-          `(Parser.Term.doSeqItem| let $var ← ($decoder? $msg $field_num:num))
-        | .repeated =>
-          if options.packed?.isEqSome true then
-            assert! decoder_rep_packed?.isSome
-            let decoder_rep_packed := decoder_rep_packed?.get!
-            `(Parser.Term.doSeqItem| let $var ← ($decoder_rep_packed $msg $field_num:num))
-          else
-            assert! decoder_rep?.isSome
-            let decoder_rep := decoder_rep?.get!
-            `(Parser.Term.doSeqItem| let $var ← ($decoder_rep $msg $field_num:num))
-      return (var, stx)
-  let u := mkIdent `«Unknown.Fields»
-  let decoder := decoder.push (← do
-    let s ← `(Parser.Term.doSeqItem| let $u:ident ← do
-      let idxs : Array Nat := #[$ns,*]
-      let rs := Protobuf.Encoding.Message.records $msg
-      let rem := rs.filter (fun x => x.fieldNum ∉ idxs)
-      let rem := rem.map fun x => (x.fieldNum, x.value)
-      let rem := rem.groupByKey Prod.fst
-      let rem := rem.map (fun _ x => x.unzip.snd)
-      pure rem
+      match x.mod with
+      | .repeated =>
+        let field_num_stx := x.field_num
+        let field := x.field_name
+        let decoder_rep := if x.options.packed?.isEqSome true then x.decoder_rep_packed?.get! else x.decoder_rep?.get!
+        let xs := mkIdent `xs
+        let body ← `(do
+          let $xs:ident ← $decoder_rep:ident $recMsg:ident $field_num_stx:num
+          let $state':ident : $name := { $state:ident with $field:ident := $(x.field_proj) $state:ident ++ $xs:ident }
+          let $seen':ident := $seenUpdate:term
+          pure (($state':ident, $seen':ident) : $stateTy))
+        pure (x.field_num.getNat, body)
+      | .default | .required | .optional =>
+        if x.internal_type?.isSome || x.enum_type?.isSome then
+          let field_num_stx := x.field_num
+          let field := x.field_name
+          let decoder? := x.decoder??.get!
+          let value? := mkIdent `value?
+          let value := mkIdent `value
+          match x.mod with
+          | .optional =>
+            let pureSeenUnchanged ← mkStatePair state' seen
+            let body ← `(do
+              let $value?:ident ← $decoder?:ident $recMsg:ident $field_num_stx:num
+              let $state':ident : $name := { $state:ident with $field:ident := $value?:ident }
+              pure $pureSeenUnchanged:term)
+            pure (x.field_num.getNat, body)
+          | .default | .required =>
+            let pureState ← mkStatePair state seen
+            let pureSeenUpdated ← mkStatePair state' seen'
+            let body ← `(do
+              let $value?:ident ← $decoder?:ident $recMsg:ident $field_num_stx:num
+              match $value?:ident with
+              | Option.some $value:ident =>
+                  let $state':ident : $name := { $state:ident with $field:ident := $value:ident }
+                  let $seen':ident := $seenUpdate:term
+                  pure $pureSeenUpdated:term
+              | Option.none =>
+                  pure $pureState:term)
+            pure (x.field_num.getNat, body)
+          | .repeated => unreachable!
+        else
+          let field_num_stx := x.field_num
+          let field := x.field_name
+          let fieldProj : Term := x.field_proj
+          let decoder? := x.decoder??.get!
+          let merger := mkIdentFrom x.proto_type (x.proto_type.getId.append `merge)
+          let value := mkIdent `value
+          let merged := mkIdent `merged
+          let pureSeenUpdated ← mkStatePair state' seen'
+          let body ← `(do
+            let $value:ident ← $decoder?:ident $recMsg:ident $field_num_stx:num
+            let $merged:ident := match $fieldProj:term $state:ident, $value:ident with
+              | Option.some old, Option.some new => Option.some ($merger old new)
+              | Option.none, Option.some new => Option.some new
+              | Option.some old, Option.none => Option.some old
+              | Option.none, Option.none => Option.none
+            let $state':ident : $name := { $state:ident with $field:ident := $merged:ident }
+            let $seen':ident := $seenUpdate:term
+            pure $pureSeenUpdated:term)
+          pure (x.field_num.getNat, body)
+  let oneofKnownCases ← oneofFields.mapM (β := Nat × Term) fun x => do
+    let pureState ← mkStatePair state seen
+    let body ← `(pure $pureState:term)
+    pure (x.field_num.getNat, body)
+  let stateInit ← `(Parser.Term.doSeqItem| let $state:ident : $name := default)
+  let seenInit ← `(Parser.Term.doSeqItem| let $seen:ident : Array Bool := Array.replicate $(quote requiredStrictFields.size) false)
+  let foldAcc := mkIdent `acc
+  let unknownPair ← mkStatePair state' seen
+  let unknownBody ← `(do
+    let $state':ident : $name := {
+      $state:ident with
+      $unknownField:ident := ($unknownProj:ident $state:ident).alter $(recVar).fieldNum (fun
+        | Option.none => Option.some #[$(recVar).value]
+        | Option.some vals => Option.some (vals.push $(recVar).value))
+    }
+    pure $unknownPair:term)
+  let rec mkDispatch (cases : List (Nat × Term)) : CommandElabM Term := do
+    match cases with
+    | [] => pure unknownBody
+    | (fieldNum, body) :: rest =>
+      let restTerm ← mkDispatch rest
+      `(if $(recVar).fieldNum == $(quote fieldNum) then
+          $body:term
+        else
+          $restTerm:term)
+  let dispatchBody ← mkDispatch ((branchCases ++ oneofKnownCases).toList)
+  let foldExpr ← `((Protobuf.Encoding.Message.records $msg).foldlM
+      (init := ((($state:ident, $seen:ident) : $stateTy)))
+      (fun ($acc:ident : $stateTy) $recVar:ident => do
+        let $state:ident := ($acc:ident).1
+        let $seen:ident := ($acc:ident).2
+        let $recMsg:ident := Protobuf.Encoding.Message.mk #[$recVar:ident]
+        $dispatchBody:term))
+  let foldBody ← `(Parser.Term.doSeqItem| let $foldAcc:ident : $stateTy ← $foldExpr:term)
+  let stateAfterFold := mkIdent `st
+  let seenAfterFold := mkIdent `seen
+  let foldStateBind ← `(Parser.Term.doSeqItem| let $stateAfterFold:ident : $name := ($foldAcc:ident).1)
+  let foldSeenBind ← `(Parser.Term.doSeqItem| let $seenAfterFold:ident : Array Bool := ($foldAcc:ident).2)
+  let requiredChecks ← requiredStrictFields.zipIdx.mapM (β := TSyntax ``Parser.Term.doSeqItem) fun (x, i) => do
+    let err ← `(throw (Protobuf.Encoding.ProtoError.missingRequiredField s!"required field `{$(quote x.field_proj.getId.toString)}` is missing when decoding the message"))
+    `(Parser.Term.doSeqItem|
+      if !$seenAfterFold:ident[$(quote i)]! then
+        $err:term
+      else
+        pure ()
       )
-    pure (u, s))
-  let ps := fields.map ProtoFieldMData.field_name |>.push u
-  let vs := decoder.unzip.fst
-  let structInst ← `({ $[$ps:ident := $vs]* : $name })
-  let ret ← `(Parser.Term.doSeqItem| return $structInst)
+  let requiredMessageChecks ← requiredMessageFields.mapM (β := TSyntax ``Parser.Term.doSeqItem) fun x => do
+    let err ← `(throw (Protobuf.Encoding.ProtoError.missingRequiredField s!"required field `{$(quote x.field_proj.getId.toString)}` is missing when decoding the message"))
+    `(Parser.Term.doSeqItem|
+      if ($(x.field_proj) $stateAfterFold:ident).isNone then
+        $err:term
+      else
+        pure ()
+      )
+  let oneofStatePairs ← oneofFields.foldlM
+    (init := (#[], stateAfterFold))
+    (fun (accState : Array (TSyntax ``Parser.Term.doSeqItem) × Ident) x => do
+      let (items, currentState) := accState
+      let field := x.field_name
+      let fromMessage? := x.fromMessage??.get!
+      let oneofVal ← mkIdent <$> mkFreshUserName (x.field_name.getId)
+      let nextState ← mkIdent <$> mkFreshUserName `st
+      let item1 ← `(Parser.Term.doSeqItem| let $oneofVal:ident ← $fromMessage?:ident $msg)
+      let item2 ← `(Parser.Term.doSeqItem| let $nextState:ident : $name := { $currentState:ident with $field:ident := $oneofVal:ident })
+      pure (items.push item1 |>.push item2, nextState))
+  let oneofDecodes := oneofStatePairs.1
+  let finalState := oneofStatePairs.2
+  let ret ← `(Parser.Term.doSeqItem| pure $finalState:ident)
   let fromMessageId := push_name "fromMessage"
   let fromMessage ← `(partial def $fromMessageId:ident : Protobuf.Encoding.Message → Except Protobuf.Encoding.ProtoError $name := fun $msg => do
-    $(decoder.unzip.snd)*
+    $stateInit
+    $seenInit
+    $foldBody
+    $foldStateBind
+    $foldSeenBind
+    $requiredChecks*
+    $requiredMessageChecks*
+    $oneofDecodes*
     $ret
     )
   return (fromMessageId, fromMessage)
