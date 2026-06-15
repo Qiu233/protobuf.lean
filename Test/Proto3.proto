@@ -4,6 +4,7 @@ package test.proto3;
 
 message Sub {
   int32 id = 1;
+  string label = 2;
 }
 
 enum Color {

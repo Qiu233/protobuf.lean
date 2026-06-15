@@ -588,13 +588,51 @@ public def elabOneofDecCore (mutEnums mutOneofs messages : NameSet) : Syntax →
       ]*
     )
   let msg ← mkIdent <$> mkFreshUserName `msg
-  let ds ← mdata.zip decoder? |>.mapM fun (x, d) =>
-    `(do
-      let Option.some v ← ($d:ident $msg $(x.field_num):num) | throw (Protobuf.Encoding.ProtoError.userError "")
-      pure (Option.some ($(x.field_proj) v)))
-  let fused ← ds.foldrM (init := ← `(pure Option.none)) (fun x acc => `($x <|> $acc))
+  let recVar := mkIdent `r
+  let recMsg := mkIdent `recordMsg
+  let state := mkIdent `st
+  let state' := mkIdent `st'
+  let ds ← mdata.zip decoder? |>.mapM fun (x, d) => do
+    let decode ←
+      if x.internal_type?.isSome || x.enum_type?.isSome then
+        `(do
+          let Option.some v ← ($d:ident $recMsg:ident $(x.field_num):num) | throw (Protobuf.Encoding.ProtoError.userError "")
+          pure (Option.some ($(x.field_proj) v)))
+      else
+        let merger := mkIdentFrom x.proto_type (x.proto_type.getId.append `merge)
+        let val := mkIdent `val
+        let merged := mkIdent `merged
+        `(do
+          let Option.some $val:ident ← ($d:ident $recMsg:ident $(x.field_num):num) | throw (Protobuf.Encoding.ProtoError.userError "")
+          let $merged:ident := match $state:ident with
+            | Option.some ($(x.field_proj) old) => Option.some ($(x.field_proj) ($merger old $val:ident))
+            | _ => Option.some ($(x.field_proj) $val:ident)
+          pure $merged:ident)
+    pure (x.field_num.getNat, decode)
+  let rec mkDispatch (cases : List (Nat × Term)) : CommandElabM Term := do
+    match cases with
+    | [] => `(pure $state:ident)
+    | (fieldNum, body) :: rest =>
+      let restTerm ← mkDispatch rest
+      `(if ($recVar:ident).fieldNum == $(quote fieldNum) then
+          $body:term
+        else
+          $restTerm:term)
+  let dispatch ← mkDispatch ds.toList
   let fromMessage?Id := push_name "fromMessage?"
-  let fromMessage? ← `(partial def $fromMessage?Id:ident : Protobuf.Encoding.Message → Except Protobuf.Encoding.ProtoError (Option $name) := fun $msg => $fused:term)
+  let fromMessage? ← `(
+    /--
+    Decode a standalone oneof payload using protobuf's wire-level "last one wins" rule.
+
+    Parsing must respect wire order. When a later record belongs to a different member, it clears the
+    previous case; when it belongs to the same message-valued member, it merges into the value already
+    accumulated for that case.
+    -/
+    partial def $fromMessage?Id:ident : Protobuf.Encoding.Message → Except Protobuf.Encoding.ProtoError (Option $name) := fun $msg => do
+      ($msg).records.foldlM (init := (Option.none : Option $name)) (fun $state:ident $recVar:ident => do
+        let $recMsg:ident := Protobuf.Encoding.Message.mk #[$recVar:ident]
+        let $state':ident ← $dispatch:term
+        pure $state':ident))
   return { decls := #[ind], functions := #[toMessage, fromMessage?] }
 
 @[scoped command_elab oneofDec]
@@ -718,6 +756,14 @@ private def construct_fromMessage (name : Ident) (push_name : String → Ident) 
   let requiredMessageFields := regularFields.filter (fun x =>
     x.mod == .required && !(x.internal_type?.isSome || x.enum_type?.isSome))
   let requiredStrictMeta := requiredStrictFields.zipIdx.map fun (x, i) => (x.field_name.getId, i)
+  /-
+  We decode the message in a single left-to-right pass over wire records.
+
+  `state` stores the partially decoded Lean value; `seen` tracks only required strict fields
+  (scalar / enum fields represented directly in the structure) because their default Lean values are
+  indistinguishable from "not present". Required submessages keep presence in `Option`, so they can
+  be checked after the fold without an auxiliary bitmap.
+  -/
   let stateTy ← `(($name × Array Bool))
   let mkStatePair : Term → Term → CommandElabM Term := fun st sn => do
     `((($st, $sn) : $stateTy))
@@ -754,7 +800,12 @@ private def construct_fromMessage (name : Ident) (push_name : String → Ident) 
       | .repeated =>
         let field_num_stx := x.field_num
         let field := x.field_name
-        let decoder_rep := if x.options.packed?.isEqSome true then x.decoder_rep_packed?.get! else x.decoder_rep?.get!
+        /-
+        Repeated scalar parsers must accept both packed and unpacked wire records. The internal
+        `packed` option controls how we *serialize* this field, but decoding stays liberal so that a
+        field can round-trip data produced by older/newer schemas and other protobuf implementations.
+        -/
+        let decoder_rep := x.decoder_rep?.get!
         let xs := mkIdent `xs
         let body ← `(do
           let $xs:ident ← $decoder_rep:ident $recMsg:ident $field_num_stx:num
@@ -811,6 +862,14 @@ private def construct_fromMessage (name : Ident) (push_name : String → Ident) 
             let $seen':ident := $seenUpdate:term
             pure $pureSeenUpdated:term)
           pure (x.field_num.getNat, body)
+  /-
+  Oneofs are intentionally skipped during the main fold.
+
+  Their semantics are defined across *all* members of the union: protobuf decoding keeps only the
+  last member that appears on the wire. We therefore let the fold treat those field numbers as
+  known-but-deferred (so they do not leak into unknown fields), then reconstruct each oneof from the
+  whole message afterward using the dedicated `fromMessage?` helper above.
+  -/
   let oneofKnownCases ← oneofFields.mapM (β := Nat × Term) fun x => do
     let pureState ← mkStatePair state seen
     let body ← `(pure $pureState:term)
@@ -905,7 +964,7 @@ private def construct_decoder_rep (name : Ident) (push_name : String → Ident) 
 private def construct_merge (name : Ident) (push_name : String → Ident) (fields : Array ProtoFieldMData) : CommandElabM (Ident × Command) := do
   let a ← mkIdent <$> mkFreshUserName `a
   let b ← mkIdent <$> mkFreshUserName `b
-  let mergeBody ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, proto_type, field_name, field_proj, internal_type?, enum_type?, oneof_type?, map_info?, ..} => do
+  let mergeBody ← fields.mapM (β := (Ident × TSyntax ``Parser.Term.doSeqItem)) fun {mod, proto_type, field_name, field_proj, internal_type?, enum_type?, oneof_type?, map_info?, test_unset, ..} => do
     let var ← mkIdent <$> mkFreshUserName (field_name.getId)
     let va ← `($field_proj $a)
     let vb ← `($field_proj $b)
@@ -918,7 +977,16 @@ private def construct_merge (name : Ident) (push_name : String → Ident) (field
       return (var, stx)
     else
       let stx ← match mod with
-        | .default | .required =>
+        | .default =>
+          if internal_type?.isSome || enum_type?.isSome then
+            `(Parser.Term.doSeqItem| let $var := if $test_unset $vb then $va else $vb)
+          else
+            `(Parser.Term.doSeqItem| let $var := match $va:term, $vb:term with
+              | Option.some x, Option.some y => Option.some ($merger x y)
+              | Option.some x, _ => Option.some x
+              | _, Option.some y => Option.some y
+              | _, _ => Option.none)
+        | .required =>
           if internal_type?.isSome || enum_type?.isSome then
             `(Parser.Term.doSeqItem| let $var := $vb)
           else

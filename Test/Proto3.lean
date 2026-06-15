@@ -9,6 +9,8 @@ open scoped Protobuf.Notation
 
 set_option protobuf.trace.notation true
 
+-- set_option trace.Elab.definition true
+
 #load_proto_file "Test/Proto3.proto"
 
 def ofExcept {α} (e : Except ProtoError α) : IO α := do
@@ -21,6 +23,18 @@ def assert (cond : Bool) (msg : String) : IO Unit := do
 
 def assertEq [BEq α] (a b : α) (msg : String) : IO Unit := do
   assert (a == b) msg
+
+def mkPackedVarints (xs : Array Nat) : ProtoVal :=
+  ProtoVal.of_packed (xs.map ProtoVal.VARINT)
+
+def mkMapEntry (key : String) (value? : Option Int32 := none) : Except ProtoError ProtoVal := do
+  let msg := Message.set Message.empty 1 (.LEN key.toUTF8)
+  let msg ← match value? with
+    | some value => do
+        let protoVal ← ProtoVal.ofVarint_int32 value
+        pure (Message.set msg 2 protoVal)
+    | none => pure msg
+  ProtoVal.ofMessage msg
 
 def testDefaults : IO Unit := do
   let val : _root_.test.proto3.All := default
@@ -60,15 +74,42 @@ def testOptionalPresence : IO Unit := do
   assertEq decoded.opt_int32 (some (0 : Int32)) "optional presence mismatch"
 
 def testSubPresence : IO Unit := do
-  let sub : _root_.test.proto3.Sub := { id := 0 }
+  let sub : _root_.test.proto3.Sub := { id := 0, label := "z" }
   let base : _root_.test.proto3.All := default
   let val : _root_.test.proto3.All := { base with sub := some sub }
   let msg ← ofExcept (_root_.test.proto3.All.toMessage val)
   assert ((Message.getRecordsOf msg 16).size == 1) "message field should serialize when present"
   let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
   match decoded.sub with
-  | some v => assertEq v.id (0 : Int32) "message field presence mismatch"
+  | some v =>
+      assertEq v.id (0 : Int32) "message field presence mismatch"
+      assertEq v.label "z" "message field nested label mismatch"
   | none => throw (IO.userError "message field presence mismatch")
+
+def testSingularLastWins : IO Unit := do
+  let msg := Message.set Message.empty 1 (.VARINT 1)
+  let msg := Message.set msg 1 (.VARINT 9)
+  let msg := Message.set msg 2 (.LEN "first".toUTF8)
+  let msg := Message.set msg 2 (.LEN "".toUTF8)
+  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  assertEq decoded.int32_field (9 : Int32) "duplicate singular int32 should keep last value"
+  assertEq decoded.string_field "" "duplicate singular string should keep last value, including empty"
+
+def testSubMessageMerge : IO Unit := do
+  let sub1 : _root_.test.proto3.Sub := { id := 1, label := "" }
+  let sub2 : _root_.test.proto3.Sub := { id := 0, label := "merged" }
+  let msg1 ← ofExcept sub1.toMessage
+  let msg2 ← ofExcept sub2.toMessage
+  let val1 ← ofExcept <| ProtoVal.ofMessage msg1
+  let val2 ← ofExcept <| ProtoVal.ofMessage msg2
+  let msg := Message.set Message.empty 16 val1
+  let msg := Message.set msg 16 val2
+  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  match decoded.sub with
+  | some v =>
+      assertEq v.id (1 : Int32) "submessage merge should retain earlier scalar when later message omits it"
+      assertEq v.label "merged" "submessage merge should apply later fields"
+  | none => throw (IO.userError "submessage merge presence mismatch")
 
 def testOneof : IO Unit := do
   let choice : _root_.test.proto3.All.choice_Type := _root_.test.proto3.All.choice_Type.oneof_int32 7
@@ -80,6 +121,30 @@ def testOneof : IO Unit := do
   match decoded.choice with
   | some (.oneof_int32 v) => assertEq v (7 : Int32) "oneof int32 value mismatch"
   | _ => throw (IO.userError "oneof decode mismatch")
+
+def testOneofLastWins : IO Unit := do
+  let msg := Message.set Message.empty 22 (.VARINT 7)
+  let msg := Message.set msg 23 (.LEN "later".toUTF8)
+  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  match decoded.choice with
+  | some (.oneof_string v) => assertEq v "later" "oneof should keep the last wire member"
+  | _ => throw (IO.userError "oneof last-one-wins mismatch")
+
+def testOneofMessageMergesSameCase : IO Unit := do
+  let sub1 : _root_.test.proto3.Sub := { id := 1, label := "" }
+  let sub2 : _root_.test.proto3.Sub := { id := 0, label := "later" }
+  let msg1 ← ofExcept sub1.toMessage
+  let msg2 ← ofExcept sub2.toMessage
+  let val1 ← ofExcept <| ProtoVal.ofMessage msg1
+  let val2 ← ofExcept <| ProtoVal.ofMessage msg2
+  let msg := Message.set Message.empty 24 val1
+  let msg := Message.set msg 24 val2
+  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  match decoded.choice with
+  | some (.oneof_sub v) =>
+      assertEq v.id (1 : Int32) "oneof message merge should retain earlier scalar when later message omits it"
+      assertEq v.label "later" "oneof message merge should apply later fields"
+  | _ => throw (IO.userError "oneof message merge mismatch")
 
 def testPackedAndUnpacked : IO Unit := do
   let base : _root_.test.proto3.All := default
@@ -110,6 +175,18 @@ def testPackedAcceptsUnpacked : IO Unit := do
   let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
   assertEq decoded.rep_int32 #[(1 : Int32), 2] "packed field should accept unpacked encoding"
 
+def testUnpackedAcceptsPacked : IO Unit := do
+  let msg := Message.set Message.empty 19 (mkPackedVarints #[3, 4])
+  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  assertEq decoded.rep_int32_unpacked #[(3 : Int32), 4] "unpacked field should accept packed encoding"
+
+def testPackedConcatenatesSegments : IO Unit := do
+  let msg := Message.set Message.empty 18 (mkPackedVarints #[1, 2])
+  let msg := Message.set msg 18 (mkPackedVarints #[3])
+  let msg := Message.set msg 18 (.VARINT 4)
+  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  assertEq decoded.rep_int32 #[(1 : Int32), 2, 3, 4] "packed repeated field should concatenate multiple packed segments and unpacked records"
+
 def testMapRoundtrip : IO Unit := do
   let map := Std.HashMap.ofList [("a", (1 : Int32)), ("b", (2 : Int32))]
   let base : _root_.test.proto3.All := default
@@ -118,6 +195,20 @@ def testMapRoundtrip : IO Unit := do
   let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
   assertEq (decoded.map_str_int32.get? "a") (some (1 : Int32)) "map value mismatch for key a"
   assertEq (decoded.map_str_int32.get? "b") (some (2 : Int32)) "map value mismatch for key b"
+
+def testMapDuplicateKeyLastWins : IO Unit := do
+  let entry1 ← ofExcept <| mkMapEntry "dup" (some 1)
+  let entry2 ← ofExcept <| mkMapEntry "dup" (some 9)
+  let msg := Message.set Message.empty 21 entry1
+  let msg := Message.set msg 21 entry2
+  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  assertEq (decoded.map_str_int32.get? "dup") (some (9 : Int32)) "duplicate map key should keep last value"
+
+def testMapMissingValueDefaults : IO Unit := do
+  let entry ← ofExcept <| mkMapEntry "no_value"
+  let msg := Message.set Message.empty 21 entry
+  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  assertEq (decoded.map_str_int32.get? "no_value") (some (0 : Int32)) "map entry with missing value should use default"
 
 def testUnknownEnum : IO Unit := do
   let msg := Message.set Message.empty 15 (.VARINT 9)
@@ -147,10 +238,18 @@ def testProto3 : IO Unit := do
   runTest "testDefaults" testDefaults errs
   runTest "testOptionalPresence" testOptionalPresence errs
   runTest "testSubPresence" testSubPresence errs
+  runTest "testSingularLastWins" testSingularLastWins errs
+  runTest "testSubMessageMerge" testSubMessageMerge errs
   runTest "testOneof" testOneof errs
+  runTest "testOneofLastWins" testOneofLastWins errs
+  runTest "testOneofMessageMergesSameCase" testOneofMessageMergesSameCase errs
   runTest "testPackedAndUnpacked" testPackedAndUnpacked errs
   runTest "testPackedAcceptsUnpacked" testPackedAcceptsUnpacked errs
+  runTest "testUnpackedAcceptsPacked" testUnpackedAcceptsPacked errs
+  runTest "testPackedConcatenatesSegments" testPackedConcatenatesSegments errs
   runTest "testMapRoundtrip" testMapRoundtrip errs
+  runTest "testMapDuplicateKeyLastWins" testMapDuplicateKeyLastWins errs
+  runTest "testMapMissingValueDefaults" testMapMissingValueDefaults errs
   runTest "testUnknownEnum" testUnknownEnum errs
   runTest "testUnknownFields" testUnknownFields errs
   let failures ← errs.get
