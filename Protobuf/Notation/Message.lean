@@ -467,7 +467,11 @@ def computeMData.ordinary [Monad m] [MonadQuotation m] [MonadError m] [MonadEnv 
   let fromMessage?? := if oneof_type?.isSome then some (mkIdentFrom proto_type (proto_type.getId.str "fromMessage?")) else none
   let decoder?? ← internal_type?.mapM InternalType.decoder?
   let decoder?? := if oneof_type?.isNone then some (decoder??.getD (mkIdentFrom proto_type (proto_type.getId.str "decoder?"))) else none
-  let decoder_rep_packed? ← internal_type?.mapM fun x => x.decoder_rep
+  let decoder_rep_packed? ← match internal_type? with
+    | some .string => pure none
+    | some .bytes => pure none
+    | some itype => some <$> InternalType.decoder_rep_packed itype
+    | none => pure none
   let decoder_rep_packed? :=
     if is_scalar then (decoder_rep_packed? <|> some (mkIdentFrom proto_type (proto_type.getId.str "decoder_rep_packed")))
     else none
