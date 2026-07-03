@@ -154,9 +154,9 @@ private def ensure_google_protobuf_root (name : Name) : Name :=
     name
 
 private def resolveExtendeeName (raw : String) : M Name := do
-  let trimmed := if raw.startsWith "." then raw.drop 1 else raw
+  let trimmed := if raw.startsWith "." then raw.drop 1 |>.toString else raw
   if trimmed == "google.protobuf" || trimmed.startsWith "google.protobuf." then
-    return nameFromParts ("_root_" :: (trimmed.splitToList (· == '.')))
+    return nameFromParts ("_root_" :: (trimmed.splitOn "."))
   let name ← resolveName raw
   return ensure_google_protobuf_root name
 
@@ -236,7 +236,7 @@ private def field_modifier? (field : FieldDescriptorProto) : M (Option (TSyntax 
   | .LABEL_OPTIONAL => some <$> `(message_entry_modifier| optional)
 
 private def options_value_of_number (raw : String) : M (TSyntax `options_value) := do
-  let raw := raw.trim
+  let raw := raw.trimAscii
   let (sign?, body) :=
     if raw.startsWith "-" then (some '-', raw.drop 1)
     else if raw.startsWith "+" then (some '+', raw.drop 1)
@@ -244,14 +244,14 @@ private def options_value_of_number (raw : String) : M (TSyntax `options_value) 
   let is_scientific :=
     body.contains '.' || body.contains 'e' || body.contains 'E' || body == "inf" || body == "nan"
   if is_scientific then
-    let lit : TSyntax `scientific := ⟨Lean.Syntax.mkScientificLit body⟩
+    let lit : TSyntax `scientific := ⟨Lean.Syntax.mkScientificLit body.toString⟩
     match sign? with
     | some '-' => `(options_value| -$lit:scientific)
     | some '+' => `(options_value| +$lit:scientific)
     | none => `(options_value| $lit:scientific)
     | some _ => throw s!"{decl_name%}: internal error: unexpected sign character"
   else
-    let lit : TSyntax `num := ⟨Lean.Syntax.mkNumLit body⟩
+    let lit : TSyntax `num := ⟨Lean.Syntax.mkNumLit body.toString⟩
     match sign? with
     | some '-' => `(options_value| -$lit:num)
     | some '+' => `(options_value| +$lit:num)
@@ -261,7 +261,7 @@ private def options_value_of_number (raw : String) : M (TSyntax `options_value) 
 private def field_default_option? (field : FieldDescriptorProto) : M (Option (TSyntax ``options_entry)) := do
   let some raw_value := field.default_value | return none
   let t ← get!! field.type
-  let raw_value := raw_value.trim
+  let raw_value := raw_value.trimAscii.toString
   let value ← match t with
     | .TYPE_STRING =>
         let b64 := Protobuf.Base64.encode raw_value.toUTF8

@@ -3,9 +3,8 @@ open Lake DSL
 
 package "protobuf" where
   version := v!"0.1.0"
-  leanOptions := #[ ⟨`experimental.module, true⟩ ]
 
-require binary from git "https://github.com/Lean-zh/binary" @ "v4.26.0"
+require binary from git "https://github.com/Lean-zh/binary"
 
 @[default_target]
 lean_lib Protobuf where

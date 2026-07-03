@@ -12,7 +12,7 @@ namespace Protobuf.Versions
 open Encoding Notation google.protobuf
 
 protected def packagePrefixRev (pkg : String) : List String :=
-  let pkg := pkg.trim
+  let pkg := pkg.trimAscii.toString
   if pkg.isEmpty then
     []
   else
@@ -66,7 +66,7 @@ def withNewNameLevel? (n : Option String) (x : M α) : M α := fun c =>
 
 @[specialize]
 def withPackageName (n : String) (x : M α) : M α := fun c =>
-  let n := n.trim
+  let n := n.trimAscii.toString
   let xs := n.splitOn "."
   if xs.isEmpty then
     x c
@@ -89,7 +89,7 @@ def resolveName (raw : String) : M Name := do
   let leading := raw.rawStartPos.get raw
   if leading == '.' then
     let full := raw.drop 1
-    let xs := full.splitToList (· == '.')
+    let xs := full.split "." |>.toList.map String.Slice.toString
     return conc xs.reverse
   let name := raw
   let mut ns ← M.Context.currentNamePrefixRev <$> readThe M.Context

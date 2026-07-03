@@ -156,9 +156,9 @@ private def ensure_google_protobuf_root (name : Name) : Name :=
     name
 
 private def resolveExtendeeName (raw : String) : M Name := do
-  let trimmed := if raw.startsWith "." then raw.drop 1 else raw
+  let trimmed := if raw.startsWith "." then raw.drop 1 |>.toString else raw
   if trimmed == "google.protobuf" || trimmed.startsWith "google.protobuf." then
-    return nameFromParts ("_root_" :: (trimmed.splitToList (· == '.')))
+    return nameFromParts ("_root_" :: (trimmed.splitOn "."))
   let name ← resolveName raw
   return ensure_google_protobuf_root name
 
