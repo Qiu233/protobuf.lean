@@ -127,7 +127,7 @@ private unsafe instance instReprProtoValUnsafe : Repr ProtoVal where
           prec
 
 private unsafe instance instReprRecordUnsafe : Repr Record where
-  reprPrec x prec :=
+  reprPrec x _ :=
       have := instReprProtoValUnsafe
       Std.Format.bracket "{ "
         (Std.Format.nil ++ Std.Format.text "fieldNum" ++ Std.Format.text " := " ++
@@ -140,7 +140,7 @@ private unsafe instance instReprRecordUnsafe : Repr Record where
         " }"
 
 private unsafe instance instReprMessageUnsafe : Repr Message where
-  reprPrec x prec :=
+  reprPrec x _ :=
       have := instReprRecordUnsafe
       Std.Format.bracket "{ "
         (Std.Format.nil ++ Std.Format.text "records" ++ Std.Format.text " := " ++

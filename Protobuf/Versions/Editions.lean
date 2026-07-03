@@ -269,7 +269,7 @@ private def map_entry_desc? (map_entries : Array (String × DescriptorProto)) (f
   let raw_type ← get!! field.type_name
   return (map_entries.find? (fun (n, _) => n == raw_type)).map Prod.snd
 
-private def map_field_type? (item : MsgItem) (map_entries : Array (String × DescriptorProto))
+private def map_field_type? (_ : MsgItem) (map_entries : Array (String × DescriptorProto))
     (field : FieldDescriptorProto) : M (Option (TSyntax ``message_field_type)) := do
   let entry? ← map_entry_desc? map_entries field
   let some entry := entry? | return none

@@ -281,7 +281,7 @@ private def optionsValueToNumericTerm [Monad m] [MonadQuotation m] [MonadError m
   | _ => throwErrorAt field_name "default option expects a numeric literal"
 
 private def optionsValueToTerm [Monad m] [MonadQuotation m] [MonadError m] [MonadRef m] [AddMessageContext m]
-    (field_name : Ident) (lean_shape : LeanShape) (proto_type : Ident) (internal_type : InternalType) (v : TSyntax `options_value) : m Term := do
+    (field_name : Ident) (_ : LeanShape) (_ : Ident) (internal_type : InternalType) (v : TSyntax `options_value) : m Term := do
   match internal_type with
   | .bool =>
       match v with
