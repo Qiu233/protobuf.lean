@@ -5,7 +5,7 @@ meta import Protobuf.Notation
 
 public section
 
-set_option trace.Elab.definition true
+-- set_option trace.Elab.definition true
 
 namespace google.protobuf
 
