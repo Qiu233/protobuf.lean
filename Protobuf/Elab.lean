@@ -74,7 +74,6 @@ public meta def elabLoadProtoFileCommand : CommandElab := fun stx => do
       throwErrorAt x "file {f} does not exist"
     if ← f.isDir then
       throwErrorAt x "path {f} is a directory"
-    println! "{f}"
     pure f
   let protoPath ← (folder? <|> path.parent).getDM (throwError "failed to infer --proto_path")
   let descExcept ← liftM (m := IO) <| read_proto path protoPath
