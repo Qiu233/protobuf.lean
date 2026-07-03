@@ -89,7 +89,7 @@ def resolveName (raw : String) : M Name := do
   let leading := raw.rawStartPos.get raw
   if leading == '.' then
     let full := raw.drop 1
-    let xs := full.split "." |>.toList |>.map fun x => x.toString
+    let xs := full.splitToList (· == '.')
     return conc xs.reverse
   let name := raw
   let mut ns ← M.Context.currentNamePrefixRev <$> readThe M.Context
