@@ -26,6 +26,7 @@ mkdir -p "$output_root/PluginGenerated"
   --proto_path="$repo_root/Test" \
   dep/common.proto odd-dir/common-file.proto app/helper.proto app/main.proto \
   keywords/lean-keywords.proto editions/edition-2024.proto \
+  editions/extension-options.proto \
   GroupProto2.proto GroupEditions.proto \
   NamingCollisionsProto3.proto NamingCollisionsProto2.proto \
   NamingCollisionsEditions.proto
@@ -36,6 +37,7 @@ test -f "$output_root/PluginGenerated/app/helper.lean"
 test -f "$output_root/PluginGenerated/app/main.lean"
 test -f "$output_root/PluginGenerated/keywords/lean-keywords.lean"
 test -f "$output_root/PluginGenerated/editions/edition-2024.lean"
+test -f "$output_root/PluginGenerated/editions/extension-options.lean"
 test -f "$output_root/PluginGenerated/GroupProto2.lean"
 test -f "$output_root/PluginGenerated/GroupEditions.lean"
 test -f "$output_root/PluginGenerated/NamingCollisionsProto3.lean"
@@ -51,6 +53,12 @@ grep -Fq 'protobuf: deprecated message' \
   "$output_root/PluginGenerated/odd-dir/common-file.lean"
 grep -Fq 'protobuf: deprecated field' \
   "$output_root/PluginGenerated/odd-dir/common-file.lean"
+grep -Fq '«old_value» = 100' \
+  "$output_root/PluginGenerated/editions/extension-options.lean"
+grep -Fq '«default» = 7' \
+  "$output_root/PluginGenerated/editions/extension-options.lean"
+grep -Fq '«deprecated» = true' \
+  "$output_root/PluginGenerated/editions/extension-options.lean"
 grep -Fq '«match»' \
   "$output_root/PluginGenerated/keywords/lean-keywords.lean"
 grep -Fq '«structure»' \
@@ -275,6 +283,8 @@ lean_path="$(cd "$repo_root" && lake env printenv LEAN_PATH)"
     "$output_root/PluginGenerated/keywords/lean-keywords.lean"
   lean --root="$output_root" -o "$output_root/PluginGenerated/editions/edition-2024.olean" \
     "$output_root/PluginGenerated/editions/edition-2024.lean"
+  lean --root="$output_root" -o "$output_root/PluginGenerated/editions/extension-options.olean" \
+    "$output_root/PluginGenerated/editions/extension-options.lean"
   lean --root="$output_root" -o "$output_root/PluginGenerated/GroupProto2.olean" \
     "$output_root/PluginGenerated/GroupProto2.lean"
   lean --root="$output_root" -o "$output_root/PluginGenerated/GroupEditions.olean" \

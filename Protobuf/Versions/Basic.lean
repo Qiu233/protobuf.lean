@@ -936,6 +936,23 @@ private def validateBuiltinFeatureSet
       | _ => true)
     "enforce_proto_limits"
 
+/--
+Validate features written directly on an extension declaration.
+
+Although extensions use `FieldOptions`, their presence is always explicit and
+cannot be overridden at the field. File- or lexical-scope presence defaults
+remain valid; callers pass only the extension field's own options here.
+-/
+private def validateExtensionBuiltinFeatures
+    (file : FileDescriptorProto) (context : String)
+    (features? : Option FeatureSet) : M Unit := do
+  validateBuiltinFeatureSet file .TARGET_TYPE_FIELD context features?
+  if let some presence := features? >>= (·.field_presence) then
+    if presence == .LEGACY_REQUIRED then
+      throw s!"{context}: extension fields cannot be required"
+    else
+      throw s!"{context}: extension fields cannot specify field_presence"
+
 private def validateEnumBuiltinFeatures
     (file : FileDescriptorProto) (prefixName : String)
     (e : EnumDescriptorProto) : M Unit := do
@@ -963,7 +980,7 @@ private partial def validateMessageBuiltinFeatures
       (field.options >>= (·.features))
   for field in msg.extension do
     let fieldName := field.name.getD "<unnamed>"
-    validateBuiltinFeatureSet file .TARGET_TYPE_FIELD
+    validateExtensionBuiltinFeatures file
       s!"extension field `{fullName}.{fieldName}`"
       (field.options >>= (·.features))
   for range in msg.extension_range do
@@ -988,7 +1005,7 @@ private def validateFileBuiltinFeatures
     s!"file `{fileName}`" (file.options >>= (·.features))
   for field in file.extension do
     let fieldName := field.name.getD "<unnamed>"
-    validateBuiltinFeatureSet file .TARGET_TYPE_FIELD
+    validateExtensionBuiltinFeatures file
       s!"file extension `{qualifyProtoSymbol packageName fieldName}`"
       (field.options >>= (·.features))
   for e in file.enum_type do

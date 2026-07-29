@@ -1,0 +1,13 @@
+edition = "2023";
+
+package plugin.extension_options;
+
+option features.field_presence = IMPLICIT;
+
+message Host {
+  extensions 100 to max;
+}
+
+extend Host {
+  int32 old_value = 100 [default = 7, deprecated = true];
+}

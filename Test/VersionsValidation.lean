@@ -441,6 +441,53 @@ private def testEditionsImplicitDefaultValidation : IO Unit := do
   expectErrorContains (compileResult (editionsFileWithField field))
     "explicit default value requires explicit field presence"
 
+private def testEditionsExtensionPresence : IO Unit := do
+  let extensionField : FieldDescriptorProto := {
+    scalarField "ext" 100 with
+    extendee := some ".Host"
+    default_value := some "7"
+  }
+  let base : FileDescriptorProto := {
+    name := some "editions-extension-presence.proto"
+    «syntax» := some "editions"
+    edition := some .EDITION_2023
+    options := some {
+      features := some { field_presence := some .IMPLICIT }
+    }
+    message_type := #[{
+      name := some "Host"
+      extension_range := #[{ start := some 100, «end» := some 200 }]
+    }]
+    extension := #[extensionField]
+  }
+  /-
+  This is the descriptor shape emitted by protoc 35: the file carries the
+  implicit-presence feature, while the extension has `default_value` and no
+  field-level feature override. Extensions retain explicit presence.
+  -/
+  expectCompileSucceeds base
+    "extension default inherited the file's implicit field presence"
+
+  let withExtensionPresence
+      (presence : FeatureSet.FieldPresence) : FileDescriptorProto := {
+    base with
+    extension := #[{
+      extensionField with
+      options := some {
+        features := some { field_presence := some presence }
+      }
+    }]
+  }
+  for presence in
+      (#[FeatureSet.FieldPresence.EXPLICIT, .IMPLICIT] :
+        Array FeatureSet.FieldPresence) do
+    expectErrorContains
+      (compileResult (withExtensionPresence presence))
+      "extension fields cannot specify field_presence"
+  expectErrorContains
+    (compileResult (withExtensionPresence .LEGACY_REQUIRED))
+    "extension fields cannot be required"
+
 private def testGroupDescriptorValidation : IO Unit := do
   let groupField : FieldDescriptorProto := {
     name := some "child"
@@ -2879,6 +2926,7 @@ public def main : IO Unit := do
   testEditionsOpenEnumFirstZeroValidation
   testEditionsLegacyPackedValidation
   testEditionsImplicitDefaultValidation
+  testEditionsExtensionPresence
   testGroupDescriptorValidation
   testEditionsMessageEncodingValidation
   testBuiltinFeatureTargetValidation

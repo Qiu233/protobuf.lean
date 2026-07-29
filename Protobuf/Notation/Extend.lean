@@ -383,6 +383,7 @@ private def elabExtendField (extendee : Ident) (x : ProtoFieldMData) : CommandEl
   let flatSetExists ← nameExists flatSetId
   let flatHasExists ← nameExists flatHasId
   let mut legacy := #[]
+  let mut legacyIds := #[]
   unless flatGetExists do
     let cmd ←
       if isRepeated then
@@ -394,11 +395,13 @@ private def elabExtendField (extendee : Ident) (x : ProtoFieldMData) : CommandEl
             Except Protobuf.Encoding.ProtoError (Option $leanType) :=
           $getId:ident)
     legacy := legacy.push cmd
+    legacyIds := legacyIds.push flatGetId
   if !isRepeated && !flatGetValueExists then
     legacy := legacy.push (←
       `(def $flatGetValueId:ident : $extendeeId →
           Except Protobuf.Encoding.ProtoError $leanType :=
         $getValueId:ident))
+    legacyIds := legacyIds.push flatGetValueId
   unless flatSetExists do
     let cmd ←
       if isRepeated then
@@ -410,10 +413,29 @@ private def elabExtendField (extendee : Ident) (x : ProtoFieldMData) : CommandEl
             Except Protobuf.Encoding.ProtoError $extendeeId :=
           $setId:ident)
     legacy := legacy.push cmd
+    legacyIds := legacyIds.push flatSetId
   unless flatHasExists do
     legacy := legacy.push (←
       `(def $flatHasId:ident : $extendeeId → Bool := $hasId:ident))
-  return #[getCmd] ++ getValueCmd?.toArray ++ #[setCmd, hasCmd] ++ legacy
+    legacyIds := legacyIds.push flatHasId
+  let mut accessorIds := #[getId]
+  if !isRepeated then
+    accessorIds := accessorIds.push getValueId
+  accessorIds := accessorIds ++ #[setId, hasId] ++ legacyIds
+  let deprecatedCommands ←
+    if x.options.deprecated then
+      accessorIds.mapM fun accessorId =>
+        `(attribute [deprecated "protobuf: deprecated extension field"
+            (since := "0.1.0")] $accessorId)
+    else
+      pure #[]
+  /-
+  Apply the attributes only after every compatibility alias has elaborated.
+  Otherwise defining an alias in terms of its nested accessor would itself
+  emit a deprecation warning while compiling the schema.
+  -/
+  return #[getCmd] ++ getValueCmd?.toArray ++ #[setCmd, hasCmd] ++ legacy ++
+    deprecatedCommands
 
 @[scoped command_elab extendDec]
 public def elabExtendDec : CommandElab := fun stx => do

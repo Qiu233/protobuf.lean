@@ -282,6 +282,95 @@ extend ExtensionTarget {
   required int32 value = 100;
 }
 
+message DeprecatedExtensionTarget {
+}
+
+extend DeprecatedExtensionTarget {
+  optional int32 old_value = 100 [deprecated = true];
+  repeated int32 old_values = 101 [packed = true, deprecated = true];
+  optional int32 current_value = 102;
+}
+
+run_meta do
+  let env ← getEnv
+  let actualNamesByUser :=
+    env.constants.toList.foldl
+      (init := ({} : NameMap Name))
+      fun names (actualName, _) =>
+        names.insert (privateToUserName actualName) actualName
+  let resolveName (userName : Name) : Name :=
+    if env.contains userName then
+      userName
+    else
+      actualNamesByUser.find? userName |>.getD userName
+  let target := `DeprecatedExtensionTarget
+  let nested (field : String) (number : Nat) :=
+    ((target.str "Extension.Accessors").str s!"{field}_{number}")
+  let oldValue := nested "old_value" 100
+  let oldValues := nested "old_values" 101
+  let deprecatedAccessors :=
+    #[oldValue.str "get?", oldValue.str "get", oldValue.str "set",
+      oldValue.str "has", target.str "get_old_value?",
+      target.str "get_old_value", target.str "set_old_value",
+      target.str "has_old_value", oldValues.str "get?",
+      oldValues.str "set", oldValues.str "has",
+      target.str "get_old_values?", target.str "set_old_values",
+      target.str "has_old_values"]
+  for userName in deprecatedAccessors do
+    let actualName := resolveName userName
+    unless env.contains actualName do
+      throwError "deprecated extension accessor `{userName}` was not generated"
+    unless Lean.Linter.isDeprecated env actualName do
+      throwError "extension accessor `{userName}` was not marked deprecated"
+  let currentValue := nested "current_value" 102
+  for userName in
+      #[currentValue.str "get?", currentValue.str "get",
+        currentValue.str "set", currentValue.str "has",
+        target.str "get_current_value?", target.str "get_current_value",
+        target.str "set_current_value", target.str "has_current_value"] do
+    let actualName := resolveName userName
+    unless env.contains actualName do
+      throwError "non-deprecated extension accessor `{userName}` was not generated"
+    if Lean.Linter.isDeprecated env actualName then
+      throwError "non-deprecated extension accessor `{userName}` was marked deprecated"
+
+message DeprecatedExtensionFlatCollision {
+  optional int32 get_old = 1;
+  optional int32 set_old = 2;
+  optional bool has_old = 3;
+}
+
+extend DeprecatedExtensionFlatCollision {
+  optional int32 old = 100 [deprecated = true];
+}
+
+run_meta do
+  let env ← getEnv
+  let actualNamesByUser :=
+    env.constants.toList.foldl
+      (init := ({} : NameMap Name))
+      fun names (actualName, _) =>
+        names.insert (privateToUserName actualName) actualName
+  let resolveName (userName : Name) : Name :=
+    if env.contains userName then
+      userName
+    else
+      actualNamesByUser.find? userName |>.getD userName
+  let target := `DeprecatedExtensionFlatCollision
+  let nested := ((target.str "Extension.Accessors").str "old_100")
+  for userName in
+      #[nested.str "get?", nested.str "get", nested.str "set",
+        nested.str "has", target.str "get_old?"] do
+    unless Lean.Linter.isDeprecated env (resolveName userName) do
+      throwError "extension accessor `{userName}` was not marked deprecated"
+  for userName in
+      #[target.str "get_old", target.str "set_old", target.str "has_old"] do
+    let actualName := resolveName userName
+    unless env.contains actualName do
+      throwError "collision projection `{userName}` was not generated"
+    if Lean.Linter.isDeprecated env actualName then
+      throwError "unrelated collision projection `{userName}` was marked deprecated"
+
 /-- info: true -/
 #guard_msgs (info) in
 #eval

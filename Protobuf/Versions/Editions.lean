@@ -52,6 +52,19 @@ private def merge_features (base : ResolvedFeatures) (over? : Option FeatureSet)
       json_format := f.json_format.getD base.json_format
     }
 
+/--
+Resolve the features of an extension declaration.
+
+Extensions inherit features from their lexical scope, but protobuf gives every
+singular extension explicit presence regardless of the enclosing file's
+`field_presence` default. `protoc` therefore permits an extension default even
+when the file selects implicit presence. A field-level presence override on an
+extension is invalid and is rejected during descriptor validation.
+-/
+private def merge_extension_features
+    (base : ResolvedFeatures) (over? : Option FeatureSet) : ResolvedFeatures :=
+  { merge_features base over? with field_presence := .EXPLICIT }
+
 private def rejectMessageEncodingOutsideFileOrField
     (context : String) (features? : Option FeatureSet) : M Unit := do
   if (features? >>= (·.message_encoding)).isSome then
@@ -510,7 +523,8 @@ private def compile_extension (item : ExtensionItem) : M Command := do
   let rawFieldName ← get!! field.name
   let fieldName ← checkFieldName rawFieldName
   let fieldId := mkIdent (Name.mkStr1 fieldName)
-  let fieldFeatures := merge_features item.features (field.options&.features)
+  let fieldFeatures :=
+    merge_extension_features item.features (field.options&.features)
   ensure_message_encoding_supported field fieldFeatures
   let mod? ← field_modifier? field fieldFeatures
   let t ← `(message_field_type| $(← field_type_ident field fieldFeatures):ident)

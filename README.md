@@ -129,8 +129,19 @@ Editions message fields using
 of the same START_GROUP/END_GROUP wire representation. Proto3 group
 declarations remain invalid, as required by the language specification.
 
-Extension field defaults and packed encoding are supported by the generated
-static accessors. Other custom extension options are not interpreted.
+Generated static extension accessors honor explicit defaults, proto2 `packed`
+encoding, the corresponding Editions repeated-field encoding feature, Editions
+UTF-8 validation and message encoding, and the built-in `deprecated` option.
+Target-language-specific options, optimization hints, option-definition
+metadata, and debug/reflection options are not given Lean-specific behavior.
+
+Arbitrary custom field options are not categorically filtered out by `protoc`.
+Runtime- or default-retained values can reach the generator in `proto_file`
+descriptor unknown fields and are preserved while descriptors are processed.
+Source-retained values are supplied only through `source_file_descriptors` and
+are not merged into the static generation input. Custom option values are not
+exposed or interpreted after static code generation; doing so would require
+reflection support or an explicitly defined Lean code-generation meaning.
 
 # Missing features
 
@@ -143,6 +154,12 @@ Work in progress:
 ## Less likely to have
 Some of them may never be supported:
 
-### -Proto1 behaviors
-`proto1` has been too old and is not worth an implementation.
-For example, option `message_set_wire_format` is forbidden.
+### Legacy MessageSet compatibility
+
+The legacy MessageSet wire format selected by
+`google.protobuf.MessageOptions.message_set_wire_format` is not implemented.
+It is a compatibility feature for an old Proto1 wire representation, not a
+Proto1 language frontend. Although `protoc` 35 accepts the option in proto2 and
+Editions inputs, this package currently rejects those inputs; proto3 rejects
+the option as required by its language rules. A separate Proto1 frontend is
+outside the scope of this item and is not planned.
