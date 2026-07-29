@@ -52,19 +52,23 @@ private def merge_features (base : ResolvedFeatures) (over? : Option FeatureSet)
       json_format := f.json_format.getD base.json_format
     }
 
+private def rejectMessageEncodingOutsideFileOrField
+    (context : String) (features? : Option FeatureSet) : M Unit := do
+  if (features? >>= (·.message_encoding)).isSome then
+    throw s!"{decl_name%}: message_encoding can only be set on files or message fields, not {context}"
+
 private def resolve_file_features (file : FileDescriptorProto) : M ResolvedFeatures := do
   let ed ← file.edition.getDM (throw s!"{decl_name%}: editions syntax requires file.edition")
   let base ← defaults_for_edition ed
   return merge_features base (file.options&.features)
 
 def compile_enum (e : EnumDescriptorProto) (features : ResolvedFeatures) : M DeclOutput := do
-  match features.enum_type with
+  let closed ← match features.enum_type with
   | .«Unknown.Value» _ => throw s!"{decl_name%}: enum type is unknown"
   | .ENUM_TYPE_UNKNOWN =>
       throw s!"{decl_name%}: enum_type is unknown"
-  | .CLOSED =>
-      throw s!"{decl_name%}: enum_type = CLOSED is not supported"
-  | .OPEN => pure ()
+  | .CLOSED => pure true
+  | .OPEN => pure false
   let enumName ← get!! e.name
   registerType enumName
   let typeName ← wrapName enumName
@@ -74,11 +78,15 @@ def compile_enum (e : EnumDescriptorProto) (features : ResolvedFeatures) : M Dec
     checkEnumValueName name
   let vIds := vNames.map fun x => Lean.mkIdent (Name.mkStr1 x)
   let vNums ← e.value.mapM fun v => get!! v.number
-  let vNumsQ := vNums.map fun x => quote x.toUInt32.toNat
+  if !closed && vNums[0]? != some 0 then
+    throw s!"{decl_name%}: the first value of an open enum must be zero"
+  let vNumsQ ← vNums.mapM quoteEnumValue
   let extras ← IO.mkRef #[]
   let commitM (c : M Command) := c >>= fun x => extras.modify fun cs => cs.push x
   let enum_options_stx ← do
     let mut es := #[]
+    if closed then
+      es := es.push (← `(options_entry| closed = true))
     if !! e.options&.allow_alias then
       es := es.push (← `(options_entry| allow_alias = true))
     `(options| [$es,*])
@@ -121,7 +129,7 @@ structure OneofItem where
   features : ResolvedFeatures
 
 private def OneofItem.fullName (item : OneofItem) : Name :=
-  Versions.nameFromPrefixRev item.prefixRev item.name
+  Versions.nameFromPrefixRev item.prefixRev item.leanType
 
 private def oneofIndexNat (idx : Int32) : M Nat := do
   if idx < 0 then
@@ -133,6 +141,8 @@ private def splitMessageFields (msg : DescriptorProto) (msgFeatures : ResolvedFe
   let mut normalFields := #[]
   let mut groups : Std.HashMap Nat (Array FieldDescriptorProto) := {}
   for field in msg.field do
+    if !! field.proto3_optional then
+      throw s!"{decl_name%}: proto3_optional is not valid in editions"
     if let some idx := field.oneof_index then
       let idxNat ← oneofIndexNat idx
       if idxNat >= msg.oneof_decl.size then
@@ -146,8 +156,15 @@ private def splitMessageFields (msg : DescriptorProto) (msgFeatures : ResolvedFe
       if !fields.isEmpty then
         let decl := msg.oneof_decl[i]!
         let name ← get!! decl.name
+        rejectMessageEncodingOutsideFileOrField
+          s!"oneof `{name}`" (decl.options&.features)
         let features := merge_features msgFeatures (decl.options&.features)
-        oneofGroups := oneofGroups.push { name, fields, leanType := s!"{name}_Type", features }
+        oneofGroups := oneofGroups.push {
+          name
+          fields
+          leanType := syntheticOneofTypeComponent msg name
+          features
+        }
   return (normalFields, oneofGroups)
 
 private partial def collect_messages (prefixRev : List String) (msgs : Array DescriptorProto)
@@ -155,6 +172,8 @@ private partial def collect_messages (prefixRev : List String) (msgs : Array Des
   let mut out := #[]
   for msg in msgs do
     let name ← get!! msg.name
+    rejectMessageEncodingOutsideFileOrField
+      s!"message `{name}`" (msg.options&.features)
     let msgFeatures := merge_features parentFeatures (msg.options&.features)
     let (normalFields, oneofGroups) ← splitMessageFields msg msgFeatures
     out := out.push { prefixRev, name, desc := msg, normalFields, oneofGroups, features := msgFeatures }
@@ -166,6 +185,12 @@ private partial def collect_enums (prefixRev : List String) (enums : Array EnumD
   let mut out := #[]
   for e in enums do
     let name ← get!! e.name
+    rejectMessageEncodingOutsideFileOrField
+      s!"enum `{name}`" (e.options&.features)
+    for value in e.value do
+      let valueName ← get!! value.name
+      rejectMessageEncodingOutsideFileOrField
+        s!"enum value `{name}.{valueName}`" (value.options&.features)
     let features := merge_features parentFeatures (e.options&.features)
     out := out.push { prefixRev, name, desc := e, features }
   return out
@@ -175,6 +200,8 @@ private partial def collect_enums_in_messages (prefixRev : List String) (msgs : 
   let mut out := #[]
   for msg in msgs do
     let name ← get!! msg.name
+    rejectMessageEncodingOutsideFileOrField
+      s!"message `{name}`" (msg.options&.features)
     let msgFeatures := merge_features parentFeatures (msg.options&.features)
     out := out ++ (← collect_enums (name :: prefixRev) msg.enum_type msgFeatures)
     out := out ++ (← collect_enums_in_messages (name :: prefixRev) msg.nested_type msgFeatures)
@@ -213,7 +240,9 @@ private def resolveExtendeeName (raw : String) : M Name := do
   let name ← resolveName raw
   return ensure_google_protobuf_root name
 
-private def field_type_ident (field : FieldDescriptorProto) : M (TSyntax `ident) := do
+private def field_type_ident
+    (field : FieldDescriptorProto) (features : ResolvedFeatures) :
+    M (TSyntax `ident) := do
   let t ← get!! field.type
   match t with
   | .«Unknown.Value» _ => throw s!"{decl_name%}: unknown field type"
@@ -225,7 +254,12 @@ private def field_type_ident (field : FieldDescriptorProto) : M (TSyntax `ident)
   | .TYPE_FIXED64 => pure <| Versions.builtinIdent "fixed64"
   | .TYPE_FIXED32 => pure <| Versions.builtinIdent "fixed32"
   | .TYPE_BOOL => pure <| Versions.builtinIdent "bool"
-  | .TYPE_STRING => pure <| Versions.builtinIdent "string"
+  | .TYPE_STRING =>
+      match features.utf8_validation with
+      | .«Unknown.Value» _ | .UTF8_VALIDATION_UNKNOWN =>
+          throw s!"{decl_name%}: utf8_validation is unknown"
+      | .VERIFY => pure <| Versions.builtinIdent "string"
+      | .NONE => pure <| Versions.builtinIdent "raw_string"
   | .TYPE_GROUP => throw s!"{decl_name%}: groups are not supported"
   | .TYPE_MESSAGE =>
       let raw ← get!! field.type_name
@@ -247,8 +281,10 @@ private def map_entry_names (item : MsgItem) : M (Array (String × DescriptorPro
   for nested in item.desc.nested_type do
     if !! nested.options&.map_entry then
       let nested_name ← get!! nested.name
-      let full_name := Versions.nameFromPrefixRev (item.name :: item.prefixRev) nested_name
-      out := out.push ("." ++ full_name.toString, nested)
+      let fullName :=
+        String.intercalate "."
+          (nested_name :: item.name :: item.prefixRev).reverse
+      out := out.push ("." ++ fullName, nested)
   return out
 
 private def is_map_entry (desc : DescriptorProto) : Bool :=
@@ -261,40 +297,54 @@ private def map_entry_fields (entry : DescriptorProto) : M (FieldDescriptorProto
   let value ← value?.getDM (throw s!"{decl_name%}: map entry is missing value field")
   return (key, value)
 
-private def map_entry_desc? (map_entries : Array (String × DescriptorProto)) (field : FieldDescriptorProto) :
+private def map_entry_desc? (item : MsgItem)
+    (map_entries : Array (String × DescriptorProto)) (field : FieldDescriptorProto) :
     M (Option DescriptorProto) := do
   let t ← get!! field.type
   if t != .TYPE_MESSAGE then
     return none
   let raw_type ← get!! field.type_name
-  return (map_entries.find? (fun (n, _) => n == raw_type)).map Prod.snd
+  let scope := String.intercalate "." (item.name :: item.prefixRev).reverse
+  return (map_entries.find? fun (target, _) =>
+    Versions.protobufTypeNameResolvesTo scope raw_type target).map Prod.snd
 
-private def map_field_type? (_ : MsgItem) (map_entries : Array (String × DescriptorProto))
-    (field : FieldDescriptorProto) : M (Option (TSyntax ``message_field_type)) := do
-  let entry? ← map_entry_desc? map_entries field
+private def map_field_type? (item : MsgItem) (map_entries : Array (String × DescriptorProto))
+    (field : FieldDescriptorProto) (features : ResolvedFeatures) :
+    M (Option (TSyntax ``message_field_type)) := do
+  let entry? ← map_entry_desc? item map_entries field
   let some entry := entry? | return none
   let label := field.label.getD .LABEL_OPTIONAL
   if label != .LABEL_REPEATED then
     throw s!"{decl_name%}: map field must be repeated"
   let (key_field, value_field) ← map_entry_fields entry
-  let key_type ← field_type_ident key_field
-  let value_type ← field_type_ident value_field
+  let keyFeatures := merge_features features (key_field.options&.features)
+  let valueFeatures := merge_features features (value_field.options&.features)
+  let key_type ← field_type_ident key_field keyFeatures
+  let value_type ← field_type_ident value_field valueFeatures
   let m ← `(message_field_type_map| map<$key_type, $value_type>)
   some <$> `(message_field_type| $m:message_field_type_map)
 
-private def ensure_message_encoding_supported (field : FieldDescriptorProto) (features : ResolvedFeatures) : M Unit := do
+private def ensure_message_encoding_supported
+    (field : FieldDescriptorProto) (features : ResolvedFeatures) : M Unit := do
+  let t ← get!! field.type
+  /-
+  A file-level message_encoding feature is inherited while
+  resolving every field, but official protoc simply ignores it for scalar
+  fields.  An annotation written directly on a scalar/enum field is invalid.
+  -/
+  let explicitlySetsMessageEncoding :=
+    (field.options >>= fun options =>
+      options.features >>= (·.message_encoding)).isSome
+  if explicitlySetsMessageEncoding then
+    if t != .TYPE_MESSAGE then
+      throw s!"{decl_name%}: only message fields can specify message_encoding"
   match features.message_encoding with
   | .«Unknown.Value» _ =>
       throw s!"{decl_name%}: message_encoding is unknown"
   | .MESSAGE_ENCODING_UNKNOWN =>
       throw s!"{decl_name%}: message_encoding is unknown"
   | .LENGTH_PREFIXED => pure ()
-  | .DELIMITED =>
-      let t ← get!! field.type
-      if t == .TYPE_MESSAGE then
-        throw s!"{decl_name%}: message_encoding = DELIMITED is not supported"
-      else
-        pure ()
+  | .DELIMITED => pure ()
 
 private def field_modifier? (field : FieldDescriptorProto) (features : ResolvedFeatures) :
     M (Option (TSyntax ``message_entry_modifier)) := do
@@ -302,7 +352,7 @@ private def field_modifier? (field : FieldDescriptorProto) (features : ResolvedF
   match label with
   | .«Unknown.Value» _ => throw s!"{decl_name%}: unknown cardinality"
   | .LABEL_REPEATED => some <$> `(message_entry_modifier| repeated)
-  | .LABEL_REQUIRED => some <$> `(message_entry_modifier| required)
+  | .LABEL_REQUIRED => throw s!"{decl_name%}: LABEL_REQUIRED is not valid in editions"
   | .LABEL_OPTIONAL =>
       match features.field_presence with
       | .«Unknown.Value» _ =>
@@ -313,31 +363,44 @@ private def field_modifier? (field : FieldDescriptorProto) (features : ResolvedF
       | .EXPLICIT => some <$> `(message_entry_modifier| optional)
       | .IMPLICIT => return none
 
-private def is_packable (field : FieldDescriptorProto) : M Bool := do
-  let t ← get!! field.type
-  match t with
-  | .«Unknown.Value» _ => throw s!"{decl_name%}: unknown field type"
-  | .TYPE_STRING | .TYPE_GROUP | .TYPE_MESSAGE | .TYPE_BYTES => pure false
-  | _ => pure true
-
-private def field_options? (field : FieldDescriptorProto) (features : ResolvedFeatures) : M (Option (TSyntax ``options)) := do
+private def field_options?
+    (field : FieldDescriptorProto) (features : ResolvedFeatures)
+    (isMapField : Bool := false) : M (Option (TSyntax ``options)) := do
   let mut entries := #[]
-  if let some packed := field.options&.packed then
-    let stx ← match packed with
-      | true => `(options_value| true)
-      | false => `(options_value| false)
-    entries := entries.push (← `(options_entry| packed = $stx))
-  else
-    let label := field.label.getD .LABEL_OPTIONAL
-    if label == .LABEL_REPEATED && (← is_packable field) then
-      match features.repeated_field_encoding with
-      | .«Unknown.Value» _ =>
-          throw s!"{decl_name%}: repeated_field_encoding is unknown"
-      | .REPEATED_FIELD_ENCODING_UNKNOWN =>
-          throw s!"{decl_name%}: repeated_field_encoding is unknown"
-      | .PACKED =>
-          entries := entries.push (← `(options_entry| packed = true))
-      | .EXPANDED => pure ()
+  let explicitlySetsMessageEncoding :=
+    (field.options >>= fun options =>
+      options.features >>= (·.message_encoding)).isSome
+  if isMapField && explicitlySetsMessageEncoding then
+    throw s!"{decl_name%}: map fields cannot specify message_encoding"
+  if !isMapField && field.type == some .TYPE_MESSAGE &&
+      features.message_encoding == .DELIMITED then
+    entries := entries.push
+      (← `(options_entry| wired_as_group = true))
+  if field.options&.packed |>.isSome then
+    throw s!"{decl_name%}: legacy packed option is not valid in editions; use repeated_field_encoding"
+  let label := field.label.getD .LABEL_OPTIONAL
+  if label == .LABEL_REPEATED && (← fieldIsPackable field) then
+    match features.repeated_field_encoding with
+    | .«Unknown.Value» _ =>
+        throw s!"{decl_name%}: repeated_field_encoding is unknown"
+    | .REPEATED_FIELD_ENCODING_UNKNOWN =>
+        throw s!"{decl_name%}: repeated_field_encoding is unknown"
+    | .PACKED =>
+        entries := entries.push (← `(options_entry| packed = true))
+    | .EXPANDED => pure ()
+  if field.default_value.isSome then
+    if label == .LABEL_REPEATED then
+      throw s!"{decl_name%}: default value is not valid on repeated fields"
+    if field.oneof_index.isSome then
+      throw s!"{decl_name%}: default value is not valid on oneof fields"
+    match features.field_presence with
+    | .«Unknown.Value» _ | .FIELD_PRESENCE_UNKNOWN =>
+        throw s!"{decl_name%}: field_presence is unknown"
+    | .IMPLICIT =>
+        throw s!"{decl_name%}: explicit default value requires explicit field presence"
+    | .EXPLICIT | .LEGACY_REQUIRED => pure ()
+  if let some defaultEntry ← fieldDefaultOption? field then
+    entries := entries.push defaultEntry
   if !! field.options&.deprecated then
     entries := entries.push (← `(options_entry| deprecated = true))
   if entries.isEmpty then
@@ -349,12 +412,10 @@ private def ensure_oneof_field_ok (field : FieldDescriptorProto) : M Unit := do
   match label with
   | .«Unknown.Value» _ => throw s!"{decl_name%}: unknown cardinality"
   | .LABEL_REPEATED => throw s!"{decl_name%}: oneof fields cannot be repeated"
-  | .LABEL_REQUIRED => throw s!"{decl_name%}: oneof fields cannot be required"
+  | .LABEL_REQUIRED => throw s!"{decl_name%}: LABEL_REQUIRED is not valid in editions"
   | .LABEL_OPTIONAL => pure ()
 
 private def compile_oneof (item : OneofItem) : M DeclOutput := do
-  let oneofName := item.name
-  registerType oneofName
   let typeName := Versions.nameFromPrefixRev item.prefixRev item.leanType
   let typeId := mkIdent typeName
   let names ← item.fields.mapM fun v => do
@@ -366,7 +427,9 @@ private def compile_oneof (item : OneofItem) : M DeclOutput := do
     let fieldFeatures := merge_features item.features (field.options&.features)
     ensure_message_encoding_supported field fieldFeatures
   let types ← item.fields.mapM fun field => do
-    let m ← `(message_field_type_normal| $(← field_type_ident field):ident)
+    let fieldFeatures := merge_features item.features (field.options&.features)
+    let m ← `(message_field_type_normal|
+      $(← field_type_ident field fieldFeatures):ident)
     `(message_field_type| $m:message_field_type_normal)
   let nums ← item.fields.mapM fun v => get!! v.number
   let numsQ := nums.map fun x => quote x.toUInt32.toNat
@@ -397,15 +460,19 @@ partial def compile_message (item : MsgItem) : M DeclOutput := do
     let name ← checkFieldName name
     let fieldFeatures := merge_features item.features (field.options&.features)
     ensure_message_encoding_supported field fieldFeatures
+    let mapType? ←
+      map_field_type? item map_entries field fieldFeatures
     names := names.push name
     ids := ids.push (Lean.mkIdent (Name.mkStr1 name))
     nums := nums.push (← get!! field.number)
-    opts := opts.push (← field_options? field fieldFeatures)
-    if let some map_type ← map_field_type? item map_entries field then
+    opts := opts.push
+      (← field_options? field fieldFeatures mapType?.isSome)
+    if let some map_type := mapType? then
       types := types.push map_type
       mods := mods.push none
     else
-      types := types.push (← `(message_field_type| $(← field_type_ident field):ident))
+      types := types.push
+        (← `(message_field_type| $(← field_type_ident field fieldFeatures):ident))
       mods := mods.push (← field_modifier? field fieldFeatures)
   let numsQ := nums.map fun x => quote x.toUInt32.toNat
   let oneofNames := item.oneofGroups.map (·.name)
@@ -418,7 +485,15 @@ partial def compile_message (item : MsgItem) : M DeclOutput := do
   let extras ← IO.mkRef #[]
   let commitM (c : M Command) := c >>= fun x => extras.modify fun cs => cs.push x
   let noneMod? : Array (Option (TSyntax ``message_entry_modifier)) := oneofIds.map (fun _ => Option.none)
-  let decl ← `(message $typeId { $[$[$mods]? $types $ids:ident = $numsQ $[$opts]?;]* $[ $[$noneMod?]? $oneofTypes $oneofIds:ident = $oneofNums;]* })
+  let msgOptions? ←
+    if messageUsesLegacyHelpers msg then
+      pure none
+    else
+      some <$> `(options| [legacy_helpers = false])
+  let decl ← `(message $typeId $[$msgOptions?]? {
+    $[$[$mods]? $types $ids:ident = $numsQ $[$opts]?;]*
+    $[ $[$noneMod?]? $oneofTypes $oneofIds:ident = $oneofNums;]*
+  })
   if !! msg.options&.deprecated then
     commitM `(attribute [deprecated "protobuf: deprecated message"] $typeId)
   for fieldName in names, field in item.normalFields do
@@ -438,13 +513,14 @@ private def compile_extension (item : ExtensionItem) : M Command := do
   let fieldFeatures := merge_features item.features (field.options&.features)
   ensure_message_encoding_supported field fieldFeatures
   let mod? ← field_modifier? field fieldFeatures
-  let t ← `(message_field_type| $(← field_type_ident field):ident)
+  let t ← `(message_field_type| $(← field_type_ident field fieldFeatures):ident)
   let num ← get!! field.number
   let numQ := quote num.toUInt32.toNat
   let opts ← field_options? field fieldFeatures
   `(extend $extendeeId { $[$mod?]? $t $fieldId:ident = $numQ $[$opts]?; })
 
 def compile_file (file : FileDescriptorProto) : M (Array Command) := do
+  validateFileDescriptor file
   let fileFeatures ← resolve_file_features file
   let prefixRev := Versions.packagePrefixRev (file.package.getD "")
   let enumItems := (← collect_enums prefixRev file.enum_type fileFeatures) ++
@@ -462,9 +538,6 @@ def compile_file (file : FileDescriptorProto) : M (Array Command) := do
     withNamePrefix item.prefixRev (registerType item.name)
   for item in msgItems do
     withNamePrefix item.prefixRev (registerType item.name)
-  for item in oneofItems do
-    withNamePrefix item.prefixRev (registerType item.name)
-
   let mut enumsOut := #[]
   for item in enumItems do
     let out ← withNamePrefix item.prefixRev (compile_enum item.desc item.features)
@@ -480,7 +553,7 @@ def compile_file (file : FileDescriptorProto) : M (Array Command) := do
     let mut ds := #[]
     let map_entries ← map_entry_names item
     for field in item.normalFields do
-      if let some entry ← map_entry_desc? map_entries field then
+      if let some entry ← map_entry_desc? item map_entries field then
         let (_, value_field) ← map_entry_fields entry
         if value_field.type matches some .TYPE_MESSAGE then
           let raw ← get!! value_field.type_name
@@ -493,7 +566,8 @@ def compile_file (file : FileDescriptorProto) : M (Array Command) := do
         if msgNameSet.contains dep then
           ds := ds.push dep
     for g in item.oneofGroups do
-      let oneofName := Versions.nameFromPrefixRev (item.name :: item.prefixRev) g.name
+      let oneofName :=
+        Versions.nameFromPrefixRev (item.name :: item.prefixRev) g.leanType
       if oneofNameSet.contains oneofName then
         ds := ds.push oneofName
     deps := deps.insert item.fullName ds

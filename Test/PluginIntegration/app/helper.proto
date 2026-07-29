@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package plugin.integration.app;
+
+message Helper {
+  bool enabled = 1;
+}

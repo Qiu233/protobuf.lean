@@ -24,7 +24,7 @@ def assert (cond : Bool) (msg : String) : IO Unit := do
 def assertEq [BEq α] (a b : α) (msg : String) : IO Unit := do
   assert (a == b) msg
 
-def mkPackedVarints (xs : Array Nat) : ProtoVal :=
+def mkPackedVarints (xs : Array Nat) : Except ProtoError ProtoVal :=
   ProtoVal.of_packed (xs.map ProtoVal.VARINT)
 
 def mkMapEntry (key : String) (value? : Option Int32 := none) : Except ProtoError ProtoVal := do
@@ -176,13 +176,16 @@ def testPackedAcceptsUnpacked : IO Unit := do
   assertEq decoded.rep_int32 #[(1 : Int32), 2] "packed field should accept unpacked encoding"
 
 def testUnpackedAcceptsPacked : IO Unit := do
-  let msg := Message.set Message.empty 19 (mkPackedVarints #[3, 4])
+  let packed ← ofExcept (mkPackedVarints #[3, 4])
+  let msg := Message.set Message.empty 19 packed
   let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
   assertEq decoded.rep_int32_unpacked #[(3 : Int32), 4] "unpacked field should accept packed encoding"
 
 def testPackedConcatenatesSegments : IO Unit := do
-  let msg := Message.set Message.empty 18 (mkPackedVarints #[1, 2])
-  let msg := Message.set msg 18 (mkPackedVarints #[3])
+  let packed12 ← ofExcept (mkPackedVarints #[1, 2])
+  let packed3 ← ofExcept (mkPackedVarints #[3])
+  let msg := Message.set Message.empty 18 packed12
+  let msg := Message.set msg 18 packed3
   let msg := Message.set msg 18 (.VARINT 4)
   let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
   assertEq decoded.rep_int32 #[(1 : Int32), 2, 3, 4] "packed repeated field should concatenate multiple packed segments and unpacked records"
@@ -227,6 +230,41 @@ def testUnknownFields : IO Unit := do
   let roundtrip ← ofExcept (_root_.test.proto3.All.toMessage decoded)
   assert ((Message.getRecordsOf roundtrip 99).size == 1) "unknown field should round-trip"
 
+  let invalid : _root_.test.proto3.All := {
+    (default : _root_.test.proto3.All) with
+    «Unknown.Fields» :=
+      ({} : Std.HashMap Nat (Array ProtoVal)).insert 99 #[
+        .VARINT (1 <<< 64)
+      ]
+  }
+  match invalid.encode with
+  | .error .invalidVarint => pure ()
+  | .error error =>
+      throw (IO.userError
+        s!"oversized unknown varint produced the wrong error: {error}")
+  | .ok _ =>
+      throw (IO.userError
+        "oversized unknown varint was silently truncated during encode")
+
+def testGroupWireMismatch : IO Unit := do
+  let grouped : Message := {
+    records := #[
+      { fieldNum := 1, value := .VARINT 5 },
+      { fieldNum := 2, value := .VARINT 7 }
+    ]
+  }
+  let msg := Message.set Message.empty 16 (.GROUPED grouped)
+  let msg := Message.set msg 21 (.GROUPED grouped)
+  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  assert decoded.sub.isNone
+    "GROUP wire must not be accepted for an ordinary embedded message"
+  assert decoded.map_str_int32.isEmpty
+    "GROUP wire must not be accepted as a map entry"
+  assert (decoded.«Unknown.Fields»[16]?.isSome)
+    "wrong-wire embedded message group was not preserved as unknown"
+  assert (decoded.«Unknown.Fields»[21]?.isSome)
+    "wrong-wire map group was not preserved as unknown"
+
 def runTest (name : String) (t : IO Unit) (errs : IO.Ref (Array String)) : IO Unit := do
   try
     t
@@ -252,6 +290,7 @@ def testProto3 : IO Unit := do
   runTest "testMapMissingValueDefaults" testMapMissingValueDefaults errs
   runTest "testUnknownEnum" testUnknownEnum errs
   runTest "testUnknownFields" testUnknownFields errs
+  runTest "testGroupWireMismatch" testGroupWireMismatch errs
   let failures ← errs.get
   unless failures.isEmpty do
     let msg := String.intercalate "\n" failures.toList

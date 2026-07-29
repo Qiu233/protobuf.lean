@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package plugin.integration.app;
+
+import "dep/common.proto";
+import "odd-dir/common-file.proto";
+import "app/helper.proto";
+
+message Main {
+  plugin.integration.dep.Common common = 1;
+  plugin.integration.odd.CommonFile oddly_named = 2;
+  Helper helper = 3;
+}

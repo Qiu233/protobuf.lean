@@ -1,0 +1,8 @@
+edition = "2024";
+
+package plugin.integration.edition2024;
+
+message Modern {
+  string value = 1;
+  repeated int32 numbers = 2;
+}

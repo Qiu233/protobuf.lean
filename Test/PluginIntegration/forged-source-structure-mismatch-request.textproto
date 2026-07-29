@@ -1,0 +1,30 @@
+file_to_generate: "source-structure-mismatch.proto"
+parameter: "lean4_prefix=Forged"
+proto_file {
+  name: "source-structure-mismatch.proto"
+  package: "forged.structure"
+  syntax: "proto3"
+  message_type {
+    name: "RuntimeMessage"
+    field {
+      name: "value"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+    }
+  }
+}
+source_file_descriptors {
+  name: "source-structure-mismatch.proto"
+  package: "forged.structure"
+  syntax: "proto3"
+  message_type {
+    name: "SourceMessage"
+    field {
+      name: "value"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+    }
+  }
+}

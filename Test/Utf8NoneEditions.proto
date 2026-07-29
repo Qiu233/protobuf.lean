@@ -1,0 +1,17 @@
+edition = "2023";
+
+package test.utf8.editions;
+
+option features.utf8_validation = NONE;
+
+message RawStrings {
+  string singular = 1;
+  repeated string repeated = 2;
+  map<string, string> mapped = 3;
+
+  oneof choice {
+    string selected = 4;
+  }
+
+  string verified = 6 [features.utf8_validation = VERIFY];
+}

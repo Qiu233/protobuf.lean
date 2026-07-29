@@ -1,0 +1,29 @@
+file_to_generate: "extension.proto"
+parameter: "lean4_prefix=Forged"
+
+proto_file {
+  name: "host.proto"
+  package: "forged.host"
+  syntax: "proto2"
+  message_type {
+    name: "Host"
+    extension_range {
+      start: 100
+      end: 200
+    }
+  }
+}
+
+proto_file {
+  name: "extension.proto"
+  package: "forged.extension"
+  dependency: "host.proto"
+  syntax: "proto2"
+  extension {
+    name: "outside_range"
+    extendee: ".forged.host.Host"
+    number: 99
+    label: LABEL_OPTIONAL
+    type: TYPE_INT32
+  }
+}

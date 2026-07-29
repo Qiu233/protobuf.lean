@@ -14,7 +14,8 @@ There are 5 methods to use this library:
 5. Use the encoding/decoding utilities directly.
 
 **The first 3 methods require the `protoc` command.
-The last tested `protoc` version is `libprotoc 30.2`.**
+The last tested version is `libprotoc 35.0`; Edition 2024 inputs require
+`protoc` 32.0 or newer.**
 
 Downstream users of this package can expect the first 3 methods to be always reliable and production ready. The first two methods are highly recommended for production use.
 
@@ -114,6 +115,23 @@ Please read the source code under the folder `Encoding` to learn their usage.
 
 This usage is highly unrecommended and should only serve for debugging purposes.
 
+## Group wire encoding
+
+Legacy proto2 group fields are supported, including optional, required,
+repeated, and extension fields:
+
+```protobuf
+repeated group Result = 1 { fields... }
+```
+
+Editions message fields using
+`features.message_encoding = DELIMITED` are supported as the modern spelling
+of the same START_GROUP/END_GROUP wire representation. Proto3 group
+declarations remain invalid, as required by the language specification.
+
+Extension field defaults and packed encoding are supported by the generated
+static accessors. Other custom extension options are not interpreted.
+
 # Missing features
 
 Work in progress:
@@ -128,27 +146,3 @@ Some of them may never be supported:
 ### -Proto1 behaviors
 `proto1` has been too old and is not worth an implementation.
 For example, option `message_set_wire_format` is forbidden.
-
-
-### -SGROUP/EGROUP in serialization 
-The delimited serialization of message is not allowed, though they can be deserialized from wire format. The `edition` `features` enabling this are forbidden.
-
-Note: It is indiscernible to an end user whether the wire format of a submessage is delimited or nested, since all protobuf implementations are expected to parse both, and so is this package.
-
-Thus the absence of this feature does not affect protobuf functionality in an observable way.
-### -Group fields
-Only `proto2` allows group fields, for example:
-```protobuf
-repeated group Result = 1 { fields... }
-```
-
-This is forbidden. Use nested messages instead.
-
-### -Options of extension fields
-For example:
-```protobuf
-extend A {
-  optional int32 a = 42 [default = 1];
-}
-```
-The `default` option (and other options) of `extend`ed field `a` has no effects.

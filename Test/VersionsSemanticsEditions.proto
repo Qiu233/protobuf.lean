@@ -1,0 +1,35 @@
+edition = "2023";
+
+package test.versions.editions;
+
+enum DefaultEnum {
+  DEFAULT_ENUM_ZERO = 0;
+  builder = 1;
+  DEFAULT_ENUM_NEGATIVE = -1;
+}
+
+message Semantics {
+  string spaced = 1 [default = "  padded \t"];
+  bytes escaped = 2 [
+    default = "\000\001\177\200\377\\\"'"
+  ];
+  DefaultEnum enum_reserved_name = 3 [default = builder];
+  double positive_infinity = 4 [default = inf];
+  double negative_infinity = 5 [default = -inf];
+  double not_a_number = 6 [default = nan];
+  float positive_infinity_float = 7 [default = inf];
+  float negative_infinity_float = 8 [default = -inf];
+  float not_a_number_float = 9 [default = nan];
+
+  int32 implicit = 10 [features.field_presence = IMPLICIT];
+  int32 explicit = 11;
+  int32 required = 12 [features.field_presence = LEGACY_REQUIRED];
+
+  repeated int32 packed = 13;
+  repeated int32 expanded = 14 [
+    features.repeated_field_encoding = EXPANDED
+  ];
+  DefaultEnum required_enum = 15 [
+    features.field_presence = LEGACY_REQUIRED
+  ];
+}

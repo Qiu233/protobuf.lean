@@ -1,0 +1,27 @@
+file_to_generate: "first.proto"
+file_to_generate: "second.proto"
+parameter: "lean4_prefix=Forged"
+proto_file {
+  name: "first.proto"
+  package: "forged.first"
+  syntax: "proto3"
+  message_type { name: "First" }
+}
+proto_file {
+  name: "second.proto"
+  package: "forged.second"
+  syntax: "proto3"
+  message_type { name: "Second" }
+}
+source_file_descriptors {
+  name: "first.proto"
+  package: "forged.first"
+  syntax: "proto3"
+  message_type { name: "First" }
+}
+source_file_descriptors {
+  name: "first.proto"
+  package: "forged.first"
+  syntax: "proto3"
+  message_type { name: "First" }
+}

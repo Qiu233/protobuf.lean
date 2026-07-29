@@ -1,0 +1,64 @@
+syntax = "proto3";
+package naming_collisions.proto3;
+
+message HelperOwner {
+  message builder { int32 value = 1; }
+  message encode { int32 value = 1; }
+  message decode { int32 value = 1; }
+  message toMessage { int32 value = 1; }
+  message fromMessage { int32 value = 1; }
+  message merge { int32 value = 1; }
+  message decoder_rep { int32 value = 1; }
+
+  builder builder_value = 1;
+  encode encode_value = 2;
+  decode decode_value = 3;
+  toMessage to_message_value = 4;
+  fromMessage from_message_value = 5;
+  merge merge_value = 6;
+  decoder_rep decoder_value = 7;
+}
+
+message OneofOwner {
+  message choice_Type { int32 marker = 1; }
+
+  oneof choice {
+    int32 rec = 1;
+    string casesOn = 2;
+  }
+
+  choice_Type nested_value = 3;
+}
+
+message AutomaticOwner {
+  message rec { int32 mk = 1; }
+  enum casesOn {
+    CASES_ON_ZERO = 0;
+    CASES_ON_ONE = 1;
+  }
+
+  int32 mk = 1;
+  int32 recOn = 2;
+  int32 noConfusion = 3;
+  rec nested_rec = 4;
+  casesOn nested_enum = 5;
+  int32 ctorIdx = 6;
+  int32 _sizeOf_1 = 7;
+  int32 _sizeOf_inst = 8;
+}
+
+message OneofProjectionOwner {
+  oneof rec {
+    int32 value = 1;
+  }
+  oneof encode {
+    string text = 2;
+  }
+}
+
+enum AutomaticEnum {
+  AUTOMATIC_ENUM_ZERO = 0;
+  rec = 1;
+  casesOn = 2;
+  ctorElim = 3;
+}

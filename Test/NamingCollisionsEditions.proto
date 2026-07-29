@@ -1,0 +1,37 @@
+edition = "2023";
+package naming_collisions.editions;
+
+message HelperOwner {
+  message builder { int32 value = 1; }
+  message encode { int32 value = 1; }
+
+  builder builder_value = 1;
+  encode encode_value = 2;
+}
+
+message AutomaticOwner {
+  message rec { int32 mk = 1; }
+
+  int32 mk = 1;
+  rec nested_rec = 2;
+}
+
+message OneofOwner {
+  message choice_Type { int32 marker = 1; }
+
+  oneof choice {
+    int32 rec = 1;
+    string casesOn = 2;
+  }
+
+  choice_Type nested_value = 3;
+}
+
+message OneofProjectionOwner {
+  oneof rec {
+    int32 value = 1;
+  }
+  oneof encode {
+    string text = 2;
+  }
+}

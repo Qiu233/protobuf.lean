@@ -20,7 +20,16 @@ syntax (name := loadProtoDirCommand) "#load_proto_dir " str : command
 
 meta def read_proto (srcFile : FilePath) (protoPath : FilePath) : ExceptT String IO google.protobuf.FileDescriptorSet := do
   let bin ← IO.FS.withTempFile fun _h tmp => do
-    _ ← IO.Process.run { cmd := "protoc", args := #[srcFile.toString, "--descriptor_set_out", tmp.toString, s!"--proto_path={protoPath.toString}"] }
+    _ ← IO.Process.run {
+      cmd := "protoc"
+      args := #[
+        srcFile.toString,
+        "--include_imports",
+        "--retain_options",
+        "--descriptor_set_out", tmp.toString,
+        s!"--proto_path={protoPath.toString}"
+      ]
+    }
     IO.FS.readBinFile tmp -- TODO: may be too large, make it incremental
   let data ← match (Binary.Get.run (Binary.getThe Encoding.Message) bin |>.toExcept) with
     | .ok data => pure data
@@ -28,6 +37,13 @@ meta def read_proto (srcFile : FilePath) (protoPath : FilePath) : ExceptT String
   let desc ← match google.protobuf.FileDescriptorSet.fromMessage data with
     | .ok d => pure d
     | .error e => throw s!"failed to parse protoc output: {e}"
+  /-
+  Keep every transitive descriptor for whole-set static validation, including
+  `descriptor.proto`.  `Versions.compile_proto` knows that its Lean
+  declarations are already provided by `Protobuf.Internal.Desc` and omits only
+  its code generation after validation.  Removing it here would make valid
+  custom-option extensions look as though their extendee did not exist.
+  -/
   return desc
 
 meta def read_proto_files (srcFiles : Array FilePath) (protoPath : FilePath) :
@@ -35,7 +51,12 @@ meta def read_proto_files (srcFiles : Array FilePath) (protoPath : FilePath) :
   if srcFiles.isEmpty then
     throw "no .proto files found in directory"
   let bin ← IO.FS.withTempFile fun _h tmp => do
-    let mut args := #[s!"--proto_path={protoPath.toString}", s!"--descriptor_set_out={tmp.toString}"]
+    let mut args := #[
+      s!"--proto_path={protoPath.toString}",
+      "--include_imports",
+      "--retain_options",
+      s!"--descriptor_set_out={tmp.toString}"
+    ]
     args := args ++ srcFiles.map (·.toString)
     _ ← IO.Process.run { cmd := "protoc", args := args }
     IO.FS.readBinFile tmp -- TODO: may be too large, make it incremental
@@ -45,6 +66,7 @@ meta def read_proto_files (srcFiles : Array FilePath) (protoPath : FilePath) :
   let desc ← match google.protobuf.FileDescriptorSet.fromMessage data with
     | .ok d => pure d
     | .error e => throw s!"failed to parse protoc output: {e}"
+  -- See `read_proto`: validation needs the complete descriptor graph.
   return desc
 
 meta partial def collect_proto_files (root : FilePath) : IO (Array FilePath) := do
@@ -72,8 +94,8 @@ public meta def elabLoadProtoFileCommand : CommandElab := fun stx => do
     let f := FilePath.mk x.getString
     unless ← f.pathExists do
       throwErrorAt x "file {f} does not exist"
-    if ← f.isDir then
-      throwErrorAt x "path {f} is a directory"
+    unless ← f.isDir do
+      throwErrorAt x "path {f} is not a directory"
     pure f
   let protoPath ← (folder? <|> path.parent).getDM (throwError "failed to infer --proto_path")
   let descExcept ← liftM (m := IO) <| read_proto path protoPath
@@ -82,7 +104,10 @@ public meta def elabLoadProtoFileCommand : CommandElab := fun stx => do
     | Except.error e => throwError "{e}"
   if ← protobuf.trace.descriptor.getM then
     logInfo m!"{repr desc}"
-  let commands ← match Versions.compile_proto desc |>.run with
+  let commands ←
+    match
+        Versions.compile_proto desc
+          #["google/protobuf/descriptor.proto"] |>.run with
     | Except.ok cmds => pure cmds
     | Except.error e => throwError "{e}"
   if ← protobuf.trace.notation.getM then
@@ -105,7 +130,10 @@ public meta def elabLoadProtoDirCommand : CommandElab := fun stx => do
     | Except.error e => throwError "{e}"
   if ← protobuf.trace.descriptor.getM then
     logInfo m!"{repr desc}"
-  let commands ← match Versions.compile_proto desc |>.run with
+  let commands ←
+    match
+        Versions.compile_proto desc
+          #["google/protobuf/descriptor.proto"] |>.run with
     | Except.ok cmds => pure cmds
     | Except.error e => throwError "{e}"
   if ← protobuf.trace.notation.getM then

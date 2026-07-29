@@ -1,0 +1,41 @@
+syntax = "proto2";
+
+package group_support.proto2;
+
+message LegacyGroups {
+  optional group OptionalGroup = 5 {
+    optional int32 a = 1;
+    optional string b = 2;
+  }
+
+  repeated group RepeatedGroup = 6 {
+    optional int32 value = 1;
+  }
+
+  required group RequiredGroup = 7 {
+    required int32 value = 1;
+  }
+}
+
+message RequiredGroupMerge {
+  required group Value = 1 {
+    required int32 a = 1;
+    required int32 b = 2;
+  }
+}
+
+message RecursiveLegacy {
+  optional group Child = 1 {
+    optional RecursiveLegacy parent = 1;
+  }
+}
+
+message ExtensionHost {
+  extensions 100 to 199;
+}
+
+extend ExtensionHost {
+  optional group ExtensionGroup = 100 {
+    optional int32 value = 1;
+  }
+}

@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package plugin.integration.dep;
+
+message Common {
+  string value = 1;
+}

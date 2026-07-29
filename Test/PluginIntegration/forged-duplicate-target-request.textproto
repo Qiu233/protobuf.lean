@@ -1,0 +1,9 @@
+file_to_generate: "duplicate.proto"
+file_to_generate: "duplicate.proto"
+parameter: "lean4_prefix=Forged"
+proto_file {
+  name: "duplicate.proto"
+  package: "forged.duplicate"
+  syntax: "proto3"
+  message_type { name: "Message" }
+}

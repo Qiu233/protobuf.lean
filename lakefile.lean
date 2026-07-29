@@ -27,3 +27,121 @@ lean_exe benchJsonEncode where
 
 lean_exe benchJsonDecode where
   root := `Test.Bench.JsonDecode
+
+lean_exe testVersionsSemantics where
+  root := `Test.VersionsSemantics
+
+lean_exe testVersionsValidation where
+  root := `Test.VersionsValidation
+
+lean_exe testExtensions where
+  root := `Test.Extensions
+
+lean_exe testClosedEnum where
+  root := `Test.ClosedEnum
+
+lean_exe testUtf8Validation where
+  root := `Test.Utf8Validation
+
+lean_lib Tests where
+  roots := #[
+    `Test.EncodingWire,
+    `Test.ExtensionTagBase,
+    `Test.ExtensionKnownTagCollisionsBase,
+    `Test.ExtensionKnownTagCollisions,
+    `Test.NotationSyntax,
+    `Test.Proto3,
+    `Test.Folder,
+    `Test.Desc,
+    `Test.VersionsSemantics,
+    `Test.VersionsValidation,
+    `Test.Extensions,
+    `Test.ClosedEnum,
+    `Test.Utf8Validation,
+    `Test.RecursionDepth,
+    `Test.RequiredMerge,
+    `Test.Groups,
+    `Test.NamingCollisions,
+    `Test.WideCodegen,
+    `Test.OneofParentCollisionBase,
+    `Test.OneofParentCollisions,
+    `Test.RootName,
+    `Test.ElabStandaloneImport,
+    `Test.VisibilityRetainedOptions,
+    `Test.OfficialSmokeUnittestProto3,
+    `Test.OfficialStruct,
+    `Test.OfficialConformanceProto3
+  ]
+
+@[test_driver]
+script test (_args) do
+  let runLake (args : Array String) : IO UInt32 := do
+    let child ← IO.Process.spawn {
+      cmd := "lake"
+      args
+      stdin := .inherit
+      stdout := .inherit
+      stderr := .inherit
+    }
+    child.wait
+
+  let buildExit ← runLake #[
+    "build",
+    "+Test.EncodingWire",
+    "+Test.ExtensionTagBase",
+    "+Test.ExtensionKnownTagCollisions",
+    "+Test.NotationSyntax",
+    "+Test.Proto3",
+    "+Test.Folder",
+    "+Test.Desc",
+    "+Test.RecursionDepth",
+    "+Test.RequiredMerge",
+    "+Test.Groups",
+    "+Test.NamingCollisions",
+    "+Test.WideCodegen",
+    "+Test.OneofParentCollisions",
+    "+Test.RootName",
+    "+Test.ElabStandaloneImport",
+    "+Test.VisibilityRetainedOptions",
+    "+Test.OfficialSmokeUnittestProto3",
+    "+Test.OfficialStruct",
+    "Plugin",
+    "testVersionsSemantics",
+    "testVersionsValidation",
+    "testExtensions",
+    "testClosedEnum",
+    "testUtf8Validation"
+  ]
+  if buildExit != 0 then
+    return buildExit
+
+  -- Keep the largest upstream schema in a separate Lake invocation so it
+  -- cannot overlap other generated-code jobs and multiply peak memory usage.
+  let conformanceExit ←
+    runLake #["build", "+Test.OfficialConformanceProto3"]
+  if conformanceExit != 0 then
+    return conformanceExit
+
+  for executable in #[
+      "testVersionsSemantics",
+      "testVersionsValidation",
+      "testExtensions",
+      "testClosedEnum",
+      "testUtf8Validation"
+    ] do
+    let runExit ← runLake #["exe", executable]
+    if runExit != 0 then
+      return runExit
+
+  let pluginTest ← IO.Process.spawn {
+    cmd := "bash"
+    args := #["Test/PluginIntegration.sh"]
+    stdin := .inherit
+    stdout := .inherit
+    stderr := .inherit
+  }
+  let pluginExit ← pluginTest.wait
+  if pluginExit != 0 then
+    return pluginExit
+
+  return 0

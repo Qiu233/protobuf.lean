@@ -1,0 +1,23 @@
+edition = "2023";
+
+package test.closed.editions;
+
+option features.enum_type = CLOSED;
+
+enum ClosedEnum {
+  CLOSED_ENUM_ZERO = 0;
+  CLOSED_ENUM_ONE = 1;
+}
+
+message ClosedMessage {
+  ClosedEnum singular = 1;
+  repeated ClosedEnum expanded = 2 [
+    features.repeated_field_encoding = EXPANDED
+  ];
+  repeated ClosedEnum packed = 3;
+  map<int32, ClosedEnum> mapped = 4;
+
+  oneof choice {
+    ClosedEnum selected = 5;
+  }
+}

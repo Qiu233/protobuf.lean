@@ -1,0 +1,20 @@
+syntax = "proto2";
+
+package test.utf8.proto2;
+
+message RawStrings {
+  optional string singular = 1 [default = "\xff"];
+  repeated string repeated = 2;
+  map<string, string> mapped = 3;
+
+  oneof choice {
+    string selected = 4;
+  }
+
+  extensions 100 to max;
+}
+
+extend RawStrings {
+  optional string singular_ext = 100;
+  repeated string repeated_ext = 101;
+}

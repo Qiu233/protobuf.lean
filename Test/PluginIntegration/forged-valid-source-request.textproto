@@ -1,0 +1,21 @@
+file_to_generate: "valid-source.proto"
+parameter: "lean4_prefix=Forged"
+proto_file {
+  name: "valid-source.proto"
+  package: "forged.source"
+  syntax: "editions"
+  edition: EDITION_2024
+  message_type { name: "Message" }
+}
+source_file_descriptors {
+  name: "valid-source.proto"
+  package: "forged.source"
+  syntax: "editions"
+  edition: EDITION_2024
+  options {
+    features {
+      default_symbol_visibility: STRICT
+    }
+  }
+  message_type { name: "Message" }
+}

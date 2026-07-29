@@ -1,0 +1,15 @@
+file_to_generate: "collision"
+file_to_generate: "collision.proto"
+parameter: "lean4_prefix=Forged"
+proto_file {
+  name: "collision"
+  package: "forged.extensionless"
+  syntax: "proto3"
+  message_type { name: "Message" }
+}
+proto_file {
+  name: "collision.proto"
+  package: "forged.proto"
+  syntax: "proto3"
+  message_type { name: "Message" }
+}

@@ -3,6 +3,7 @@ module
 import Binary
 public import Protobuf.Encoding.Basic
 public import Protobuf.Encoding.Binary
+public import Protobuf.UnvalidatedString
 import Std
 
 public section
@@ -17,20 +18,84 @@ def Message.push (msg : Message) (r : Record) : Message := {msg with records := 
 @[always_inline]
 def Message.set (msg : Message) (fieldNum : Nat) (value : ProtoVal) : Message := msg.push { fieldNum, value }
 
-@[always_inline]
-def ProtoVal.ofMessage : Message → Except Protobuf.Encoding.ProtoError ProtoVal := fun s => return ProtoVal.LEN (Put.run (put s))
+/-
+Validate a raw wire tree before a generated encoder passes it to `Binary.Put`.
+
+Decoded unknown fields already satisfy these invariants, and statically
+generated builders only construct valid values.  Generated message structures
+also expose `Unknown.Fields`, however, so callers can inject an out-of-domain
+`Nat` varint or field number.  Reject those values explicitly instead of
+letting the low-level `UInt64.ofNat` conversion truncate them.
+-/
+mutual
+  partial def ProtoVal.validateForEncoding : ProtoVal → Except ProtoError Unit
+    | .VARINT value =>
+        if value > (1 <<< 64) - 1 then
+          throw .invalidVarint
+        else
+          pure ()
+    | .LEN data =>
+        if data.size > (1 <<< 31) - 1 then
+          throw (.userError
+            "length-delimited protobuf value exceeds the 2 GiB limit")
+        else
+          pure ()
+    | .GROUPED message =>
+        message.validateForEncoding
+    | .I64 _
+    | .I32 _ =>
+        pure ()
+
+  partial def Record.validateForEncoding
+      (record : Record) : Except ProtoError Unit := do
+    if record.fieldNum == 0 || record.fieldNum > (1 <<< 29) - 1 then
+      throw (.invalidWireType
+        s!"protobuf field number {record.fieldNum} is outside 1..536870911")
+    record.value.validateForEncoding
+
+  partial def Message.validateForEncoding
+      (message : Message) : Except ProtoError Unit :=
+    message.records.forM Record.validateForEncoding
+end
 
 @[always_inline]
-def ProtoVal.ofString : String → Except Protobuf.Encoding.ProtoError ProtoVal := fun s => return ProtoVal.LEN s.toUTF8
+private def ProtoVal.ofLengthDelimited (data : ByteArray) :
+    Except Protobuf.Encoding.ProtoError ProtoVal := do
+  if data.size > (1 <<< 31) - 1 then
+    throw (.userError "length-delimited protobuf value exceeds the 2 GiB limit")
+  return ProtoVal.LEN data
 
 @[always_inline]
-def ProtoVal.ofBytes : ByteArray → Except Protobuf.Encoding.ProtoError ProtoVal := fun s => return ProtoVal.LEN s
+def ProtoVal.ofMessage : Message → Except Protobuf.Encoding.ProtoError ProtoVal := fun s =>
+  do
+    s.validateForEncoding
+    ProtoVal.ofLengthDelimited (Put.run (put s))
+
+@[always_inline]
+def ProtoVal.ofGroup : Message → Except Protobuf.Encoding.ProtoError ProtoVal := fun s => do
+  s.validateForEncoding
+  return ProtoVal.GROUPED s
+
+@[always_inline]
+def ProtoVal.ofString : String → Except Protobuf.Encoding.ProtoError ProtoVal := fun s =>
+  ProtoVal.ofLengthDelimited s.toUTF8
+
+@[always_inline]
+def ProtoVal.ofUnvalidatedString : Protobuf.UnvalidatedString → Except Protobuf.Encoding.ProtoError ProtoVal :=
+  fun s => ProtoVal.ofLengthDelimited s.bytes
+
+@[always_inline]
+def ProtoVal.ofBytes : ByteArray → Except Protobuf.Encoding.ProtoError ProtoVal :=
+  ProtoVal.ofLengthDelimited
 
 @[always_inline]
 def ProtoVal.ofBool : Bool → Except Protobuf.Encoding.ProtoError ProtoVal := fun x => return ProtoVal.VARINT (if x then 1 else 0)
 
 @[always_inline]
-def ProtoVal.ofVarint_int32 : Int32 → Except Protobuf.Encoding.ProtoError ProtoVal := fun x => return ProtoVal.VARINT x.toUInt32.toNat
+def ProtoVal.ofVarint_int32 : Int32 → Except Protobuf.Encoding.ProtoError ProtoVal := fun x =>
+  -- `int32` uses the sign-extended 64-bit two's-complement value on the wire.
+  -- In particular, every negative `int32` must occupy ten varint bytes.
+  return ProtoVal.VARINT x.toInt64.toUInt64.toNat
 @[always_inline]
 def ProtoVal.ofVarint_uint32 : UInt32 → Except Protobuf.Encoding.ProtoError ProtoVal := fun x => return ProtoVal.VARINT x.toNat
 @[always_inline]
@@ -40,12 +105,16 @@ def ProtoVal.ofVarint_uint64 : UInt64 → Except Protobuf.Encoding.ProtoError Pr
 @[always_inline]
 def ProtoVal.ofVarint_sint32 : Int32 → Except Protobuf.Encoding.ProtoError ProtoVal := fun x =>
   let y := x.toUInt32
-  let n := (y <<< 1) ^^^ (y >>> 31)
+  -- `y >>> 31` is only 0 or 1 because `y` is unsigned.  ZigZag needs the
+  -- arithmetic right-shift of the signed input, i.e. an all-zero/all-one mask.
+  let signMask : UInt32 := (0 : UInt32) - (y >>> 31)
+  let n := (y <<< 1) ^^^ signMask
   return ProtoVal.VARINT n.toNat
 @[always_inline]
 def ProtoVal.ofVarint_sint64 : Int64 → Except Protobuf.Encoding.ProtoError ProtoVal := fun x =>
   let y := x.toUInt64
-  let n := (y <<< 1) ^^^ (y >>> 63)
+  let signMask : UInt64 := (0 : UInt64) - (y >>> 63)
+  let n := (y <<< 1) ^^^ signMask
   return ProtoVal.VARINT n.toNat
 
 @[always_inline]
@@ -72,18 +141,25 @@ def ProtoVal.canBePacked : ProtoVal → Bool
 
 open Binary.Primitive.LE in
 @[always_inline]
-private def put_packed! : ProtoVal → Put
-  | .VARINT x => put_varint x
-  | .I64 x => put (UInt64.ofBitVec x)
-  | .I32 x => put (UInt32.ofBitVec x)
-  | _ => unreachable!
+private def packedWriter : ProtoVal → Except ProtoError Put
+  | .VARINT x =>
+      if x > (1 <<< 64) - 1 then
+        throw .invalidVarint
+      else
+        pure (put_varint x)
+  | .I64 x => pure (put (UInt64.ofBitVec x))
+  | .I32 x => pure (put (UInt32.ofBitVec x))
+  | _ =>
+      throw (.invalidWireType
+        "only VARINT, I64, and I32 protobuf values can be packed")
 
 @[always_inline]
-def ProtoVal.of_packed : Array ProtoVal → ProtoVal := fun xs =>
-  assert! xs.all ProtoVal.canBePacked
+def ProtoVal.of_packed (xs : Array ProtoVal) : Except ProtoError ProtoVal := do
+  let writers ← xs.mapM packedWriter
   let data := Binary.Put.run do
-    xs.forM put_packed!
-  ProtoVal.LEN data
+    for writer in writers do
+      writer
+  ProtoVal.ofLengthDelimited data
 
 @[always_inline]
 def Message.wire_map (msg : Message) : Std.HashMap Nat (Array ProtoVal) → Message := fun m =>
@@ -118,7 +194,8 @@ scoped notation n " <~f " vs " # " msg => show Except Protobuf.Encoding.ProtoErr
 /-- packed repeated -/
 scoped notation n " <~p " vs " # " msg => show Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message from do
   let xs ← vs
-  pure (Protobuf.Encoding.Message.set msg n (Protobuf.Encoding.ProtoVal.of_packed xs))
+  let packed ← Protobuf.Encoding.ProtoVal.of_packed xs
+  pure (Protobuf.Encoding.Message.set msg n packed)
 
 set_option quotPrecheck true
 

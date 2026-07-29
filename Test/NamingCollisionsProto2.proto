@@ -1,0 +1,37 @@
+syntax = "proto2";
+package naming_collisions.proto2;
+
+message ExplicitDefaults {
+  message get_foo { optional int32 value = 1; }
+  message has_foo { optional int32 value = 1; }
+
+  optional int32 foo = 1 [default = 7];
+  optional get_foo get_holder = 2;
+  optional has_foo has_holder = 3;
+}
+
+message OneofOwner {
+  message selected_Type { optional int32 marker = 1; }
+
+  oneof selected {
+    int32 rec = 1;
+    string casesOn = 2;
+  }
+
+  optional selected_Type nested_value = 3;
+}
+
+message OneofProjectionOwner {
+  oneof rec {
+    int32 value = 1;
+  }
+  oneof encode {
+    string text = 2;
+  }
+}
+
+enum AutomaticEnum {
+  rec = 0;
+  casesOn = 1;
+  ctorElim = 2;
+}

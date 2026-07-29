@@ -1,0 +1,11 @@
+edition = "2024";
+
+package visibility_export_all;
+
+option features.default_symbol_visibility = EXPORT_ALL;
+
+message Outer {
+  message Nested {
+    int32 value = 1;
+  }
+}

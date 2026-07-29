@@ -1,0 +1,53 @@
+file_to_generate: "numeric-default.proto"
+parameter: "lean4_prefix=Forged"
+
+proto_file {
+  name: "numeric-default.proto"
+  package: "forged.numeric"
+  syntax: "proto2"
+  message_type {
+    name: "Defaults"
+    field {
+      name: "leading_zero_integer"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_DOUBLE
+      default_value: "077"
+    }
+    field {
+      name: "invalid_source_octal"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_DOUBLE
+      default_value: "08"
+    }
+    field {
+      name: "leading_zero_decimal"
+      number: 3
+      label: LABEL_OPTIONAL
+      type: TYPE_DOUBLE
+      default_value: "01.0"
+    }
+    field {
+      name: "hexadecimal_float"
+      number: 4
+      label: LABEL_OPTIONAL
+      type: TYPE_DOUBLE
+      default_value: "0x1.8p1"
+    }
+    field {
+      name: "negative_nan"
+      number: 5
+      label: LABEL_OPTIONAL
+      type: TYPE_DOUBLE
+      default_value: "-nan"
+    }
+    field {
+      name: "float_double_rounding"
+      number: 6
+      label: LABEL_OPTIONAL
+      type: TYPE_FLOAT
+      default_value: "1.0000000596046448"
+    }
+  }
+}

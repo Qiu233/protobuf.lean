@@ -1,0 +1,52 @@
+edition = "2023";
+
+package test.required_merge.editions;
+
+message Child {
+  int32 a = 1 [features.field_presence = LEGACY_REQUIRED];
+  int32 b = 2 [features.field_presence = LEGACY_REQUIRED];
+  string verified = 3;
+}
+
+message OptionalOuter {
+  Child child = 1;
+}
+
+message RequiredOuter {
+  Child child = 1 [features.field_presence = LEGACY_REQUIRED];
+}
+
+message RepeatedOuter {
+  repeated Child child = 1;
+}
+
+message MapOuter {
+  map<int32, Child> children = 1;
+}
+
+message PackedLeaf {
+  repeated fixed32 values = 1;
+}
+
+message DeferredErrorValue {
+  Child first = 1;
+  PackedLeaf second = 2;
+}
+
+message DeferredErrorMapOuter {
+  map<int32, DeferredErrorValue> children = 1;
+}
+
+message DeferredErrorOneofOuter {
+  oneof choice {
+    DeferredErrorValue value = 1;
+    int32 scalar = 2;
+  }
+}
+
+message OneofOuter {
+  oneof choice {
+    Child child = 1;
+    int32 scalar = 2;
+  }
+}

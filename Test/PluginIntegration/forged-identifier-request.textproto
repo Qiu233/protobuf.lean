@@ -1,0 +1,17 @@
+file_to_generate: "bad-identifier.proto"
+parameter: "lean4_prefix=Forged"
+
+proto_file {
+  name: "bad-identifier.proto"
+  package: "forged.bad»"
+  syntax: "proto3"
+  message_type {
+    name: "Message"
+    field {
+      name: "value"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+    }
+  }
+}

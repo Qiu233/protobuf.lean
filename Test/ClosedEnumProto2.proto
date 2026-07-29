@@ -1,0 +1,27 @@
+syntax = "proto2";
+
+package test.closed.proto2;
+
+enum ClosedEnum {
+  CLOSED_ENUM_ZERO = 0;
+  CLOSED_ENUM_ONE = 1;
+}
+
+message ClosedMessage {
+  optional ClosedEnum singular = 1;
+  repeated ClosedEnum expanded = 2;
+  repeated ClosedEnum packed = 3 [packed = true];
+  map<int32, ClosedEnum> mapped = 4;
+
+  oneof choice {
+    ClosedEnum selected = 5;
+  }
+
+  extensions 100 to max;
+}
+
+extend ClosedMessage {
+  optional ClosedEnum singular_ext = 100;
+  repeated ClosedEnum expanded_ext = 101;
+  repeated ClosedEnum packed_ext = 102 [packed = true];
+}

@@ -1,0 +1,8 @@
+file_to_generate: "invalid-prefix.proto"
+parameter: "lean4_prefix=Bad-Prefix"
+proto_file {
+  name: "invalid-prefix.proto"
+  package: "forged.prefix"
+  syntax: "proto3"
+  message_type { name: "Message" }
+}

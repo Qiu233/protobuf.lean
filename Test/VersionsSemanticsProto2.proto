@@ -1,0 +1,56 @@
+syntax = "proto2";
+
+package test.versions.proto2;
+
+enum DefaultEnum {
+  DEFAULT_ENUM_ZERO = 0;
+  builder = 1;
+  DEFAULT_ENUM_NEGATIVE = -1;
+}
+
+// Proto2's implicit enum default is the first declared value, not whichever
+// declaration happens to have numeric value zero.
+enum NonZeroFirstEnum {
+  NON_ZERO_FIRST = 7;
+  LATER_ZERO = 0;
+}
+
+enum HelperNameAlias {
+  option allow_alias = true;
+  toInt32 = 0;
+  toInt32_ = 0;
+}
+
+message Defaults {
+  optional string spaced = 1 [default = "  padded \t"];
+  optional bytes escaped = 2 [
+    default = "\000\001\177\200\377\\\"'"
+  ];
+  optional DefaultEnum enum_reserved_name = 3 [default = builder];
+  optional double positive_infinity = 4 [default = inf];
+  optional double negative_infinity = 5 [default = -inf];
+  optional double not_a_number = 6 [default = nan];
+  optional float positive_infinity_float = 7 [default = inf];
+  optional float negative_infinity_float = 8 [default = -inf];
+  optional float not_a_number_float = 9 [default = nan];
+
+  repeated int32 expanded = 10;
+  repeated int32 packed = 11 [packed = true];
+  optional int32 builder = 12;
+  optional int32 builder_ = 13;
+  optional int32 octal_default = 14 [default = 077];
+  optional uint32 hex_default = 15 [default = 0xffffffff];
+}
+
+message RequiredFields {
+  required int32 scalar = 1 [default = 0];
+  required DefaultEnum enum_value = 2 [default = DEFAULT_ENUM_ZERO];
+}
+
+message NonZeroEnumDefaults {
+  extensions 100 to max;
+}
+
+extend NonZeroEnumDefaults {
+  optional NonZeroFirstEnum nonzero_first_ext = 100;
+}

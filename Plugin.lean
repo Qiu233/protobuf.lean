@@ -1,7 +1,9 @@
 module
 
+import Lean.Syntax
 import Protobuf.Encoding
 import Protobuf.Internal.Desc
+import Protobuf.Plugin.DescriptorBoundary
 meta import Protobuf.Notation
 meta import Protobuf.Elab
 import Protobuf.Notation.Syntax
@@ -20,6 +22,119 @@ section
 open google.protobuf
 open google.protobuf.compiler
 
+private def supportedResponse
+    (files : Array CodeGeneratorResponse.File := #[])
+    (error? : Option String := none) : CodeGeneratorResponse := {
+  error := error?
+  file := files
+  supported_features := some 3
+  minimum_edition := some (1000 : Int32)
+  maximum_edition := some (1001 : Int32)
+}
+
+private def isAsciiAlpha (c : Char) : Bool :=
+  let n := c.toNat
+  (65 ≤ n && n ≤ 90) || (97 ≤ n && n ≤ 122)
+
+private def isWindowsDrivePath (path : String) : Bool :=
+  match path.toList with
+  | drive :: ':' :: _ => isAsciiAlpha drive
+  | _ => false
+
+private def normalizePath (path : String) : String :=
+  path.map fun c => if c == '\\' then '/' else c
+
+private def dropLeadingCurrentDir (path : String) : String :=
+  if path.startsWith "./" then
+    (path.drop 2).toString
+  else
+    path
+
+private def normalizeRelativePath (path : String) : Except String String := do
+  let path := dropLeadingCurrentDir (normalizePath path)
+  if path.isEmpty || path.startsWith "/" then
+    throw s!"protobuf file name must be a non-empty relative path: {path.quote}"
+  if path.any fun c => c.toNat < 32 || c.toNat == 127 then
+    throw s!"protobuf file name contains a control character: {path.quote}"
+  if isWindowsDrivePath path then
+    throw s!"protobuf file name must not use a Windows drive path: {path.quote}"
+  let parts := path.splitOn "/"
+  if parts.any fun part => part.isEmpty || part == "." || part == ".." then
+    throw s!"protobuf file name contains a forbidden path component: {path.quote}"
+  return String.intercalate "/" parts
+
+private def moduleNameFromPath (path : String) : Except String String := do
+  let path ← normalizeRelativePath path
+  let path :=
+    if path.endsWith ".proto" then
+      (path.dropEnd ".proto".length).toString
+    else
+      path
+  let parts := path.splitOn "/"
+  if parts.any (·.isEmpty) then
+    throw s!"protobuf file name has an empty Lean module component: {path.quote}"
+  let parts ← parts.mapM fun part =>
+    match Name.escapePart part (force := true) with
+    | some escaped => pure escaped
+    | none =>
+      throw
+        s!"cannot represent protobuf path component {part.quote} as a Lean module name"
+  return String.intercalate "." parts
+
+private def withPrefix (prefix_ : String) (mod : String) : String :=
+  if prefix_.isEmpty then mod
+  else if mod.isEmpty then prefix_
+  else prefix_ ++ "." ++ mod
+
+private def isModuleIdentStart (c : Char) : Bool :=
+  c == '_' || isAsciiAlpha c
+
+private def isModuleIdentRest (c : Char) : Bool :=
+  isModuleIdentStart c || let n := c.toNat; 48 ≤ n && n ≤ 57
+
+private def normalizeModulePrefix (prefix_ : String) : Except String String := do
+  if prefix_.isEmpty then
+    return ""
+  let parts := prefix_.splitOn "."
+  if parts.any fun part =>
+      match part.toList with
+      | [] => true
+      | first :: rest =>
+        !isModuleIdentStart first || !rest.all isModuleIdentRest then
+    throw
+      s!"lean4_prefix must be a dot-separated ASCII Lean module name: {prefix_.quote}"
+  let escaped ← parts.mapM fun part =>
+    match Name.escapePart part (force := true) with
+    | some value => pure value
+    | none =>
+      throw
+        s!"cannot represent lean4_prefix component {part.quote} as a Lean module name"
+  return String.intercalate "." escaped
+
+private def outputFileName (name : String) : Except String String := do
+  let path ← normalizeRelativePath name
+  let output :=
+    if path.endsWith ".proto" then
+      let stem := (path.dropEnd ".proto".length).toString
+      if stem.isEmpty || (stem.splitOn "/").any (·.isEmpty) then
+        none
+      else
+        some (stem ++ ".lean")
+    else
+      some (path ++ ".lean")
+  let output ← output.getDM
+    (throw
+      s!"protobuf file name has an empty Lean module component: {path.quote}")
+  /-
+  protoc 35 rejects every output name containing `..`, even when it is not an
+  entire path component.  Reject here so the diagnostic is returned in
+  CodeGeneratorResponse.error rather than as a later filesystem failure.
+  -/
+  if output.contains ".." then
+    throw
+      s!"generated Lean file name contains `..`, which protoc rejects: {output.quote}"
+  return output
+
 
 -- bool compiler::GenerateCode(
 --      const CodeGeneratorRequest & request,
@@ -27,102 +142,122 @@ open google.protobuf.compiler
 --      CodeGeneratorResponse * response,
 --      std::string * error_msg)
 def generate_code (request : CodeGeneratorRequest) : ExceptT String IO CodeGeneratorResponse := do
+  let decodeProtocolString (field : String)
+      (value : Protobuf.UnvalidatedString) : Except String String :=
+    value.toString?.getDM
+      (throw s!"CodeGeneratorRequest.{field} contains invalid UTF-8")
+
   let parseOptions (param? : Option String) : Std.HashMap String String :=
     match param? with
     | none => {}
     | some param =>
       let entries := param.splitOn ","
       entries.foldl (init := {}) fun acc entry =>
-        let entry := entry.trim
+        let entry := entry.trimAscii.toString
         if entry.isEmpty then acc
         else
           match entry.splitOn "=" with
           | [] => acc
           | key :: rest =>
-            let key := key.trim
+            let key := key.trimAscii.toString
             if key.isEmpty then acc
             else
-              let value := String.intercalate "=" rest |>.trim
+              let value := String.intercalate "=" rest |>.trimAscii.toString
               acc.insert key value
 
-  let normalizePath (path : String) : String :=
-    path.map fun c => if c == '\\' then '/' else c
+  let parameter ← request.parameter.mapM fun value =>
+    liftM (m := Except String) (n := ExceptT String IO) <|
+      decodeProtocolString "parameter" value
+  let options := parseOptions parameter
+  let rawLean4Prefix ← options["lean4_prefix"]?.getDM (throw "lean4_prefix is not specified, you should specify by --lean4_opt=lean4_prefix=...")
+  let lean4Prefix ←
+    liftM (m := Except String) (n := ExceptT String IO) <|
+      normalizeModulePrefix rawLean4Prefix
 
-  let rec dropLast (xs : List String) : List String :=
-    match xs with
-    | [] => []
-    | [_] => []
-    | x :: xs => x :: dropLast xs
-
-  let rec last? (xs : List String) : Option String :=
-    match xs with
-    | [] => none
-    | [x] => some x
-    | _ :: xs => last? xs
-
-  let dirOf (path : String) : String :=
-    let parts := (normalizePath path).splitOn "/"
-    let parts := dropLast parts
-    String.intercalate "/" parts
-
-  let baseName (path : String) : String :=
-    let parts := (normalizePath path).splitOn "/"
-    (last? parts).getD ""
-
-  let moduleNameFromPath (path : String) : String :=
-    let path := normalizePath path
-    let path := if path.startsWith "./" then path.drop 2 else path
-    let path := if path.endsWith ".proto" then path.dropRight ".proto".length else path
-    let parts := path.splitOn "/" |>.filter (fun p => !p.isEmpty)
-    String.intercalate "." parts
-
-  let relativeImportPath (current : String) (dep : String) : String :=
-    let dep := normalizePath dep
-    let curDir := dirOf current
-    if curDir.isEmpty then dep
-    else
-      let prefix_ := curDir ++ "/"
-      if dep.startsWith prefix_ then dep.drop prefix_.length else dep
-
-  let withPrefix (prefix_ : String) (mod : String) : String :=
-    if prefix_.isEmpty then mod
-    else if mod.isEmpty then prefix_
-    else prefix_ ++ "." ++ mod
-
-  let options := parseOptions request.parameter
-  let lean4Prefix ← options["lean4_prefix"]?.getDM (throw "lean4_prefix is not specified, you should specify by --lean4_opt=lean4_prefix=...")
-
-  let filesToGenerate := request.file_to_generate
-  let targetSet : Std.HashMap String PUnit :=
-    filesToGenerate.foldl (init := {}) fun acc name => acc.insert name ()
+  let filesToGenerate ← request.file_to_generate.mapM fun value =>
+    liftM (m := Except String) (n := ExceptT String IO) <|
+      decodeProtocolString "file_to_generate" value
+  let mut targetSet : Std.HashMap String PUnit := {}
+  for name in filesToGenerate do
+    if targetSet.contains name then
+      throw s!"file_to_generate `{name}` is listed more than once"
+    targetSet := targetSet.insert name ()
   if filesToGenerate.isEmpty then
-    let supportedFeatures : UInt64 := 3
-    let response : CodeGeneratorResponse := {
-      file := #[]
-      supported_features := some supportedFeatures
-      minimum_edition := some (1000 : Int32)
-      maximum_edition := some (1001 : Int32)
-    }
-    return response
-  let sourceMap : Std.HashMap String FileDescriptorProto :=
-    request.source_file_descriptors.foldl (init := {}) fun acc (file : FileDescriptorProto) =>
-      match file.name with
-      | some name => acc.insert name file
-      | none => acc
+    return supportedResponse
+
+  let mut outputOwners : Std.HashMap String String := {}
+  let mut moduleOwners : Std.HashMap String String := {}
+  for name in filesToGenerate do
+    let moduleName ←
+      liftM (m := Except String) (n := ExceptT String IO) <|
+        moduleNameFromPath name
+    if let some previous := moduleOwners[moduleName]? then
+      throw
+        s!"file_to_generate `{name}` and `{previous}` map to the same Lean module `{moduleName}`"
+    moduleOwners := moduleOwners.insert moduleName name
+    let outputName ←
+      liftM (m := Except String) (n := ExceptT String IO) <|
+        outputFileName name
+    if let some previous := outputOwners[outputName]? then
+      throw
+        s!"file_to_generate `{name}` and `{previous}` map to the same output file `{outputName}`"
+    outputOwners := outputOwners.insert outputName name
+
+  let mut runtimeByName : Std.HashMap String FileDescriptorProto := {}
+  for file in request.proto_file do
+    let name ← file.name.getDM
+      (throw "proto_file descriptor is missing its name")
+    if runtimeByName.contains name then
+      throw s!"proto_file descriptor name `{name}` is listed more than once"
+    runtimeByName := runtimeByName.insert name file
+  for name in filesToGenerate do
+    unless runtimeByName.contains name do
+      throw s!"file_to_generate {name} was not found in protoc input"
+
+  let mut sourceMap : Std.HashMap String FileDescriptorProto := {}
+  if !request.source_file_descriptors.isEmpty then
+    if request.source_file_descriptors.size != filesToGenerate.size then
+      throw
+        s!"source_file_descriptors must contain exactly one entry for each file_to_generate; got {request.source_file_descriptors.size}, expected {filesToGenerate.size}"
+    for source in request.source_file_descriptors do
+      let name ← source.name.getDM
+        (throw "source_file_descriptors entry is missing its name")
+      unless targetSet.contains name do
+        throw
+          s!"source_file_descriptors entry `{name}` is not listed in file_to_generate"
+      if sourceMap.contains name then
+        throw
+          s!"source_file_descriptors entry `{name}` is listed more than once"
+      let runtime ← runtimeByName[name]?.getDM
+        (throw
+          s!"source_file_descriptors entry `{name}` has no matching proto_file descriptor")
+      let equivalent ←
+        liftM (m := Except String) (n := ExceptT String IO) <|
+          Protobuf.Plugin.DescriptorBoundary.runtimeEquivalent runtime source
+      unless equivalent do
+        throw
+          s!"source_file_descriptors entry `{name}` does not match its stripped proto_file descriptor"
+      sourceMap := sourceMap.insert name source
+    for name in filesToGenerate do
+      unless sourceMap.contains name do
+        throw
+          s!"source_file_descriptors is missing file_to_generate `{name}`"
+
   let protoFiles : Array FileDescriptorProto :=
-    request.proto_file.map fun (file : FileDescriptorProto) =>
-      match file.name with
-      | some name =>
-        match sourceMap[name]? with
-        | some full => full
-        | none => file
-      | none => file
+    request.proto_file.map fun runtime =>
+      match runtime.name >>= fun name => sourceMap[name]? with
+      | some source =>
+        Protobuf.Plugin.DescriptorBoundary.mergeSourceOnlyFields
+          runtime source
+      | none => runtime
 
   let desc : FileDescriptorSet := { file := protoFiles }
 
   let compileTargets (desc : FileDescriptorSet)
       (targets : Std.HashMap String PUnit) :
       Protobuf.Versions.M (Std.HashMap String (Array Command)) := do
+    let desc ← Protobuf.Versions.prepareFileDescriptorSet desc
+    let desc := Protobuf.Versions.sanitizeFileDescriptorSet desc
     let names ← desc.file.mapM fun (file : FileDescriptorProto) =>
       match file.name with
       | some name => pure name
@@ -164,19 +299,14 @@ def generate_code (request : CodeGeneratorRequest) : ExceptT String IO CodeGener
 
   let outputs ← liftM (m := Except String) (n := ExceptT String IO ) <| Protobuf.Versions.M.run (compileTargets desc targetSet)
 
-  let renderCommands (cmds : Array Command) : String :=
-    let cmds := cmds.map fun x =>
-      match x.raw.getKind with
-      | ``enumDec => PrettyPrinter.enumDec.pprint <| TSyntax.mk x.raw
-      | ``oneofDec => PrettyPrinter.oneofDec.pprint <| TSyntax.mk x.raw
-      | ``messageDec => PrettyPrinter.messageDec.pprint <| TSyntax.mk x.raw
-      | ``proto_mutual_stx => PrettyPrinter.proto_mutual_stx.pprint <| TSyntax.mk x.raw
-      | ``extendDec => PrettyPrinter.extendDec.pprint <| TSyntax.mk x.raw
-      | kind => panic! s!"{decl_name%}: unknown kind {kind}"
-    String.intercalate "\n\n" cmds.toList
+  let renderCommand (x : Command) : Except String String :=
+    PrettyPrinter.command.pprintSafe x
 
-  let renderFile (imports : Array String) (cmds : Array Command) : String :=
-    let body := renderCommands cmds
+  let renderCommands (cmds : Array Command) : Except String String := do
+    return String.intercalate "\n\n" (← cmds.mapM renderCommand).toList
+
+  let renderFile (imports : Array String) (cmds : Array Command) : Except String String := do
+    let body ← renderCommands cmds
     let importLines := imports.toList.map fun m => s!"public import {m}"
     let header := String.intercalate "\n"
       [ "module"
@@ -193,15 +323,8 @@ def generate_code (request : CodeGeneratorRequest) : ExceptT String IO CodeGener
       , ""
       ]
     let r := header ++ body
-    if r.endsWith "\n" then r
-    else r ++ "\n"
-
-  let outputFileName (name : String) : String :=
-    let base := baseName name
-    if base.endsWith ".proto" then
-      base.dropRight ".proto".length ++ ".lean"
-    else
-      base ++ ".lean"
+    if r.endsWith "\n" then return r
+    else return r ++ "\n"
 
   let descByName : Std.HashMap String FileDescriptorProto :=
     protoFiles.foldl (init := {}) fun acc file =>
@@ -225,8 +348,9 @@ def generate_code (request : CodeGeneratorRequest) : ExceptT String IO CodeGener
             seen := seen.insert mod
             out := out.push mod
         else
-          let rel := relativeImportPath name dep
-          let mod := moduleNameFromPath rel
+          let mod ← match moduleNameFromPath dep with
+            | .ok mod => pure mod
+            | .error err => throw err
           let mod := withPrefix lean4Prefix mod
           if !mod.isEmpty && !seen.contains mod then
             seen := seen.insert mod
@@ -235,19 +359,16 @@ def generate_code (request : CodeGeneratorRequest) : ExceptT String IO CodeGener
     let cmds ← match outputs[name]? with
       | some cmds => pure cmds
       | none => throw s!"file_to_generate {name} was not found in protoc input"
-    let content := renderFile importModules cmds
-    let outName := outputFileName name
+    let content ← match renderFile importModules cmds with
+      | .ok content => pure content
+      | .error err => throw err
+    let outName ← match outputFileName name with
+      | .ok outName => pure outName
+      | .error err => throw err
     let file : CodeGeneratorResponse.File := { name := some outName, content := some content }
     filesOut := filesOut.push file
 
-  let supportedFeatures : UInt64 := 3
-  let response : CodeGeneratorResponse := {
-    file := filesOut
-    supported_features := some supportedFeatures
-    minimum_edition := some (1000 : Int32)
-    maximum_edition := some (1001 : Int32)
-  }
-  return response
+  return supportedResponse filesOut
 
 def exeName : String := "protoc-gen-lean4"
 
@@ -266,8 +387,10 @@ public def main : IO UInt32 := do
   let result ← match result with
     | .ok r => pure r
     | .error err =>
-      stdErr.putStrLn s!"{exeName}: {err}"
-      return 1
+      -- `plugin.proto` requires generation failures to be returned in the
+      -- response while the plugin itself exits successfully.  A non-zero exit
+      -- is reserved for failures such as an unparseable request.
+      pure (supportedResponse (error? := some err))
   let resultBin ← match result.encode with
     | .ok r => pure r
     | .error err =>

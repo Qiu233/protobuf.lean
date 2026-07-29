@@ -1,0 +1,59 @@
+edition = "2023";
+
+package group_support.editions;
+
+option features.message_encoding = DELIMITED;
+
+message Payload {
+  int32 a = 1;
+  string b = 2;
+}
+
+message InheritedDelimited {
+  int32 scalar = 1;
+  Payload payload = 2;
+}
+
+message InheritedMap {
+  map<string, Payload> items = 1;
+}
+
+message MixedNode {
+  MixedNode grouped_child = 1;
+  MixedNode length_prefixed_child = 2 [
+    features.message_encoding = LENGTH_PREFIXED
+  ];
+}
+
+message RecursiveNode {
+  RecursiveNode child = 1 [
+    features.message_encoding = DELIMITED
+  ];
+  int32 value = 2;
+}
+
+message DelimitedFields {
+  Payload singular = 1 [
+    features.message_encoding = DELIMITED
+  ];
+  repeated Payload repeated = 2 [
+    features.message_encoding = DELIMITED
+  ];
+
+  oneof choice {
+    Payload grouped_choice = 3 [
+      features.message_encoding = DELIMITED
+    ];
+    int32 scalar_choice = 4;
+  }
+}
+
+message ExtensionHost {
+  extensions 100 to 199;
+}
+
+extend ExtensionHost {
+  Payload delimited_extension = 100 [
+    features.message_encoding = DELIMITED
+  ];
+}

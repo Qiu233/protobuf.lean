@@ -1,0 +1,51 @@
+syntax = "proto2";
+
+package test.required_merge.proto2;
+
+message Child {
+  required int32 a = 1;
+  required int32 b = 2;
+}
+
+message OptionalOuter {
+  optional Child child = 1;
+}
+
+message RequiredOuter {
+  required Child child = 1;
+}
+
+message RepeatedOuter {
+  repeated Child child = 1;
+}
+
+message MapOuter {
+  map<int32, Child> children = 1;
+}
+
+message PackedLeaf {
+  repeated fixed32 values = 1;
+}
+
+message DeferredErrorValue {
+  optional Child first = 1;
+  optional PackedLeaf second = 2;
+}
+
+message DeferredErrorMapOuter {
+  map<int32, DeferredErrorValue> children = 1;
+}
+
+message DeferredErrorOneofOuter {
+  oneof choice {
+    DeferredErrorValue value = 1;
+    int32 scalar = 2;
+  }
+}
+
+message OneofOuter {
+  oneof choice {
+    Child child = 1;
+    int32 scalar = 2;
+  }
+}

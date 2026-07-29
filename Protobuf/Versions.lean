@@ -14,7 +14,11 @@ namespace Protobuf.Versions
 
 open google.protobuf Encoding Notation
 
-def compile_proto (desc : FileDescriptorSet) : M (Array Command) := do
+def compile_proto
+    (desc : FileDescriptorSet)
+    (precompiledFiles : Array String := #[]) :
+    M (Array Command) := do
+  let desc ← prepareFileDescriptorSet desc
   let desc := sanitizeFileDescriptorSet desc
   let names ← desc.file.mapM fun x => get!! x.name
   let deps := names.zip <| desc.file.map fun x => x.dependency
@@ -27,7 +31,17 @@ def compile_proto (desc : FileDescriptorSet) : M (Array Command) := do
   let sortedNames := sccs.flatten
   let sorted := desc.file.toList.mergeSort (fun x y => sortedNames.idxOf x.name.get! ≤ sortedNames.idxOf y.name.get!)
   sorted.toArray.flatMapM fun file => do
-    if let some stx := file.syntax then
+    if file.name.any precompiledFiles.contains then
+      /-
+      A frontend may provide declarations for selected imports itself.  Such a
+      schema must remain in the set above so all of its types, extension
+      targets, and ranges are validated statically; only its code emission is
+      skipped.  The caller names these files explicitly, so a forged
+      descriptor cannot suppress its own generation merely by claiming a
+      well-known path.
+      -/
+      pure #[]
+    else if let some stx := file.syntax then
       if stx == "proto3" then
         Proto3.compile_file file
       else if stx == "proto2" then

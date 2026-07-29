@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package _root_;
+
+message X {
+  int32 a = 1;
+}
+
+message Y {
+  X x = 1;
+  map<string, X> mapped = 2;
+}
+
+message _root_ {
+  int32 value = 1;
+}
+
+message RootHolder {
+  _root_ value = 1;
+}

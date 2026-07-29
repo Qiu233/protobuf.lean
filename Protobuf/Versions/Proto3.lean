@@ -28,7 +28,7 @@ def compile_enum (e : EnumDescriptorProto) : M DeclOutput := do
     checkEnumValueName name
   let vIds := vNames.map fun x => Lean.mkIdent (Name.mkStr1 x)
   let vNums ← e.value.mapM fun v => get!! v.number
-  let vNumsQ := vNums.map fun x => quote x.toUInt32.toNat
+  let vNumsQ ← vNums.mapM quoteEnumValue
   let extras ← IO.mkRef #[]
   let commitM (c : M Command) := c >>= fun x => extras.modify fun cs => cs.push x
   let enum_options_stx ← do
@@ -71,7 +71,7 @@ structure OneofItem where
   fields : Array FieldDescriptorProto
 
 private def OneofItem.fullName (item : OneofItem) : Name :=
-  Versions.nameFromPrefixRev item.prefixRev item.name
+  Versions.nameFromPrefixRev item.prefixRev item.leanType
 
 private def oneofIndexNat (idx : Int32) : M Nat := do
   if idx < 0 then
@@ -82,23 +82,38 @@ private def splitMessageFields (msg : DescriptorProto) : M (Array FieldDescripto
   let mut normalFields := #[]
   let mut groups : Std.HashMap Nat (Array FieldDescriptorProto) := {}
   for field in msg.field do
-    if let some idx := field.oneof_index then
-      if field.proto3_optional.getD false then
-        normalFields := normalFields.push field
-      else
+    if !! field.proto3_optional then
+      let idx ← field.oneof_index.getDM
+        (throw s!"{decl_name%}: proto3_optional field is missing its synthetic oneof")
+      let idxNat ← oneofIndexNat idx
+      if idxNat >= msg.oneof_decl.size then
+        throw s!"{decl_name%}: oneof_index {idxNat} out of bounds"
+      if field.label != some .LABEL_OPTIONAL then
+        throw s!"{decl_name%}: proto3_optional field must have LABEL_OPTIONAL"
+      let memberCount := msg.field.foldl (init := 0) fun count member =>
+        if member.oneof_index == some idx then count + 1 else count
+      if memberCount != 1 then
+        throw s!"{decl_name%}: synthetic oneof for proto3_optional must contain exactly one field"
+      normalFields := normalFields.push field
+    else
+      if let some idx := field.oneof_index then
         let idxNat ← oneofIndexNat idx
         if idxNat >= msg.oneof_decl.size then
           throw s!"{decl_name%}: oneof_index {idxNat} out of bounds"
         groups := groups.alter idxNat (some <| ·.getD #[] |>.push field)
-    else
-      normalFields := normalFields.push field
+      else
+        normalFields := normalFields.push field
   let mut oneofGroups := #[]
   for i in List.range msg.oneof_decl.size do
     if let some fields := groups[i]? then
       if !fields.isEmpty then
         let decl := msg.oneof_decl[i]!
         let name ← get!! decl.name
-        oneofGroups := oneofGroups.push { name, fields, leanType := s!"{name}_Type" }
+        oneofGroups := oneofGroups.push {
+          name
+          fields
+          leanType := syntheticOneofTypeComponent msg name
+        }
   return (normalFields, oneofGroups)
 
 private partial def collect_messages (prefixRev : List String) (msgs : Array DescriptorProto) : M (Array MsgItem) := do
@@ -196,8 +211,10 @@ private def map_entry_names (item : MsgItem) : M (Array (String × DescriptorPro
   for nested in item.desc.nested_type do
     if !! nested.options&.map_entry then
       let nested_name ← get!! nested.name
-      let full_name := Versions.nameFromPrefixRev (item.name :: item.prefixRev) nested_name
-      out := out.push ("." ++ full_name.toString, nested)
+      let fullName :=
+        String.intercalate "."
+          (nested_name :: item.name :: item.prefixRev).reverse
+      out := out.push ("." ++ fullName, nested)
   return out
 
 private def is_map_entry (desc : DescriptorProto) : Bool :=
@@ -210,15 +227,19 @@ private def map_entry_fields (entry : DescriptorProto) : M (FieldDescriptorProto
   let value ← value?.getDM (throw s!"{decl_name%}: map entry is missing value field")
   return (key, value)
 
-private def map_entry_desc? (map_entries : Array (String × DescriptorProto)) (field : FieldDescriptorProto) : M (Option DescriptorProto) := do
+private def map_entry_desc? (item : MsgItem)
+    (map_entries : Array (String × DescriptorProto))
+    (field : FieldDescriptorProto) : M (Option DescriptorProto) := do
   let t ← get!! field.type
   if t != .TYPE_MESSAGE then
     return none
   let raw_type ← get!! field.type_name
-  return (map_entries.find? (fun (n, _) => n == raw_type)).map Prod.snd
+  let scope := String.intercalate "." (item.name :: item.prefixRev).reverse
+  return (map_entries.find? fun (target, _) =>
+    Versions.protobufTypeNameResolvesTo scope raw_type target).map Prod.snd
 
-private def map_field_type? (_ : MsgItem) (map_entries : Array (String × DescriptorProto)) (field : FieldDescriptorProto) : M (Option (TSyntax ``message_field_type)) := do
-  let entry? ← map_entry_desc? map_entries field
+private def map_field_type? (item : MsgItem) (map_entries : Array (String × DescriptorProto)) (field : FieldDescriptorProto) : M (Option (TSyntax ``message_field_type)) := do
+  let entry? ← map_entry_desc? item map_entries field
   let some entry := entry? | return none
   let label := field.label.getD .LABEL_OPTIONAL
   if label != .LABEL_REPEATED then
@@ -234,7 +255,7 @@ private def field_modifier? (field : FieldDescriptorProto) : M (Option (TSyntax 
   match label with
   | .«Unknown.Value» _ => throw s!"{decl_name%}: unknown cardinality"
   | .LABEL_REPEATED => some <$> `(message_entry_modifier| repeated)
-  | .LABEL_REQUIRED => some <$> `(message_entry_modifier| required)
+  | .LABEL_REQUIRED => throw s!"{decl_name%}: LABEL_REQUIRED is not valid in proto3"
   | .LABEL_OPTIONAL => -- even when there is no cardinality specifier
     if !! field.proto3_optional then
       some <$> `(message_entry_modifier| optional)
@@ -243,15 +264,21 @@ private def field_modifier? (field : FieldDescriptorProto) : M (Option (TSyntax 
 
 private def field_options? (field : FieldDescriptorProto) : M (Option (TSyntax ``options)) := do
   let mut entries := #[]
+  if field.default_value.isSome then
+    throw s!"{decl_name%}: explicit default values are not valid in proto3"
   if let some packed := field.options&.packed then
+    let label ← field.label.getDM (throw s!"{decl_name%}: field label is absent")
+    if label != .LABEL_REPEATED then
+      throw s!"{decl_name%}: packed is only valid on repeated fields"
+    unless ← fieldIsPackable field do
+      throw s!"{decl_name%}: packed is not valid for this field type"
     let stx ← match packed with
       | true => `(options_value| true)
       | false => `(options_value| false)
     entries := entries.push (← `(options_entry| packed = $stx))
   else
-    if let some type := field.type then
-      unless type matches .TYPE_STRING | .TYPE_GROUP | .TYPE_MESSAGE | .TYPE_BYTES do
-        entries := entries.push (← `(options_entry| packed = true)) -- NOTE: proto3 defaults to packed
+    if field.label == some .LABEL_REPEATED && (← fieldIsPackable field) then
+      entries := entries.push (← `(options_entry| packed = true)) -- NOTE: proto3 defaults to packed
   if !! field.options&.deprecated then
     entries := entries.push (← `(options_entry| deprecated = true))
   if entries.isEmpty then
@@ -263,12 +290,10 @@ private def ensure_oneof_field_ok (field : FieldDescriptorProto) : M Unit := do
   match label with
   | .«Unknown.Value» _ => throw s!"{decl_name%}: unknown cardinality"
   | .LABEL_REPEATED => throw s!"{decl_name%}: oneof fields cannot be repeated"
-  | .LABEL_REQUIRED => throw s!"{decl_name%}: oneof fields cannot be required"
+  | .LABEL_REQUIRED => throw s!"{decl_name%}: LABEL_REQUIRED is not valid in proto3"
   | .LABEL_OPTIONAL => pure ()
 
 private def compile_oneof (item : OneofItem) : M DeclOutput := do
-  let oneofName := item.name
-  registerType oneofName
   let typeName := Versions.nameFromPrefixRev item.prefixRev item.leanType
   let typeId := mkIdent typeName
   let names ← item.fields.mapM fun v => do
@@ -326,7 +351,15 @@ partial def compile_message (item : MsgItem) : M DeclOutput := do
   let extras ← IO.mkRef #[]
   let commitM (c : M Command) := c >>= fun x => extras.modify fun cs => cs.push x
   let noneMod? : Array (Option (TSyntax ``message_entry_modifier)) := oneofIds.map (fun _ => Option.none)
-  let decl ← `(message $typeId { $[$[$mods]? $types $ids:ident = $numsQ $[$opts]?;]* $[ $[$noneMod?]? $oneofTypes $oneofIds:ident = $oneofNums;]* })
+  let msgOptions? ←
+    if messageUsesLegacyHelpers msg then
+      pure none
+    else
+      some <$> `(options| [legacy_helpers = false])
+  let decl ← `(message $typeId $[$msgOptions?]? {
+    $[$[$mods]? $types $ids:ident = $numsQ $[$opts]?;]*
+    $[ $[$noneMod?]? $oneofTypes $oneofIds:ident = $oneofNums;]*
+  })
   if !! msg.options&.deprecated then
     commitM `(attribute [deprecated "protobuf: deprecated message"] $typeId)
   for fieldName in names, field in item.normalFields do
@@ -351,6 +384,7 @@ private def compile_extension (item : ExtensionItem) : M Command := do
   `(extend $extendeeId { $[$mod?]? $t $fieldId:ident = $numQ $[$opts]?; })
 
 def compile_file (file : FileDescriptorProto) : M (Array Command) := do
+  validateFileDescriptor file (requireFirstEnumZero := true)
   let prefixRev := Versions.packagePrefixRev (file.package.getD "")
   let enumItems := (← collect_enums prefixRev file.enum_type) ++ (← collect_enums_in_messages prefixRev file.message_type)
   let msgItemsAll ← collect_messages prefixRev file.message_type
@@ -364,9 +398,6 @@ def compile_file (file : FileDescriptorProto) : M (Array Command) := do
     withNamePrefix item.prefixRev (registerType item.name)
   for item in msgItems do
     withNamePrefix item.prefixRev (registerType item.name)
-  for item in oneofItems do
-    withNamePrefix item.prefixRev (registerType item.name)
-
   let mut enumsOut := #[]
   for item in enumItems do
     let out ← withNamePrefix item.prefixRev (compile_enum item.desc)
@@ -382,7 +413,7 @@ def compile_file (file : FileDescriptorProto) : M (Array Command) := do
     let mut ds := #[]
     let map_entries ← map_entry_names item
     for field in item.normalFields do
-      if let some entry ← map_entry_desc? map_entries field then
+      if let some entry ← map_entry_desc? item map_entries field then
         let (_, value_field) ← map_entry_fields entry
         if value_field.type matches some .TYPE_MESSAGE then
           let raw ← get!! value_field.type_name
@@ -395,7 +426,8 @@ def compile_file (file : FileDescriptorProto) : M (Array Command) := do
         if msgNameSet.contains dep then
           ds := ds.push dep
     for g in item.oneofGroups do
-      let oneofName := Versions.nameFromPrefixRev (item.name :: item.prefixRev) g.name
+      let oneofName :=
+        Versions.nameFromPrefixRev (item.name :: item.prefixRev) g.leanType
       if oneofNameSet.contains oneofName then
         ds := ds.push oneofName
     deps := deps.insert item.fullName ds

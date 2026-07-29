@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package test.versions.proto3;
+
+enum SignedEnum {
+  SIGNED_ENUM_ZERO = 0;
+  SIGNED_ENUM_NEGATIVE = -1;
+}
+
+enum AliasedEnum {
+  option allow_alias = true;
+  ALIASED_ENUM_ZERO = 0;
+  ALIASED_ENUM_ZERO_ALIAS = 0;
+  ALIASED_ENUM_ONE = 1;
+}
+
+message Semantics {
+  int32 implicit = 1;
+  optional int32 explicit = 2;
+  repeated int32 packed = 3;
+  repeated int32 expanded = 4 [packed = false];
+  SignedEnum signed_enum = 5;
+  AliasedEnum aliased_enum = 6;
+}

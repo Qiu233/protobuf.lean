@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package plugin.integration.match;
+
+enum KeywordEnum {
+  structure = 0;
+  partial = 1;
+}
+
+message do {
+  string match = 1;
+  KeywordEnum where = 2;
+}

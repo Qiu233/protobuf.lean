@@ -1,0 +1,8 @@
+file_to_generate: "bad».proto"
+parameter: "lean4_prefix=Forged"
+proto_file {
+  name: "bad».proto"
+  package: "forged.path"
+  syntax: "proto3"
+  message_type { name: "Message" }
+}

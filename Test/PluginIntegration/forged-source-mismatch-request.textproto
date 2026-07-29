@@ -1,0 +1,20 @@
+file_to_generate: "source-mismatch.proto"
+parameter: "lean4_prefix=Forged"
+proto_file {
+  name: "source-mismatch.proto"
+  package: "forged.runtime"
+  syntax: "proto3"
+  message_type {
+    name: "Message"
+    options { deprecated: false }
+  }
+}
+source_file_descriptors {
+  name: "source-mismatch.proto"
+  package: "forged.runtime"
+  syntax: "proto3"
+  message_type {
+    name: "Message"
+    options { deprecated: true }
+  }
+}
