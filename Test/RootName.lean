@@ -18,14 +18,8 @@ open scoped Protobuf.Notation
     mapped := ({} : Std.HashMap String «_root_.protobuf».X).insert
       "key" { a := 9 }
   }
-  let bytes ←
-    match «_root_.protobuf».Y.encode expected with
-    | .ok bytes => pure bytes
-    | .error err => throw (IO.userError err.toString)
-  let actual ←
-    match «_root_.protobuf».Y.decode bytes with
-    | .ok value => pure value
-    | .error err => throw (IO.userError err.toString)
+  let bytes ← IO.ofExcept («_root_.protobuf».Y.encode expected)
+  let actual ← IO.ofExcept («_root_.protobuf».Y.decode bytes)
   unless actual.x.map (·.a) == some 7 &&
       actual.mapped["key"]?.map (·.a) == some 9 do
     throw (IO.userError "sanitized _root_ package roundtrip failed")

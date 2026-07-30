@@ -28,16 +28,10 @@ open scoped Protobuf.Notation
   -- Test/WideCodegen.lean.
   let expected :
       _root_.protobuf_test_messages.proto3.ForeignMessage := { c := 123 }
-  let wire ←
-    match
-        _root_.protobuf_test_messages.proto3.ForeignMessage.encode
-          expected with
-    | .ok bytes => pure bytes
-    | .error err => throw (IO.userError err.toString)
-  let decoded ←
-    match _root_.protobuf_test_messages.proto3.ForeignMessage.decode wire with
-    | .ok value => pure value
-    | .error err => throw (IO.userError err.toString)
+  let wire ← IO.ofExcept <|
+    _root_.protobuf_test_messages.proto3.ForeignMessage.encode expected
+  let decoded ← IO.ofExcept <|
+    _root_.protobuf_test_messages.proto3.ForeignMessage.decode wire
   unless decoded.c == 123 do
     throw (IO.userError "official conformance message roundtrip failed")
   pure ()

@@ -2872,10 +2872,8 @@ private def testRawIdentifierValidation : IO Unit := do
   | .error err =>
       throw (IO.userError s!"non-identifier descriptor text was rejected: {err}")
 
-private def ofProtoExcept (result : Except ProtoError α) : IO α := do
-  match result with
-  | .ok value => pure value
-  | .error err => throw (IO.userError err.toString)
+private def ofProtoExcept (result : Except ProtoError α) : IO α :=
+  IO.ofExcept result
 
 private def testCurrentDescriptorFields : IO Unit := do
   unless Edition.EDITION_2026.toInt32 == (1002 : Int32) do

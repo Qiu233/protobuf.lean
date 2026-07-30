@@ -73,12 +73,11 @@ private def moduleNameFromPath (path : String) : Except String String := do
   let parts := path.splitOn "/"
   if parts.any (·.isEmpty) then
     throw s!"protobuf file name has an empty Lean module component: {path.quote}"
-  let parts ← parts.mapM fun part =>
-    match Name.escapePart part (force := true) with
-    | some escaped => pure escaped
-    | none =>
-      throw
-        s!"cannot represent protobuf path component {part.quote} as a Lean module name"
+  let parts ← parts.mapM fun part => do
+    let some escaped := Name.escapePart part (force := true)
+      | throw
+          s!"cannot represent protobuf path component {part.quote} as a Lean module name"
+    return escaped
   return String.intercalate "." parts
 
 private def withPrefix (prefix_ : String) (mod : String) : String :=
@@ -103,12 +102,11 @@ private def normalizeModulePrefix (prefix_ : String) : Except String String := d
         !isModuleIdentStart first || !rest.all isModuleIdentRest then
     throw
       s!"lean4_prefix must be a dot-separated ASCII Lean module name: {prefix_.quote}"
-  let escaped ← parts.mapM fun part =>
-    match Name.escapePart part (force := true) with
-    | some value => pure value
-    | none =>
-      throw
-        s!"cannot represent lean4_prefix component {part.quote} as a Lean module name"
+  let escaped ← parts.mapM fun part => do
+    let some value := Name.escapePart part (force := true)
+      | throw
+          s!"cannot represent lean4_prefix component {part.quote} as a Lean module name"
+    return value
   return String.intercalate "." escaped
 
 private def outputFileName (name : String) : Except String String := do
@@ -166,17 +164,13 @@ def generate_code (request : CodeGeneratorRequest) : ExceptT String IO CodeGener
               acc.insert key value
 
   let parameter ← request.parameter.mapM fun value =>
-    liftM (m := Except String) (n := ExceptT String IO) <|
-      decodeProtocolString "parameter" value
+    decodeProtocolString "parameter" value
   let options := parseOptions parameter
   let rawLean4Prefix ← options["lean4_prefix"]?.getDM (throw "lean4_prefix is not specified, you should specify by --lean4_opt=lean4_prefix=...")
-  let lean4Prefix ←
-    liftM (m := Except String) (n := ExceptT String IO) <|
-      normalizeModulePrefix rawLean4Prefix
+  let lean4Prefix ← normalizeModulePrefix rawLean4Prefix
 
   let filesToGenerate ← request.file_to_generate.mapM fun value =>
-    liftM (m := Except String) (n := ExceptT String IO) <|
-      decodeProtocolString "file_to_generate" value
+    decodeProtocolString "file_to_generate" value
   let mut targetSet : Std.HashMap String PUnit := {}
   for name in filesToGenerate do
     if targetSet.contains name then
@@ -188,16 +182,12 @@ def generate_code (request : CodeGeneratorRequest) : ExceptT String IO CodeGener
   let mut outputOwners : Std.HashMap String String := {}
   let mut moduleOwners : Std.HashMap String String := {}
   for name in filesToGenerate do
-    let moduleName ←
-      liftM (m := Except String) (n := ExceptT String IO) <|
-        moduleNameFromPath name
+    let moduleName ← moduleNameFromPath name
     if let some previous := moduleOwners[moduleName]? then
       throw
         s!"file_to_generate `{name}` and `{previous}` map to the same Lean module `{moduleName}`"
     moduleOwners := moduleOwners.insert moduleName name
-    let outputName ←
-      liftM (m := Except String) (n := ExceptT String IO) <|
-        outputFileName name
+    let outputName ← outputFileName name
     if let some previous := outputOwners[outputName]? then
       throw
         s!"file_to_generate `{name}` and `{previous}` map to the same output file `{outputName}`"
@@ -232,8 +222,7 @@ def generate_code (request : CodeGeneratorRequest) : ExceptT String IO CodeGener
         (throw
           s!"source_file_descriptors entry `{name}` has no matching proto_file descriptor")
       let equivalent ←
-        liftM (m := Except String) (n := ExceptT String IO) <|
-          Protobuf.Plugin.DescriptorBoundary.runtimeEquivalent runtime source
+        Protobuf.Plugin.DescriptorBoundary.runtimeEquivalent runtime source
       unless equivalent do
         throw
           s!"source_file_descriptors entry `{name}` does not match its stripped proto_file descriptor"
@@ -263,10 +252,9 @@ def generate_code (request : CodeGeneratorRequest) : ExceptT String IO CodeGener
         | some name => files.insert name file
         | none => files
     let desc := Protobuf.Versions.sanitizeFileDescriptorSet reflectionDesc
-    let names ← desc.file.mapM fun (file : FileDescriptorProto) =>
-      match file.name with
-      | some name => pure name
-      | none => throw "file descriptor missing name"
+    let names ← desc.file.mapM fun (file : FileDescriptorProto) => do
+      let some name := file.name | throw "file descriptor missing name"
+      return name
     let deps := names.zip <| desc.file.map fun (file : FileDescriptorProto) => file.dependency
     let deps := Std.HashMap.ofList deps.toList
     let sccs := names.topoSortSCCHash deps |>.reverse
@@ -304,7 +292,7 @@ def generate_code (request : CodeGeneratorRequest) : ExceptT String IO CodeGener
         outputs := outputs.insert name cmds
     return outputs
 
-  let outputs ← liftM (m := Except String) (n := ExceptT String IO ) <| Protobuf.Versions.M.run (compileTargets desc targetSet)
+  let outputs ← Protobuf.Versions.M.run (compileTargets desc targetSet)
 
   let renderCommand (x : Command) : Except String String :=
     PrettyPrinter.command.pprintSafe x
@@ -356,23 +344,16 @@ def generate_code (request : CodeGeneratorRequest) : ExceptT String IO CodeGener
             seen := seen.insert mod
             out := out.push mod
         else
-          let mod ← match moduleNameFromPath dep with
-            | .ok mod => pure mod
-            | .error err => throw err
+          let mod ← moduleNameFromPath dep
           let mod := withPrefix lean4Prefix mod
           if !mod.isEmpty && !seen.contains mod then
             seen := seen.insert mod
             out := out.push mod
       pure out
-    let cmds ← match outputs[name]? with
-      | some cmds => pure cmds
-      | none => throw s!"file_to_generate {name} was not found in protoc input"
-    let content ← match renderFile importModules cmds with
-      | .ok content => pure content
-      | .error err => throw err
-    let outName ← match outputFileName name with
-      | .ok outName => pure outName
-      | .error err => throw err
+    let some cmds := outputs[name]?
+      | throw s!"file_to_generate {name} was not found in protoc input"
+    let content ← renderFile importModules cmds
+    let outName ← outputFileName name
     let file : CodeGeneratorResponse.File := { name := some outName, content := some content }
     filesOut := filesOut.push file
 

@@ -280,10 +280,8 @@ private partial def DescriptorPool.findExtensionName
 
 private def requiredName (kind : String) (name? : Option String) :
     Except PoolError String := do
-  let name ←
-    match name? with
-    | some name => pure name
-    | none => throw (.invalidDescriptor s!"{kind} has no name")
+  let some name := name?
+    | throw (.invalidDescriptor s!"{kind} has no name")
   if name.isEmpty then
     throw (.invalidDescriptor s!"{kind} has an empty name")
   if name.contains '.' then
@@ -436,10 +434,8 @@ private partial def collectMessage
 
 private def collectSymbols (file : FileDescriptorProto) :
     Except PoolError (String × Array (String × SymbolData)) := do
-  let fileName ←
-    match file.name with
-    | some name => pure name
-    | none => throw (.invalidDescriptor "file has no name")
+  let some fileName := file.name
+    | throw (.invalidDescriptor "file has no name")
   if fileName.isEmpty then
     throw (.invalidDescriptor "file has an empty name")
   let package := file.package.getD ""
@@ -497,15 +493,11 @@ private def insertSymbols
     next := { next with symbols := next.symbols.insert fullName symbol }
     if let .field data := symbol then
       if data.isExtension then
-        let extendee ←
-          match data.proto.extendee with
-          | some value => pure value
-          | none => throw (.invalidDescriptor
+        let some extendee := data.proto.extendee
+          | throw (.invalidDescriptor
               s!"extension `{fullName}` has no extendee")
-        let number ←
-          match data.proto.number with
-          | some value => pure value
-          | none => throw (.invalidDescriptor
+        let some number := data.proto.number
+          | throw (.invalidDescriptor
               s!"extension `{fullName}` has no field number")
         if number <= 0 then
           throw (.invalidDescriptor
@@ -520,26 +512,25 @@ private def insertSymbols
 private def checkUnderlayConflicts
     (pool : DescriptorPool) (fileName : String)
     (symbols : Array (String × SymbolData)) :
-    IO (Except PoolError Unit) := do
-  let some underlay ← pool.directUnderlay? | return .ok ()
+    ExceptT PoolError IO Unit := do
+  let some underlay ← pool.directUnderlay? | return
   if (← underlay.findFileData fileName).isSome then
-    return .error (.duplicateFile fileName)
+    throw (.duplicateFile fileName)
   for (fullName, symbol) in symbols do
     if let some (_, old) ← underlay.findSymbolData fullName then
-      return .error (.duplicateSymbol fullName old.fileName fileName)
+      throw (.duplicateSymbol fullName old.fileName fileName)
     if let .field data := symbol then
       if data.isExtension then
         let some extendee := data.proto.extendee
-          | return .error (.invalidDescriptor
+          | throw (.invalidDescriptor
               s!"extension `{fullName}` has no extendee")
         let some number := data.proto.number
-          | return .error (.invalidDescriptor
+          | throw (.invalidDescriptor
               s!"extension `{fullName}` has no field number")
         let key := extensionKey extendee number
         if let some (_, oldName) ← underlay.findExtensionName key then
-          return .error (.duplicateExtensionNumber
+          throw (.duplicateExtensionNumber
             (normalizeFullName extendee) number oldName fullName)
-  return .ok ()
 
 /--
 Atomically register one file.
@@ -550,56 +541,51 @@ partially changing the pool. Dependencies may be registered later.
 -/
 def DescriptorPool.registerFile
     (pool : DescriptorPool) (file : FileDescriptorProto) :
-    IO (Except PoolError FileDescriptor) := do
-  let canonicalBytes : Except PoolError ByteArray :=
-    match FileDescriptorProto.«protobuf.internal».encode file with
-    | .ok bytes => .ok bytes
-    | .error err => .error (.encodeFailure (toString err))
-  match canonicalBytes with
-  | .error err => return .error err
-  | .ok canonicalBytes =>
-    match collectSymbols file with
-    | .error err => return .error err
-    | .ok (fileName, symbols) =>
-      match ← checkUnderlayConflicts pool fileName symbols with
-      | .error err => return .error err
-      | .ok () => pure ()
-      pool.state.modifyGet fun state =>
-        match state.files[fileName]? with
-        | some old =>
-            if old.canonicalBytes == canonicalBytes then
-              (.ok { pool, name := fileName }, state)
-            else
-              (.error (.duplicateFile fileName), state)
-        | none =>
-            match insertSymbols state fileName symbols with
-            | .error err => (.error err, state)
-            | .ok next =>
-                let next := {
-                  next with
-                  files := next.files.insert fileName { proto := file, canonicalBytes }
-                }
-                (.ok { pool, name := fileName }, next)
+    IO (Except PoolError FileDescriptor) :=
+  (show ExceptT PoolError IO FileDescriptor from do
+    let canonicalBytes ← liftExcept <|
+      (FileDescriptorProto.«protobuf.internal».encode file).mapError fun err =>
+        PoolError.encodeFailure (toString err)
+    let (fileName, symbols) ← collectSymbols file
+    checkUnderlayConflicts pool fileName symbols
+    ExceptT.mk <| pool.state.modifyGet fun state =>
+      match state.files[fileName]? with
+      | some old =>
+          if old.canonicalBytes == canonicalBytes then
+            (.ok { pool, name := fileName }, state)
+          else
+            (.error (.duplicateFile fileName), state)
+      | none =>
+          match insertSymbols state fileName symbols with
+          | .error err => (.error err, state)
+          | .ok next =>
+              let next := {
+                next with
+                files := next.files.insert fileName { proto := file, canonicalBytes }
+              }
+              (.ok { pool, name := fileName }, next)).run
 
 def DescriptorPool.registerFileBytes
     (pool : DescriptorPool) (bytes : ByteArray) :
-    IO (Except PoolError FileDescriptor) := do
-  match FileDescriptorProto.«protobuf.internal».decode bytes with
-  | .error err => return .error (.decodeFailure (toString err))
-  | .ok file => pool.registerFile file
+    IO (Except PoolError FileDescriptor) :=
+  (show ExceptT PoolError IO FileDescriptor from do
+    let file ← liftExcept <|
+      (FileDescriptorProto.«protobuf.internal».decode bytes).mapError fun err =>
+        PoolError.decodeFailure (toString err)
+    ExceptT.mk <| pool.registerFile file).run
 
 def DescriptorPool.registerFileBase64
     (pool : DescriptorPool) (encoded : String) :
-    IO (Except PoolError FileDescriptor) := do
-  match Protobuf.Base64.decode encoded with
-  | .error err => return .error (.decodeFailure s!"invalid base64: {err}")
-  | .ok bytes => pool.registerFileBytes bytes
+    IO (Except PoolError FileDescriptor) :=
+  (show ExceptT PoolError IO FileDescriptor from do
+    let bytes ← liftExcept <|
+      (Protobuf.Base64.decode encoded).mapError fun err =>
+        PoolError.decodeFailure s!"invalid base64: {err}"
+    ExceptT.mk <| pool.registerFileBytes bytes).run
 
 def DescriptorPool.registerFileBase64!
     (pool : DescriptorPool) (encoded : String) : IO FileDescriptor := do
-  match ← pool.registerFileBase64 encoded with
-  | .ok descriptor => return descriptor
-  | .error err => throw (IO.userError (toString err))
+  IO.ofExcept (← pool.registerFileBase64 encoded)
 
 def DescriptorPool.findFileByName
     (pool : DescriptorPool) (name : String) : IO (Option FileDescriptor) := do

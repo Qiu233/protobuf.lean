@@ -2809,9 +2809,8 @@ def compileFileDescriptorRegistration (file : FileDescriptorProto) : M Command :
   -/
   let file := { file with source_code_info := none }
   let bytes ←
-    match FileDescriptorProto.«protobuf.internal».encode file with
-    | .ok bytes => pure bytes
-    | .error err => throw s!"cannot serialize descriptor for `{fileName}`: {err}"
+    (FileDescriptorProto.«protobuf.internal».encode file).mapError fun err =>
+      s!"cannot serialize descriptor for `{fileName}`: {err}"
   let encoded := Protobuf.Base64.encode bytes
   let chunkTerms : Array (TSyntax `term) :=
     (chunkString 4096 encoded).map quote

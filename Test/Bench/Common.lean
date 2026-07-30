@@ -16,15 +16,11 @@ abbrev Meta := _root_.bench.perf.Meta
 abbrev Item := _root_.bench.perf.Item
 abbrev Batch := _root_.bench.perf.Batch
 
-def ofProtoExcept {α} (e : Except Encoding.ProtoError α) : IO α := do
-  match e with
-  | .ok v => pure v
-  | .error err => throw <| IO.userError err.toString
+def ofProtoExcept {α} (e : Except Encoding.ProtoError α) : IO α :=
+  IO.ofExcept e
 
-def ofJsonExcept {α} (e : Except String α) : IO α := do
-  match e with
-  | .ok v => pure v
-  | .error err => throw <| IO.userError err
+def ofJsonExcept {α} (e : Except String α) : IO α :=
+  IO.ofExcept e
 
 instance : ToJson Meta where
   toJson v := json% {
@@ -88,9 +84,8 @@ instance : FromJson Batch where
       }
 
 def parseNatArg (name : String) (s : String) : IO Nat := do
-  match s.toNat? with
-  | some n => pure n
-  | none => throw <| IO.userError s!"invalid {name}: {s}"
+  let some n := s.toNat? | throw <| IO.userError s!"invalid {name}: {s}"
+  return n
 
 structure Config where
   itemCount : Nat

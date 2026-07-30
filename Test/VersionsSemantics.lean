@@ -304,12 +304,10 @@ private def testProto2Defaults : IO Unit := do
     negative_infinity_float := some negativeInfinityFloat
     not_a_number_float := some notANumberFloat
   }
-  let encoded ← match _root_.test.versions.proto2.Defaults.toMessage explicit with
-    | .ok msg => pure msg
-    | .error err => throw (IO.userError err.toString)
-  let decoded ← match _root_.test.versions.proto2.Defaults.fromMessage encoded with
-    | .ok result => pure result
-    | .error err => throw (IO.userError err.toString)
+  let encoded ← IO.ofExcept <|
+    _root_.test.versions.proto2.Defaults.toMessage explicit
+  let decoded ← IO.ofExcept <|
+    _root_.test.versions.proto2.Defaults.fromMessage encoded
   assertEq decoded.spaced explicit.spaced "proto2 spaced string default roundtrip changed"
   assertEq decoded.escaped explicit.escaped "proto2 escaped bytes default roundtrip changed"
   assertEq decoded.enum_reserved_name explicit.enum_reserved_name
@@ -361,16 +359,14 @@ private def testProto2RequiredPresence : IO Unit := do
     scalar := some 0
     enum_value := some _root_.test.versions.proto2.DefaultEnum.DEFAULT_ENUM_ZERO
   }
-  let wire ← match _root_.test.versions.proto2.RequiredFields.toMessage present with
-    | .ok msg => pure msg
-    | .error err => throw (IO.userError err.toString)
+  let wire ← IO.ofExcept <|
+    _root_.test.versions.proto2.RequiredFields.toMessage present
   assertEq (wire.getRecordsOf 1).size 1
     "present proto2 required scalar default was omitted"
   assertEq (wire.getRecordsOf 2).size 1
     "present proto2 required enum default was omitted"
-  let decoded ← match _root_.test.versions.proto2.RequiredFields.fromMessage wire with
-    | .ok result => pure result
-    | .error err => throw (IO.userError err.toString)
+  let decoded ← IO.ofExcept <|
+    _root_.test.versions.proto2.RequiredFields.fromMessage wire
   assertEq decoded.scalar present.scalar
     "proto2 required scalar default did not roundtrip with presence"
   assertEq decoded.enum_value present.enum_value
@@ -454,9 +450,8 @@ private def testEditionsDefaults : IO Unit := do
     "Editions EXPANDED repeated field should use one record per value"
   assertEq (encoded.getRecordsOf 15).size 1
     "Editions required enum default should be encoded when present"
-  let decoded ← match _root_.test.versions.editions.Semantics.fromMessage encoded with
-    | .ok result => pure result
-    | .error err => throw (IO.userError err.toString)
+  let decoded ← IO.ofExcept <|
+    _root_.test.versions.editions.Semantics.fromMessage encoded
   assertEq decoded.required (some 0)
     "Editions required scalar default did not roundtrip with presence"
   assertEq decoded.required_enum
@@ -476,9 +471,8 @@ private def testProto3Mapping : IO Unit := do
     aliased_enum :=
       _root_.test.versions.proto3.AliasedEnum.ALIASED_ENUM_ZERO_ALIAS
   }
-  let encoded ← match _root_.test.versions.proto3.Semantics.toMessage value with
-    | .ok msg => pure msg
-    | .error err => throw (IO.userError err.toString)
+  let encoded ← IO.ofExcept <|
+    _root_.test.versions.proto3.Semantics.toMessage value
   assert (encoded.getRecordsOf 1).isEmpty
     "proto3 implicit scalar default should not be encoded"
   assertEq (encoded.getRecordsOf 2).size 1

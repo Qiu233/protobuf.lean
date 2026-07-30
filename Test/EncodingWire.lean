@@ -14,9 +14,7 @@ abbrev assertEq [BEq α] (actual expected : α) (message : String) : Except Stri
   assertTrue (actual == expected) message
 
 abbrev ofProtoExcept (result : Except ProtoError α) : Except String α :=
-  match result with
-  | .ok value => pure value
-  | .error error => throw error.toString
+  result.mapError toString
 
 abbrev assertProtoFails (result : Except ProtoError α) (message : String) : Except String Unit :=
   match result with

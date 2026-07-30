@@ -12,10 +12,8 @@ private def assert (condition : Bool) (failure : String) : IO Unit := do
   unless condition do
     throw (IO.userError failure)
 
-private def ofProtoExcept (result : Except ProtoError α) : IO α := do
-  match result with
-  | .ok value => pure value
-  | .error error => throw (IO.userError error.toString)
+private def ofProtoExcept (result : Except ProtoError α) : IO α :=
+  IO.ofExcept result
 
 private def raw (bytes : Array UInt8) : UnvalidatedString :=
   .ofBytes ⟨bytes⟩

@@ -404,20 +404,13 @@ the same schema and the same known runtime-retention options.
 def runtimeEquivalent
     (runtime source : FileDescriptorProto) : Except String Bool := do
   let runtimeBytes ←
-    match
-      FileDescriptorProto.«protobuf.internal».encode
-        (normalizeForRuntimeComparison runtime) with
-    | .ok bytes => pure bytes
-    | .error err =>
-        throw s!"cannot encode normalized proto_file descriptor: {err}"
+    (FileDescriptorProto.«protobuf.internal».encode
+      (normalizeForRuntimeComparison runtime)).mapError fun err =>
+        s!"cannot encode normalized proto_file descriptor: {err}"
   let sourceBytes ←
-    match
-      FileDescriptorProto.«protobuf.internal».encode
-        (normalizeForRuntimeComparison source) with
-    | .ok bytes => pure bytes
-    | .error err =>
-        throw
-          s!"cannot encode normalized source_file_descriptors entry: {err}"
+    (FileDescriptorProto.«protobuf.internal».encode
+      (normalizeForRuntimeComparison source)).mapError fun err =>
+        s!"cannot encode normalized source_file_descriptors entry: {err}"
   return runtimeBytes == sourceBytes
 
 end Protobuf.Plugin.DescriptorBoundary

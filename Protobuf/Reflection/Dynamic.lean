@@ -82,10 +82,12 @@ def generatedExtensionResolver : ExtensionResolver :=
 
 private abbrev RM := ExceptT ReflectionError IO
 
+private def mapWireError (result : Except ProtoError α) :
+    Except ReflectionError α :=
+  result.mapError ReflectionError.wire
+
 private def liftWire (result : Except ProtoError α) : RM α :=
-  match result with
-  | .ok value => pure value
-  | .error error => throw (.wire error)
+  liftExcept (mapWireError result)
 
 private def normalizeFullName (name : String) : String :=
   name.dropPrefix "." |>.toString
@@ -116,8 +118,8 @@ private def isRepeated (proto : FieldDescriptorProto) : Bool :=
 private def checkContainingType
     (message : DynamicMessage) (field : FieldDescriptor)
     (proto : FieldDescriptorProto) : RM Unit := do
-  if proto.extendee.isSome then
-    let expected := normalizeFullName proto.extendee.get!
+  if let some extendee := proto.extendee then
+    let expected := normalizeFullName extendee
     if !(← field.pool.isBasedOn message.descriptor.pool) ||
         expected != message.descriptor.fullName then
       throw (.wrongContainingType field.fullName message.descriptor.fullName)
@@ -580,30 +582,22 @@ def DynamicMessage.decode
       "protobuf messages must be smaller than 2 GiB"))
   let parsed :=
     Binary.Get.run (Binary.getThe Encoding.Message) bytes |>.toExcept
-  let wire ←
-    match Encoding.protoDecodeParseResultExcept parsed with
-    | .ok wire => pure wire
-    | .error error => throw (.wire error)
+  let wire ← mapWireError (Encoding.protoDecodeParseResultExcept parsed)
   return { descriptor, wire }
 
 def DynamicMessage.encode (message : DynamicMessage) :
     Except ReflectionError ByteArray := do
-  match message.wire.validateForEncoding with
-  | .error error => throw (.wire error)
-  | .ok () =>
-    let bytes := Binary.Put.run (Binary.put message.wire)
-    if bytes.size > 0x7fffffff then
-      throw (.wire (.userError
-        "serialized protobuf message exceeds the 2 GiB limit"))
-    return bytes
+  let _ ← mapWireError message.wire.validateForEncoding
+  let bytes := Binary.Put.run (Binary.put message.wire)
+  if bytes.size > 0x7fffffff then
+    throw (.wire (.userError
+      "serialized protobuf message exceeds the 2 GiB limit"))
+  return bytes
 
 def DynamicMessage.ofStatic
     (value : α) [ReflectMessage α] :
     Except ReflectionError DynamicMessage := do
-  let wire ←
-    match ReflectMessage.toMessagePartial value with
-    | .ok wire => pure wire
-    | .error error => throw (.wire error)
+  let wire ← mapWireError (ReflectMessage.toMessagePartial value)
   return {
     descriptor := messageDescriptor α
     wire
@@ -615,9 +609,7 @@ def DynamicMessage.toStatic
   let expected := messageDescriptor α
   if message.descriptor != expected then
     throw (.wrongContainingType expected.fullName message.descriptor.fullName)
-  match ReflectMessage.fromMessage message.wire with
-  | .ok value => return value
-  | .error error => throw (.wire error)
+  mapWireError (ReflectMessage.fromMessage message.wire)
 
 def Value.ofStaticEnum (value : α) [ReflectEnum α] : Value :=
   .enum (enumDescriptor α) (ReflectEnum.toInt32 value)

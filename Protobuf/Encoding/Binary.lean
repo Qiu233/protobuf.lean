@@ -168,12 +168,11 @@ partial def getRecordWithRecursionBudget
         let v ← getThe UInt32
         return some ⟨num, .I32 v.toBitVec⟩
       | _ => throw (.userError "protobuf: invalid wire type encountered")
-  match ← go none recursionBudget with
-  | some r => return r
-  | none =>
-      throw
+  let some r ← go none recursionBudget
+    | throw
         (.userError
           "protobuf: internal error: a top-level record decoded as an end-group")
+  return r
 
 @[always_inline]
 partial instance : Decode Record where

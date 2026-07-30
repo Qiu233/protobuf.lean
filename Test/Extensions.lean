@@ -19,10 +19,8 @@ private def assert (condition : Bool) (failure : String) : IO Unit := do
   unless condition do
     throw (IO.userError failure)
 
-private def ofProtoExcept (result : Except ProtoError α) : IO α := do
-  match result with
-  | .ok value => pure value
-  | .error error => throw (IO.userError error.toString)
+private def ofProtoExcept (result : Except ProtoError α) : IO α :=
+  IO.ofExcept result
 
 public def main : IO Unit := do
   -- Although this extension prefers packed output, its accessor must accept a

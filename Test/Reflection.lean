@@ -17,10 +17,8 @@ private def assert (condition : Bool) (failure : String) : IO Unit := do
   unless condition do
     throw (IO.userError failure)
 
-private def ofExcept [ToString ε] (result : Except ε α) : IO α := do
-  match result with
-  | .ok value => return value
-  | .error error => throw (IO.userError (toString error))
+private def ofExcept [ToString ε] (result : Except ε α) : IO α :=
+  IO.ofExcept result
 
 private def ofIOExcept [ToString ε] (result : IO (Except ε α)) : IO α :=
   result >>= ofExcept

@@ -116,9 +116,7 @@ public def decode (s : String) : Except String ByteArray :=
         | some v => bufRef.modify (·.push (some v))
         | none => throw s!"base64: invalid character '{c}'"
       if (← bufRef.get).size == 4 then
-        let out ← match decodeQuad (← bufRef.get) (← outRef.get) with
-          | Except.ok r => pure r
-          | Except.error e => throw e
+        let out ← liftExcept <| decodeQuad (← bufRef.get) (← outRef.get)
         outRef.set out
         if (← bufRef.get).any (·.isNone) then
           sawPaddingRef.set true
@@ -130,9 +128,9 @@ public def decode (s : String) : Except String ByteArray :=
 @[always_inline]
 public def decodeBase64String (s : String) : Except String String := do
   let bs ← decode s
-  match String.fromUTF8? bs with
-  | some out => return out
-  | none => throw s!"invalid UTF-8 default string literal"
+  let some out := String.fromUTF8? bs
+    | throw "invalid UTF-8 default string literal"
+  return out
 
 @[always_inline]
 public def decode! (s : String) : ByteArray :=

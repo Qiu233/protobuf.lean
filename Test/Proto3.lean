@@ -14,10 +14,8 @@ set_option protobuf.trace.notation true
 
 #load_proto_file "Test/Proto3.proto"
 
-def ofExcept {α} (e : Except ProtoError α) : IO α := do
-  match e with
-  | .ok v => pure v
-  | .error err => throw (IO.userError err.toString)
+def ofExcept {α} (e : Except ProtoError α) : IO α :=
+  IO.ofExcept e
 
 def assert (cond : Bool) (msg : String) : IO Unit := do
   if cond then pure () else throw (IO.userError msg)

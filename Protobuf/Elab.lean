@@ -31,12 +31,12 @@ meta def read_proto (srcFile : FilePath) (protoPath : FilePath) : ExceptT String
       ]
     }
     IO.FS.readBinFile tmp -- TODO: may be too large, make it incremental
-  let data ← match (Binary.Get.run (Binary.getThe Encoding.Message) bin |>.toExcept) with
-    | .ok data => pure data
-    | .error e => throw s!"failed to parse protoc output: {e}"
-  let desc ← match google.protobuf.FileDescriptorSet.fromMessage data with
-    | .ok d => pure d
-    | .error e => throw s!"failed to parse protoc output: {e}"
+  let data ← liftExcept <|
+    (Binary.Get.run (Binary.getThe Encoding.Message) bin |>.toExcept).mapError fun e =>
+      s!"failed to parse protoc output: {e}"
+  let desc ← liftExcept <|
+    (google.protobuf.FileDescriptorSet.fromMessage data).mapError fun e =>
+      s!"failed to parse protoc output: {e}"
   /-
   Keep every transitive descriptor for whole-set static validation, including
   `descriptor.proto`.  `Versions.compile_proto` knows that its Lean
@@ -60,12 +60,12 @@ meta def read_proto_files (srcFiles : Array FilePath) (protoPath : FilePath) :
     args := args ++ srcFiles.map (·.toString)
     _ ← IO.Process.run { cmd := "protoc", args := args }
     IO.FS.readBinFile tmp -- TODO: may be too large, make it incremental
-  let data ← match (Binary.Get.run (Binary.getThe Encoding.Message) bin |>.toExcept) with
-    | .ok data => pure data
-    | .error e => throw s!"failed to parse protoc output: {e}"
-  let desc ← match google.protobuf.FileDescriptorSet.fromMessage data with
-    | .ok d => pure d
-    | .error e => throw s!"failed to parse protoc output: {e}"
+  let data ← liftExcept <|
+    (Binary.Get.run (Binary.getThe Encoding.Message) bin |>.toExcept).mapError fun e =>
+      s!"failed to parse protoc output: {e}"
+  let desc ← liftExcept <|
+    (google.protobuf.FileDescriptorSet.fromMessage data).mapError fun e =>
+      s!"failed to parse protoc output: {e}"
   -- See `read_proto`: validation needs the complete descriptor graph.
   return desc
 
@@ -99,17 +99,12 @@ public meta def elabLoadProtoFileCommand : CommandElab := fun stx => do
     pure f
   let protoPath ← (folder? <|> path.parent).getDM (throwError "failed to infer --proto_path")
   let descExcept ← liftM (m := IO) <| read_proto path protoPath
-  let desc ← match descExcept with
-    | Except.ok d => pure d
-    | Except.error e => throwError "{e}"
+  let desc ← Lean.ofExcept descExcept
   if ← protobuf.trace.descriptor.getM then
     logInfo m!"{repr desc}"
-  let commands ←
-    match
-        Versions.compile_proto desc
-          #["google/protobuf/descriptor.proto"] |>.run with
-    | Except.ok cmds => pure cmds
-    | Except.error e => throwError "{e}"
+  let commands ← Lean.ofExcept <|
+    Versions.compile_proto desc
+      #["google/protobuf/descriptor.proto"] |>.run
   if ← protobuf.trace.notation.getM then
     for cmd in commands do
       logInfo m!"{cmd}"
@@ -123,19 +118,14 @@ public meta def elabLoadProtoDirCommand : CommandElab := fun stx => do
     throwErrorAt pathStx "directory {path} does not exist"
   unless ← path.isDir do
     throwErrorAt pathStx "path {path} is not a directory"
-  let files ← liftM (m := IO) <| collect_proto_files path
+  let files ← collect_proto_files path
   let descExcept ← liftM (m := IO) <| read_proto_files files path
-  let desc ← match descExcept with
-    | Except.ok d => pure d
-    | Except.error e => throwError "{e}"
+  let desc ← Lean.ofExcept descExcept
   if ← protobuf.trace.descriptor.getM then
     logInfo m!"{repr desc}"
-  let commands ←
-    match
-        Versions.compile_proto desc
-          #["google/protobuf/descriptor.proto"] |>.run with
-    | Except.ok cmds => pure cmds
-    | Except.error e => throwError "{e}"
+  let commands ← Lean.ofExcept <|
+    Versions.compile_proto desc
+      #["google/protobuf/descriptor.proto"] |>.run
   if ← protobuf.trace.notation.getM then
     for cmd in commands do
       logInfo m!"{cmd}"

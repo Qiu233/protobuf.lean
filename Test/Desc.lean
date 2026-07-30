@@ -64,10 +64,8 @@ def isTypeMessage (t? : Option FieldDescriptorProto.Type) : Bool :=
   | some .TYPE_MESSAGE => true
   | _ => false
 
-def ofProtoExcept {α} (e : Except ProtoError α) : IO α := do
-  match e with
-  | .ok v => pure v
-  | .error err => throw (IO.userError (ProtoError.toString err))
+def ofProtoExcept {α} (e : Except ProtoError α) : IO α :=
+  IO.ofExcept e
 
 def isEdition2023 (edition? : Option Edition) : Bool :=
   match edition? with
@@ -81,9 +79,8 @@ def assert (cond : Bool) (msg : String) : IO Unit := do
   if cond then pure () else throw (IO.userError msg)
 
 def expectSome {α} (o : Option α) (msg : String) : IO α := do
-  match o with
-  | some v => pure v
-  | none => throw (IO.userError msg)
+  let some v := o | throw (IO.userError msg)
+  return v
 
 def descriptorSetPath : FilePath :=
   FilePath.mk "Test/official/descriptor_set.bin"
