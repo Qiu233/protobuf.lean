@@ -125,7 +125,7 @@ private def getInternalType? : TSyntax `ident → Option InternalType
   | _ => none
 
 /-- (is_scalar, internal_type?, enum_type?, oneof_type?) -/
-@[specialize]
+@[noinline]
 private def getProtoTypeMData [Monad m] [MonadError m] [MonadEnv m] [MonadOptions m] [MonadLog m] [MonadRef m] [AddMessageContext m] [MonadResolveName m]
     (mutEnums mutOneofs messages : NameSet) : TSyntax `ident → m (Bool × Option InternalType × Option Name × Option Name) := fun x => do
   let x := protectGeneratedTypeName x

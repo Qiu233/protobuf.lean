@@ -5,11 +5,19 @@ import Protobuf.Base64
 
 @[expose] public section
 
-@[always_inline]
+/-
+These are generic collection algorithms, not abstraction-only wrappers.
+Keeping one shared implementation avoids cloning their loops for every
+element type, equality function, and hash instance used by downstream code.
+`noinline` keeps their bodies out of callers, while `nospecialize` prevents
+the code generator from creating a new copy for each concrete argument.
+-/
+
+@[noinline, nospecialize]
 def _root_.Array.eraseDupsBy {α} (r : α → α → Bool) (as : Array α) : Array α :=
   loop 0 as (Array.emptyWithCapacity as.size) -- TODO: is there a way to *shrink* capacity to size?
 where
-  @[specialize] loop : Nat → Array α → Array α → Array α := fun i as bs =>
+  loop : Nat → Array α → Array α → Array α := fun i as bs =>
     if h : as.size ≤ i then bs
     else
       let a := as[i]
@@ -17,10 +25,10 @@ where
       | true  => loop (i + 1) as bs
       | false => loop (i + 1) as (bs.push a)
 
-@[specialize, always_inline]
+@[noinline, nospecialize]
 def _root_.Array.eraseDups {α} [BEq α] (as : Array α) : Array α := as.eraseDupsBy (· == ·)
 
-@[specialize, always_inline]
+@[noinline, nospecialize]
 def _root_.Array.groupKeyed {α β} [BEq α] [Hashable α] (xs : Array (α × β))
     : Std.HashMap α (Array β) := runST fun σ => do
   let groups ← ST.mkRef (σ := σ) (∅ : Std.HashMap α (Array β))
@@ -28,15 +36,15 @@ def _root_.Array.groupKeyed {α β} [BEq α] [Hashable α] (xs : Array (α × β
     groups.modify fun groups => groups.alter k (some <| ·.getD #[] |>.push x)
   groups.get
 
-@[always_inline]
+@[noinline, nospecialize]
 def _root_.Array.hasDupsBy {α} (r : α → α → Bool) (as : Array α) : Bool := runST fun σ => do
   let bs ← ST.mkRef (σ := σ) #[]
   for a in as do
-    if (← bs.get).any (r a) then return false
+    if (← bs.get).any (r a) then return true
     bs.modify (fun bs => bs.push a)
-  return true
+  return false
 
-@[always_inline]
+@[noinline, nospecialize]
 def _root_.Array.hasDups {α} [BEq α] (as : Array α) : Bool := as.hasDupsBy (· == ·)
 
 -- @[inline]
@@ -164,7 +172,7 @@ def _root_.Array.hasDups {α} [BEq α] (as : Array α) : Bool := as.hasDupsBy (�
 --   loop
 --   compsRef.get
 
-@[specialize]
+@[noinline, nospecialize]
 partial def _root_.Array.topoSortSCCHash {α} [Inhabited α] [BEq α] [Hashable α] (nodes : Array α)
     (deps : Std.HashMap α (Array α)) : Array (Array α) := runST fun σ => do
   let nodeSet := nodes.foldl (fun m n => m.insert n ()) (∅ : Std.HashMap α PUnit)

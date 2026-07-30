@@ -83,7 +83,7 @@ private def Options.boolean : Array Name :=
 private def Options.repeatable : Array Name :=
   #[`targets]
 
-@[always_inline]
+@[noinline]
 private def Options.zip : Array Ident → Array (TSyntax `options_value) → Options := fun name val =>
   let raw := name.zip val
   -- Options synthesized from descriptors carry fresh macro scopes.  Option
@@ -99,25 +99,25 @@ local instance : GetElem? Options Name (Array (TSyntax `options_value)) (fun opt
   getElem xs i h := xs.entries[i]
   getElem? xs i := xs.entries[i]?
 
-@[always_inline]
+@[noinline]
 private def Options.first? (options : Options) (x : Name) : Option (TSyntax `options_value) :=
   if let some xs := options[x]? then
     xs[0]?
   else
     none
 
-@[always_inline]
+@[noinline]
 private def Options.is_true? (options : Options) (x : Name) : Option Bool :=
   if let some y := options.first? x then
     y matches `(options_value| true)
   else none
 
-@[always_inline]
+@[noinline]
 def Options.parse : TSyntax ``options → Options
   | `(options| [ $[$name = $val],* ]) => Options.zip name val
   | _ => unreachable!
 
-@[always_inline]
+@[noinline]
 def Options.parseD : Option (TSyntax ``options) → Options
   | some s =>
     match s with
@@ -133,6 +133,7 @@ misspelled or inapplicable option would otherwise defer the failure to generated
 runtime code (and `packed` on a non-packable field used to reach an assertion in
 the encoder).
 -/
+@[noinline, nospecialize]
 def Options.validate
     [Monad m] [MonadError m] [MonadRef m] [AddMessageContext m]
     (options : Options) (allowed : Array Name) : m Unit := do

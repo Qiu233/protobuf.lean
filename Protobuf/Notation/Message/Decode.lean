@@ -194,9 +194,6 @@ def construct_fromMessage
   let oneofDispatch ←
     constructOneofDispatch
       oneofFields.toList recVar pureState unknownBody
-  let branchCases ← branchCases.mapM fun (fieldNum, body) => do
-    let body ← recoverInvalidWireType stateTy body unknownBody
-    pure (fieldNum, body)
   let fallback ← mkIdent <$> mkFreshUserName `fallback
   let fallbackInit ← `(Parser.Term.doSeqItem|
     let $fallback:ident :
@@ -262,6 +259,14 @@ def construct_fromMessage
                 $restDispatch:term)
       let dispatch ← constructChunkDispatch chunks.toList
       pure (dispatch, chunks.map (fun (_, _, command) => command))
+  /-
+  A known field with an incompatible wire type is retained as unknown. Wrap
+  the completed dispatch once instead of cloning this recovery block into
+  every regular-field branch. The oneof/unknown fallback must therefore keep
+  handling its own wrong-wire cases without throwing `invalidWireType`.
+  -/
+  let dispatchBody ←
+    recoverInvalidWireType stateTy dispatchBody unknownBody
   let foldExpr ← `((Protobuf.Encoding.Message.records $msg).foldlM
       (init := ((($state:ident, $seen:ident, $pending:ident) : $stateTy)))
       (fun ($acc:ident : $stateTy) $recVar:ident => do

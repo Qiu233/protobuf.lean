@@ -3,6 +3,7 @@ import Lean.Data.Json
 
 import Protobuf.Notation
 import Protobuf.Elab
+import Test.Bench.Harness
 
 open Lean
 open Protobuf
@@ -83,29 +84,6 @@ instance : FromJson Batch where
       , «Unknown.Fields» := {}
       }
 
-def parseNatArg (name : String) (s : String) : IO Nat := do
-  let some n := s.toNat? | throw <| IO.userError s!"invalid {name}: {s}"
-  return n
-
-structure Config where
-  itemCount : Nat
-  iterations : Nat
-
-def readConfig (args : List String) (defaultItems defaultIterations : Nat) : IO Config := do
-  match args with
-  | [] => pure { itemCount := defaultItems, iterations := defaultIterations }
-  | [itemCount] =>
-      pure
-        { itemCount := ← parseNatArg "itemCount" itemCount
-        , iterations := defaultIterations
-        }
-  | [itemCount, iterations] =>
-      pure
-        { itemCount := ← parseNatArg "itemCount" itemCount
-        , iterations := ← parseNatArg "iterations" iterations
-        }
-  | _ => throw <| IO.userError "usage: <itemCount> <iterations>"
-
 def mkPayload (seed len : Nat) : ByteArray :=
   ByteArray.mk <| Id.run do
     let mut out := #[]
@@ -173,5 +151,16 @@ def decodeJson (text : String) : IO Batch :=
 def batchChecksum (batch : Batch) : Nat :=
   batch.items.foldl (init := batch.label.length) fun acc item =>
     acc + item.id.toNat + item.name.length + item.note.length + item.payload.size + item.tags.size
+
+/-- O(1) consumer for the timed decode loop. -/
+@[noinline]
+def consumeBatch (batch : Batch) : Nat :=
+  if batch.items.isEmpty then
+    batch.label.length
+  else
+    batch.items.size +
+      batch.items[0]!.id.toNat +
+      batch.items[batch.items.size - 1]!.id.toNat +
+      batch.label.length
 
 end Test.Bench

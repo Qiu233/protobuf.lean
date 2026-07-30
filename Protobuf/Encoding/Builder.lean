@@ -65,13 +65,13 @@ private def ProtoVal.ofLengthDelimited (data : ByteArray) :
     throw (.userError "length-delimited protobuf value exceeds the 2 GiB limit")
   return ProtoVal.LEN data
 
-@[always_inline]
+@[noinline]
 def ProtoVal.ofMessage : Message → Except Protobuf.Encoding.ProtoError ProtoVal := fun s =>
   do
     s.validateForEncoding
     ProtoVal.ofLengthDelimited (Put.run (put s))
 
-@[always_inline]
+@[noinline]
 def ProtoVal.ofGroup : Message → Except Protobuf.Encoding.ProtoError ProtoVal := fun s => do
   s.validateForEncoding
   return ProtoVal.GROUPED s
@@ -153,7 +153,7 @@ private def packedWriter : ProtoVal → Except ProtoError Put
       throw (.invalidWireType
         "only VARINT, I64, and I32 protobuf values can be packed")
 
-@[always_inline]
+@[noinline]
 def ProtoVal.of_packed (xs : Array ProtoVal) : Except ProtoError ProtoVal := do
   let writers ← xs.mapM packedWriter
   let data := Binary.Put.run do
@@ -161,7 +161,7 @@ def ProtoVal.of_packed (xs : Array ProtoVal) : Except ProtoError ProtoVal := do
       writer
   ProtoVal.ofLengthDelimited data
 
-@[always_inline]
+@[noinline]
 def Message.wire_map (msg : Message) : Std.HashMap Nat (Array ProtoVal) → Message := fun m =>
   let xs := m.toArray.map fun (n, xs) => xs.map fun x => Record.mk n x
   {msg with records := msg.records.append xs.flatten}

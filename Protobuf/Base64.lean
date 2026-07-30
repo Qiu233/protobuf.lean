@@ -125,20 +125,20 @@ public def decode (s : String) : Except String ByteArray :=
       throw "base64: invalid length"
     return (← outRef.get)
 
-@[always_inline]
+@[noinline]
 public def decodeBase64String (s : String) : Except String String := do
   let bs ← decode s
   let some out := String.fromUTF8? bs
     | throw "invalid UTF-8 default string literal"
   return out
 
-@[always_inline]
+@[noinline]
 public def decode! (s : String) : ByteArray :=
   match decode s with
   | .ok out => out
   | .error err => panic! s!"{decl_name%}: internal error: {err}"
 
-@[always_inline]
+@[noinline]
 public def decodeBase64String! (s : String) : String :=
   match decodeBase64String s with
   | .ok out => out

@@ -53,53 +53,60 @@ def descendMessageRecursion (remaining : Nat) : Except ProtoError Nat :=
     pure (remaining - 1)
 
 @[always_inline]
-private partial def get_varint_bytes : Get ((bs : ByteArray) ×' bs.size > 0) := do
-  let rec go (acc : ByteArray) : Get ((bs : ByteArray) ×' bs.size > 0) := do
-    if acc.size ≥ 10 then
-      throw (.userError "protobuf: varint too long")
-    let b ← getThe UInt8
-    -- A protobuf varint represents an unsigned 64-bit value.  The tenth byte
-    -- therefore has exactly one payload bit and may only be 0x00 or 0x01.
-    if acc.size = 9 && b > 1 then
-      throw (.userError "protobuf: varint overflow")
-    let acc := acc.push b
-    if !b.toBitVec.msb then
-      return ⟨acc, by simp [acc, ByteArray.push]; unfold ByteArray.size; simp⟩
-    go acc
-  go (ByteArray.emptyWithCapacity 10)
-
-@[always_inline]
-partial def get_varint : Get Nat := do
-  let ⟨bs, h⟩ ← get_varint_bytes
-  let rec go (acc : Nat) (shift : Nat) (idx : USize) (h : idx.toNat < bs.size) : Nat :=
-    let b := bs.uget idx h
-    let j := idx + 1
-    let acc := acc ||| ((b &&& 0x7F).toNat <<< shift)
-    if h' : j.toNat < bs.size then
-      go acc (shift + 7) j h'
+partial def get_varint : Get Nat := fun decoder =>
+  /-
+  Accumulate directly from the input cursor into protobuf's exact UInt64
+  varint domain. Keep the cursor and intermediate shifts machine-sized, then
+  convert to Nat only once after validating the terminating byte.
+  -/
+  let rec go
+      (acc shift : UInt64) (index : UInt8) (offset : USize) :
+      DecodeResult Nat :=
+    if h : offset.toNat < decoder.data.size then
+      let byte := decoder.data.uget offset h
+      let next := offset + 1
+      -- A protobuf varint has at most ten bytes. The tenth byte has exactly
+      -- one payload bit, so 0x00 and 0x01 are its only valid values.
+      if index == 9 then
+        if byte > 1 then
+          .error (.userError "protobuf: varint overflow")
+            { decoder with offset := next.toNat }
+        else
+          let value := acc ||| (UInt64.ofNat byte.toNat <<< shift)
+          .success value.toNat { decoder with offset := next.toNat }
+      else
+        let payload := UInt64.ofNat (byte &&& 0x7f).toNat
+        let value := acc ||| (payload <<< shift)
+        if byte &&& 0x80 == 0 then
+          .success value.toNat { decoder with offset := next.toNat }
+        else
+          go value (shift + 7) (index + 1) next
     else
-      acc
-  return go 0 0 0 h
+      DecodeResult.mkEOI { decoder with offset := offset.toNat }
+  go 0 0 0 (USize.ofNat decoder.offset)
 
 @[always_inline]
-partial def put_varint (n : Nat) : Put := do
-  let rec go (acc : ByteArray) (v : UInt64) : ByteArray :=
+partial def Internal.putVarintUInt64 (value : UInt64) : Put := fun output =>
+  let rec go (output : ByteArray) (v : UInt64) : ByteArray :=
     let byte : UInt8 := UInt8.ofNat ((v &&& (0x7F : UInt64)).toNat)
     let v := v >>> 7
     if v = 0 then
-      acc.push byte
+      output.push byte
     else
-      go (acc.push (byte ||| (0x80 : UInt8))) v
-  let bs := go (ByteArray.emptyWithCapacity 10) (UInt64.ofNat n)
-  put_bytes bs
+      go (output.push (byte ||| (0x80 : UInt8))) v
+  ((), go output value)
+
+@[always_inline]
+partial def put_varint (n : Nat) : Put :=
+  Internal.putVarintUInt64 (UInt64.ofNat n)
 
 open Primitive.LE in
-@[always_inline]
 partial instance : Encode Record where
   put x := do
     let rec go (x : Record) : Put := do
-      let putKey (wireType : Nat) : Put :=
-        put_varint <| (x.fieldNum <<< 3) ||| wireType
+      let putKey (wireType : UInt64) : Put :=
+        Internal.putVarintUInt64 <|
+          (UInt64.ofNat x.fieldNum <<< 3) ||| wireType
       match x.value with
       | .GROUPED sub =>
         putKey 3 -- SGROUP
@@ -183,11 +190,9 @@ partial def getRecordWithRecursionBudget
           "protobuf: internal error: a top-level record decoded as an end-group")
   return r
 
-@[always_inline]
 partial instance : Decode Record where
   get := getRecordWithRecursionBudget defaultMessageRecursionLimit
 
-@[always_inline]
 instance : Encode Message where
   put x := x.records.forM put
 
@@ -208,6 +213,5 @@ partial def getMessageWithRecursionBudget
     go (acc.push r)
   Message.mk <$> go (Array.emptyWithCapacity 32)
 
-@[always_inline]
 partial instance : Decode Message where
   get := getMessageWithRecursionBudget defaultMessageRecursionLimit

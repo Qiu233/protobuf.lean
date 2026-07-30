@@ -85,7 +85,7 @@ abbrev M := ReaderT M.Context $ StateRefT M.State $ ExceptT String BaseIO
 @[inline]
 def M.run : M α → Except String α := fun x => (unsafe unsafeBaseIO (x {} |>.run' {}))
 
-@[inline]
+@[noinline, nospecialize]
 def withNamePrefix (prefixRev : List String) (x : M α) : M α := fun c =>
   x { c with currentNamePrefixRev := prefixRev }
 
@@ -107,17 +107,17 @@ def wrapName : String → M Name := fun s c =>
     | x :: ns => (go ns).str (schemaNameComponent x)
   return (go c.currentNamePrefixRev).str (schemaNameComponent s)
 
-@[specialize]
+@[noinline, nospecialize]
 def withNewNameLevel (n : String) (x : M α) : M α := fun c => x { c with currentNamePrefixRev := n :: c.currentNamePrefixRev }
 
-@[specialize]
+@[noinline, nospecialize]
 def withNewNameLevel? (n : Option String) (x : M α) : M α := fun c =>
   if let some n := n then
     x { c with currentNamePrefixRev := n :: c.currentNamePrefixRev }
   else
     x c
 
-@[specialize]
+@[noinline, nospecialize]
 def withPackageName (n : String) (x : M α) : M α := fun c =>
   let n := n.trimAscii.toString
   let xs := n.splitOn "."
@@ -126,7 +126,7 @@ def withPackageName (n : String) (x : M α) : M α := fun c =>
   else
     x { c with currentNamePrefixRev := xs.reverse ++ c.currentNamePrefixRev }
 
-@[specialize, always_inline]
+@[noinline, nospecialize]
 protected def M.withFreshMacroScope {α} (x : M α) : M α := do
   let fresh ← modifyGetThe M.State (fun st => (st.nextMacroScope, { st with nextMacroScope := st.nextMacroScope + 1 }))
   withReader (fun ctx => { ctx with currentMacroScope := fresh }) x

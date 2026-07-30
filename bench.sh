@@ -7,6 +7,8 @@ ITEMS="${1:-2000}"
 ITERS="${2:-200}"
 PROTO_ITERS="${PROTO_ITERS:-$ITERS}"
 JSON_ITERS="${JSON_ITERS:-${3:-$ITERS}}"
+WIRE_VALUES="${WIRE_VALUES:-100000}"
+WIRE_ITERS="${WIRE_ITERS:-100}"
 
 if command -v /usr/bin/time >/dev/null 2>&1; then
   BENCH_MODE="time"
@@ -46,12 +48,14 @@ run_bench() {
   printf '%-16s elapsed_s=%s %s\n' "$name" "${elapsed:-unknown}" "$summary"
 }
 
-lake build benchProtoEncode benchProtoDecode benchJsonEncode benchJsonDecode
+lake build benchProtoEncode benchProtoDecode benchWire benchJsonEncode benchJsonDecode
 
-echo "items=$ITEMS proto_iters=$PROTO_ITERS json_iters=$JSON_ITERS mode=$BENCH_MODE"
+echo "items=$ITEMS proto_iters=$PROTO_ITERS json_iters=$JSON_ITERS wire_values=$WIRE_VALUES wire_iters=$WIRE_ITERS mode=$BENCH_MODE"
 echo
 
 run_bench "protobuf encode" "$BIN_DIR/benchProtoEncode" "$ITEMS" "$PROTO_ITERS"
 run_bench "protobuf decode" "$BIN_DIR/benchProtoDecode" "$ITEMS" "$PROTO_ITERS"
+run_bench "varint encode" "$BIN_DIR/benchWire" encode mixed "$WIRE_VALUES" "$WIRE_ITERS"
+run_bench "varint decode" "$BIN_DIR/benchWire" decode mixed "$WIRE_VALUES" "$WIRE_ITERS"
 run_bench "json encode" "$BIN_DIR/benchJsonEncode" "$ITEMS" "$JSON_ITERS"
 run_bench "json decode" "$BIN_DIR/benchJsonDecode" "$ITEMS" "$JSON_ITERS"

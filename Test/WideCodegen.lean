@@ -50,4 +50,43 @@ message WideCodegen {
       actual.toMessage_chunk_0 == 17 &&
       actual.fromMessage_chunk_0 == 18 do
     throw (IO.userError "wide generated helper roundtrip failed")
+
+  let hasUnknownLen
+      (fields : Std.HashMap Nat (Array Encoding.ProtoVal))
+      (fieldNum : Nat) : Bool :=
+    match fields[fieldNum]? with
+    | some values => values.any (·.isLEN)
+    | none => false
+  let decodeRecords (records : Array Encoding.Record) :=
+    IO.ofExcept <|
+      WideCodegen.«protobuf.internal».fromMessage { records }
+
+  let lowWrongFirst ← decodeRecords #[
+    { fieldNum := 1, value := .LEN ByteArray.empty },
+    { fieldNum := 1, value := .VARINT 7 }
+  ]
+  let lowWrongLast ← decodeRecords #[
+    { fieldNum := 1, value := .VARINT 7 },
+    { fieldNum := 1, value := .LEN ByteArray.empty }
+  ]
+  unless lowWrongFirst.f01 == 7 && lowWrongLast.f01 == 7 &&
+      hasUnknownLen lowWrongFirst.«Unknown.Fields» 1 &&
+      hasUnknownLen lowWrongLast.«Unknown.Fields» 1 do
+    throw (IO.userError
+      "small generated dispatch did not preserve wrong-wire scalar data")
+
+  let highWrongFirst ← decodeRecords #[
+    { fieldNum := 18, value := .LEN ByteArray.empty },
+    { fieldNum := 18, value := .VARINT 9 }
+  ]
+  let highWrongLast ← decodeRecords #[
+    { fieldNum := 18, value := .VARINT 9 },
+    { fieldNum := 18, value := .LEN ByteArray.empty }
+  ]
+  unless highWrongFirst.fromMessage_chunk_0 == 9 &&
+      highWrongLast.fromMessage_chunk_0 == 9 &&
+      hasUnknownLen highWrongFirst.«Unknown.Fields» 18 &&
+      hasUnknownLen highWrongLast.«Unknown.Fields» 18 do
+    throw (IO.userError
+      "chunked generated dispatch did not preserve wrong-wire scalar data")
   : IO Unit)

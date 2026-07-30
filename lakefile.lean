@@ -22,6 +22,9 @@ lean_exe benchProtoEncode where
 lean_exe benchProtoDecode where
   root := `Test.Bench.ProtoDecode
 
+lean_exe benchWire where
+  root := `Test.Bench.Wire
+
 lean_exe benchJsonEncode where
   root := `Test.Bench.JsonEncode
 
@@ -57,6 +60,7 @@ lean_exe testProtoJsonConformance where
 
 lean_lib Tests where
   roots := #[
+    `Test.Utils,
     `Test.EncodingWire,
     `Test.ExtensionTagBase,
     `Test.ExtensionKnownTagCollisionsBase,
@@ -102,6 +106,7 @@ script test (_args) do
 
   let buildExit ← runLake #[
     "build",
+    "+Test.Utils",
     "+Test.EncodingWire",
     "+Test.ExtensionTagBase",
     "+Test.ExtensionKnownTagCollisions",

@@ -307,4 +307,52 @@ abbrev testPackedFixed64 : Except String Unit := do
       message.records[4]!.value.isI32
   | .error _ => false
 
+/-- info: true -/
+#guard_msgs (info) in
+#eval
+  let encodeVarint (value : Nat) := Binary.Put.run (put_varint value)
+  encodeVarint 127 == (⟨#[0x7f]⟩ : ByteArray) &&
+    encodeVarint 128 == (⟨#[0x80, 0x01]⟩ : ByteArray) &&
+    encodeVarint 16383 == (⟨#[0xff, 0x7f]⟩ : ByteArray) &&
+    encodeVarint 16384 == (⟨#[0x80, 0x80, 0x01]⟩ : ByteArray) &&
+    encodeVarint ((1 <<< 63) - 1) ==
+      (⟨#[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f]⟩ :
+        ByteArray) &&
+    encodeVarint (1 <<< 63) ==
+      (⟨#[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01]⟩ :
+        ByteArray)
+
+/-- info: true -/
+#guard_msgs (info) in
+#eval
+  let record : Record := {
+    fieldNum := (1 <<< 29) - 1
+    value := .VARINT 1
+  }
+  Binary.Put.run (put record) ==
+    (⟨#[0xf8, 0xff, 0xff, 0xff, 0x0f, 0x01]⟩ : ByteArray)
+
+/-- info: true -/
+#guard_msgs (info) in
+#eval
+  let message : Message := {
+    records := #[
+      { fieldNum := 1, value := .VARINT 10 },
+      { fieldNum := 2, value := .VARINT 20 },
+      { fieldNum := 1, value := .I32 (30 : UInt32).toBitVec },
+      { fieldNum := 2, value := .VARINT 40 }
+    ]
+  }
+  let recordOk :=
+    match message.getLastRecordOf? 1 with
+    | some record => record.fieldNum == 1 && record.value.isI32
+    | none => false
+  let valueOk :=
+    match message.getLastValueOf? 1 with
+    | some value => value.isI32
+    | none => false
+  recordOk && valueOk &&
+    (message.getLastRecordOf? 3).isNone &&
+    (message.getLastValueOf? 3).isNone
+
 end Test.EncodingWire
