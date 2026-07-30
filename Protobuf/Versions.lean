@@ -60,3 +60,23 @@ def compile_proto
           throw s!"{stx} is not supported yet"
       else
         Proto2.compile_file file reflectionFile
+
+/--
+Validate a descriptor set and emit only its generated-pool registrations.
+
+This is useful for reflection-only programs that never construct the
+statically generated Lean message types.  It deliberately retains the full
+descriptor (apart from `SourceCodeInfo`, which the registration emitter
+removes) so dynamic messages, custom options, extensions, and Editions
+features have the same runtime metadata as normal generated code.
+-/
+def compile_proto_descriptors
+    (desc : FileDescriptorSet)
+    (precompiledFiles : Array String := #[]) :
+    M (Array Command) := do
+  let desc ← prepareFileDescriptorSet desc
+  let mut commands := #[]
+  for file in desc.file do
+    if !file.name.any precompiledFiles.contains then
+      commands := commands.push (← compileFileDescriptorRegistration file)
+  return commands

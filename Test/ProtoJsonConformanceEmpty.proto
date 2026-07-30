@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package conformance;
+
+// The upstream conformance suite places Empty in an Any even though
+// test_messages_proto3.proto does not import empty.proto.  Real conformance
+// testees link that generated type separately, so make that dependency
+// explicit for this reflection-only adapter too.
+import "google/protobuf/empty.proto";

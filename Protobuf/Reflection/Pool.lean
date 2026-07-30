@@ -800,6 +800,12 @@ def MessageDescriptor.findFieldByName
     IO (Option FieldDescriptor) :=
   descriptor.pool.findFieldByName (qualify descriptor.fullName name)
 
+/-- Whether this synthetic message is the entry type of a protobuf map. -/
+def MessageDescriptor.isMapEntry
+    (descriptor : MessageDescriptor) : IO (Option Bool) := do
+  return (← descriptor.toProto).map fun proto =>
+    proto.options.bind (·.map_entry) == some true
+
 def EnumDescriptor.toProto (descriptor : EnumDescriptor) :
     IO (Option EnumDescriptorProto) := do
   return (← getEnumData descriptor).map (·.proto)
@@ -848,9 +854,45 @@ def EnumValueDescriptor.fullName (descriptor : EnumValueDescriptor) :
       (descriptor.enum.fullName.splitOn "." |>.dropLast)
   return some (qualify scope name)
 
+def EnumValueDescriptor.name
+    (descriptor : EnumValueDescriptor) : IO (Option String) := do
+  return (← descriptor.toProto).bind (·.name)
+
+def EnumValueDescriptor.number
+    (descriptor : EnumValueDescriptor) : IO (Option Int32) := do
+  return (← descriptor.toProto).bind (·.number)
+
 def FieldDescriptor.toProto (descriptor : FieldDescriptor) :
     IO (Option FieldDescriptorProto) := do
   return (← getFieldData descriptor).map (·.proto)
+
+def FieldDescriptor.name (descriptor : FieldDescriptor) : IO (Option String) := do
+  return (← getFieldData descriptor).bind (·.proto.name)
+
+/--
+The canonical ProtoJSON name of an ordinary field.
+
+Descriptors produced by `protoc` always carry `json_name`. The fallback keeps
+hand-built descriptor pools useful without making the JSON layer depend on
+source-level parser machinery.
+-/
+def FieldDescriptor.jsonName
+    (descriptor : FieldDescriptor) : IO (Option String) := do
+  let some proto ← descriptor.toProto | return none
+  if let some name := proto.json_name then
+    return some name
+  let some name := proto.name | return none
+  let mut out := ""
+  let mut upperNext := false
+  for c in name.toList do
+    if c == '_' then
+      upperNext := true
+    else if upperNext then
+      out := out.push c.toUpper
+      upperNext := false
+    else
+      out := out.push c
+  return some out
 
 def FieldDescriptor.number (descriptor : FieldDescriptor) : IO (Option Int32) := do
   return (← getFieldData descriptor).bind (·.proto.number)
@@ -868,6 +910,89 @@ def FieldDescriptor.effectiveWireType (descriptor : FieldDescriptor) :
 def FieldDescriptor.isExtension (descriptor : FieldDescriptor) :
     IO (Option Bool) := do
   return (← getFieldData descriptor).map (·.isExtension)
+
+def FieldDescriptor.isRepeated
+    (descriptor : FieldDescriptor) : IO (Option Bool) := do
+  return (← getFieldData descriptor).map fun data =>
+    data.proto.label == some .LABEL_REPEATED
+
+private def editionsFieldPresence
+    (file : FileDescriptorProto) (field : FieldDescriptorProto) :
+    FeatureSet.FieldPresence :=
+  (field.options.bind (·.features) |>.bind (·.field_presence)).orElse
+    (fun _ =>
+      file.options.bind (·.features) |>.bind (·.field_presence))
+    |>.getD .EXPLICIT
+
+/--
+The protobuf semantic presence of this field after applying syntax and
+Editions features.
+-/
+def FieldDescriptor.hasPresence
+    (descriptor : FieldDescriptor) : IO (Option Bool) := do
+  let some data ← getFieldData descriptor | return none
+  if data.proto.label == some .LABEL_REPEATED then
+    return some false
+  if data.isExtension || data.proto.oneof_index.isSome then
+    return some true
+  let some fileData ←
+      getFileData { pool := descriptor.pool, name := data.fileName }
+    | return none
+  match fileData.proto.syntax.getD "proto2" with
+  | "proto2" => return some true
+  | "proto3" =>
+      return some <|
+        data.proto.proto3_optional.getD false ||
+        data.effectiveType == some .TYPE_MESSAGE ||
+        data.effectiveType == some .TYPE_GROUP
+  | "editions" =>
+      return some <|
+        editionsFieldPresence fileData.proto data.proto != .IMPLICIT
+  | _ => return none
+
+/-- Whether the field is required by proto2 or Editions legacy presence. -/
+def FieldDescriptor.isRequired
+    (descriptor : FieldDescriptor) : IO (Option Bool) := do
+  let some data ← getFieldData descriptor | return none
+  if data.isExtension || data.proto.label == some .LABEL_REPEATED then
+    return some false
+  let some fileData ←
+      getFileData { pool := descriptor.pool, name := data.fileName }
+    | return none
+  match fileData.proto.syntax.getD "proto2" with
+  | "proto2" =>
+      return some (data.proto.label == some .LABEL_REQUIRED)
+  | "proto3" => return some false
+  | "editions" =>
+      return some <|
+        editionsFieldPresence fileData.proto data.proto == .LEGACY_REQUIRED
+  | _ => return none
+
+def FieldDescriptor.messageType
+    (descriptor : FieldDescriptor) : IO (Option MessageDescriptor) := do
+  let some data ← getFieldData descriptor | return none
+  unless data.effectiveType == some .TYPE_MESSAGE ||
+      data.effectiveType == some .TYPE_GROUP do
+    return none
+  let some name := data.proto.type_name | return none
+  descriptor.pool.findMessageByName (normalizeFullName name)
+
+def FieldDescriptor.enumType
+    (descriptor : FieldDescriptor) : IO (Option EnumDescriptor) := do
+  let some data ← getFieldData descriptor | return none
+  unless data.effectiveType == some .TYPE_ENUM do
+    return none
+  let some name := data.proto.type_name | return none
+  descriptor.pool.findEnumByName (normalizeFullName name)
+
+def FieldDescriptor.isMap
+    (descriptor : FieldDescriptor) : IO (Option Bool) := do
+  let some data ← getFieldData descriptor | return none
+  unless data.proto.label == some .LABEL_REPEATED &&
+      data.effectiveType == some .TYPE_MESSAGE do
+    return some false
+  let some message ← descriptor.messageType | return some false
+  return (← message.isMapEntry).map (· == true)
 
 def FieldDescriptor.containingMessage (descriptor : FieldDescriptor) :
     IO (Option MessageDescriptor) := do

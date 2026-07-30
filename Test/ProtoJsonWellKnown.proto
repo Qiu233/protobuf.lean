@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package test.protojson;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+
+message Payload {
+  int32 optional_int32 = 1;
+}
+
+message WellKnownHost {
+  google.protobuf.BoolValue optional_bool_wrapper = 1;
+  google.protobuf.Int32Value optional_int32_wrapper = 2;
+  google.protobuf.Int64Value optional_int64_wrapper = 3;
+  google.protobuf.UInt32Value optional_uint32_wrapper = 4;
+  google.protobuf.UInt64Value optional_uint64_wrapper = 5;
+  google.protobuf.FloatValue optional_float_wrapper = 6;
+  google.protobuf.DoubleValue optional_double_wrapper = 7;
+  google.protobuf.StringValue optional_string_wrapper = 8;
+  google.protobuf.BytesValue optional_bytes_wrapper = 9;
+  google.protobuf.Duration optional_duration = 10;
+  google.protobuf.Timestamp optional_timestamp = 11;
+  google.protobuf.FieldMask optional_field_mask = 12;
+  google.protobuf.Struct optional_struct = 13;
+  google.protobuf.Any optional_any = 14;
+  google.protobuf.Value optional_value = 15;
+  oneof choice {
+    uint32 oneof_uint32 = 16;
+    string oneof_string = 17;
+    google.protobuf.NullValue oneof_null_value = 19;
+  }
+  map<int32, int32> map_int32_int32 = 18;
+}

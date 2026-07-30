@@ -5,10 +5,78 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  PROTOBUF_VERSION: "34.2"
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
+      - name: Install protoc
+        run: |
+          curl --fail --location --retry 3 \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VERSION}/protoc-${PROTOBUF_VERSION}-linux-x86_64.zip" \
+            --output "${RUNNER_TEMP}/protoc.zip"
+          unzip -q "${RUNNER_TEMP}/protoc.zip" -d "${RUNNER_TEMP}/protoc"
+          echo "${RUNNER_TEMP}/protoc/bin" >> "${GITHUB_PATH}"
       - uses: leanprover/lean-action@v1
+
+  protojson-conformance:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protoc
+        run: |
+          curl --fail --location --retry 3 \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VERSION}/protoc-${PROTOBUF_VERSION}-linux-x86_64.zip" \
+            --output "${RUNNER_TEMP}/protoc.zip"
+          unzip -q "${RUNNER_TEMP}/protoc.zip" -d "${RUNNER_TEMP}/protoc"
+          echo "${RUNNER_TEMP}/protoc/bin" >> "${GITHUB_PATH}"
+      - uses: leanprover/lean-action@v1
+        with:
+          auto-config: false
+          use-github-cache: true
+      - name: Build reflection-only conformance testee
+        run: lake build testProtoJsonConformance
+      - name: Restore official conformance runner
+        id: conformance-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/protobuf-conformance
+          key: protobuf-conformance-${{ runner.os }}-${{ runner.arch }}-${{ env.PROTOBUF_VERSION }}-v1
+      - name: Build official conformance runner
+        if: steps.conformance-cache.outputs.cache-hit != 'true'
+        run: |
+          curl --fail --location --retry 3 \
+            "https://github.com/protocolbuffers/protobuf/archive/refs/tags/v${PROTOBUF_VERSION}.tar.gz" \
+            --output "${RUNNER_TEMP}/protobuf.tar.gz"
+          tar -xzf "${RUNNER_TEMP}/protobuf.tar.gz" -C "${RUNNER_TEMP}"
+          cmake \
+            -S "${RUNNER_TEMP}/protobuf-${PROTOBUF_VERSION}" \
+            -B "${RUNNER_TEMP}/protobuf-conformance-build" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -Dprotobuf_BUILD_SHARED_LIBS=OFF \
+            -Dprotobuf_BUILD_CONFORMANCE=ON \
+            -Dprotobuf_BUILD_EXAMPLES=OFF \
+            -Dprotobuf_BUILD_TESTS=OFF \
+            -Dprotobuf_BUILD_PROTOC_BINARIES=OFF
+          cmake --build "${RUNNER_TEMP}/protobuf-conformance-build" \
+            --target conformance_test_runner --parallel 2
+          mkdir -p "${RUNNER_TEMP}/protobuf-conformance"
+          mkdir -p "${RUNNER_TEMP}/protobuf-conformance/lib"
+          cp "${RUNNER_TEMP}/protobuf-conformance-build/conformance_test_runner" \
+            "${RUNNER_TEMP}/protobuf-conformance/"
+          cp -a \
+            "${RUNNER_TEMP}/protobuf-conformance-build/_deps/jsoncpp-build/src/lib_json/." \
+            "${RUNNER_TEMP}/protobuf-conformance/lib/"
+      - name: Run official ProtoJSON conformance suite
+        run: |
+          export LD_LIBRARY_PATH="${RUNNER_TEMP}/protobuf-conformance/lib"
+          "${RUNNER_TEMP}/protobuf-conformance/conformance_test_runner" \
+            --maximum_edition 2023 \
+            .lake/build/bin/testProtoJsonConformance

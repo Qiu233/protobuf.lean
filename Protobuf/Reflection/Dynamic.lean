@@ -71,14 +71,30 @@ consulted unless the caller chooses the generated pool's resolver.
 structure ExtensionResolver where
   findExtensionByNumber :
     MessageDescriptor → Int32 → IO (Option FieldDescriptor)
+  findExtensionByName :
+    MessageDescriptor → String → IO (Option FieldDescriptor)
 
 def DescriptorPool.extensionResolver (pool : DescriptorPool) :
     ExtensionResolver where
   findExtensionByNumber extendee number :=
     pool.findExtensionByNumber extendee number
+  findExtensionByName extendee fullName := do
+    let some field ← pool.findExtensionByName fullName | return none
+    let some actual ← field.extendee | return none
+    if actual == extendee then return some field else return none
 
 def generatedExtensionResolver : ExtensionResolver :=
   generatedPool.extensionResolver
+
+/-- A source of message descriptors, primarily for resolving `Any` payloads. -/
+structure TypeResolver where
+  findMessageByName : String → IO (Option MessageDescriptor)
+
+def DescriptorPool.typeResolver (pool : DescriptorPool) : TypeResolver where
+  findMessageByName := pool.findMessageByName
+
+def generatedTypeResolver : TypeResolver :=
+  generatedPool.typeResolver
 
 private abbrev RM := ExceptT ReflectionError IO
 
@@ -584,6 +600,30 @@ def DynamicMessage.decode
     Binary.Get.run (Binary.getThe Encoding.Message) bytes |>.toExcept
   let wire ← mapWireError (Encoding.protoDecodeParseResultExcept parsed)
   return { descriptor, wire }
+
+/--
+Eagerly validate every schema-known value in a dynamic message.
+
+Raw protobuf decoding cannot tell a byte string from a packed scalar field or
+an embedded message.  Reflection normally decodes those lazily when a field
+is accessed; protocol frontends that must accept or reject the complete input
+can call this operation after `decode`.
+-/
+private partial def validateKnownFieldsM
+    (message : DynamicMessage) (remaining : Nat) : RM Unit := do
+  for field in ← message.descriptor.fields do
+    let proto ← fieldProto field
+    let values ← decodeValues message field proto
+    for value in values do
+      if let .message descriptor wire := value then
+        let next ← liftWire (descendMessageRecursion remaining)
+        validateKnownFieldsM { descriptor, wire } next
+
+def DynamicMessage.validateKnownFields
+    (message : DynamicMessage)
+    (recursionLimit : Nat := defaultMessageRecursionLimit) :
+    IO (Except ReflectionError Unit) :=
+  (validateKnownFieldsM message recursionLimit).run
 
 def DynamicMessage.encode (message : DynamicMessage) :
     Except ReflectionError ByteArray := do

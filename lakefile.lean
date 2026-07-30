@@ -46,6 +46,15 @@ lean_exe testUtf8Validation where
 lean_exe testReflection where
   root := `Test.Reflection
 
+lean_exe testProtoJson where
+  root := `Test.ProtoJson
+
+lean_exe testProtoJsonWellKnown where
+  root := `Test.ProtoJsonWellKnown
+
+lean_exe testProtoJsonConformance where
+  root := `Test.ProtoJsonConformance
+
 lean_lib Tests where
   roots := #[
     `Test.EncodingWire,
@@ -62,6 +71,8 @@ lean_lib Tests where
     `Test.ClosedEnum,
     `Test.Utf8Validation,
     `Test.Reflection,
+    `Test.ProtoJson,
+    `Test.ProtoJsonWellKnown,
     `Test.RecursionDepth,
     `Test.RequiredMerge,
     `Test.Groups,
@@ -115,7 +126,9 @@ script test (_args) do
     "testExtensions",
     "testClosedEnum",
     "testUtf8Validation",
-    "testReflection"
+    "testReflection",
+    "testProtoJson",
+    "testProtoJsonWellKnown"
   ]
   if buildExit != 0 then
     return buildExit
@@ -133,7 +146,9 @@ script test (_args) do
       "testExtensions",
       "testClosedEnum",
       "testUtf8Validation",
-      "testReflection"
+      "testReflection",
+      "testProtoJson",
+      "testProtoJsonWellKnown"
     ] do
     let runExit ← runLake #["exe", executable]
     if runExit != 0 then

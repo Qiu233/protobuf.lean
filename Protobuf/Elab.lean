@@ -16,6 +16,11 @@ syntax inClause := " in " str
 
 /-- relative to package root -/
 syntax (name := loadProtoFileCommand) "#load_proto_file " str (inClause)? : command
+/--
+Load and validate a schema, but emit only runtime descriptor registrations.
+Use this for reflection-only programs that do not need generated Lean types.
+-/
+syntax (name := loadProtoDescriptorsCommand) "#load_proto_descriptors " str (inClause)? : command
 syntax (name := loadProtoDirCommand) "#load_proto_dir " str : command
 
 meta def read_proto (srcFile : FilePath) (protoPath : FilePath) : ExceptT String IO google.protobuf.FileDescriptorSet := do
@@ -104,6 +109,38 @@ public meta def elabLoadProtoFileCommand : CommandElab := fun stx => do
     logInfo m!"{repr desc}"
   let commands ← Lean.ofExcept <|
     Versions.compile_proto desc
+      #["google/protobuf/descriptor.proto"] |>.run
+  if ← protobuf.trace.notation.getM then
+    for cmd in commands do
+      logInfo m!"{cmd}"
+  commands.forM elabCommand
+
+@[command_elab loadProtoDescriptorsCommand]
+public meta def elabLoadProtoDescriptorsCommand : CommandElab := fun stx => do
+  let `(loadProtoDescriptorsCommand|
+      #load_proto_descriptors $pathStx:str $[in $folderStx]?) := stx
+    | throwUnsupportedSyntax
+  let path := FilePath.mk pathStx.getString
+  unless ← path.pathExists do
+    throwErrorAt pathStx "file {path} does not exist"
+  if ← path.isDir then
+    throwErrorAt pathStx "path {path} is a directory"
+  let folder? ← folderStx.mapM fun (x : TSyntax `str) => do
+    let f := FilePath.mk x.getString
+    unless ← f.pathExists do
+      throwErrorAt x "file {f} does not exist"
+    unless ← f.isDir do
+      throwErrorAt x "path {f} is not a directory"
+    pure f
+  let protoPath ←
+    (folder? <|> path.parent).getDM
+      (throwError "failed to infer --proto_path")
+  let descExcept ← liftM (m := IO) <| read_proto path protoPath
+  let desc ← Lean.ofExcept descExcept
+  if ← protobuf.trace.descriptor.getM then
+    logInfo m!"{repr desc}"
+  let commands ← Lean.ofExcept <|
+    Versions.compile_proto_descriptors desc
       #["google/protobuf/descriptor.proto"] |>.run
   if ← protobuf.trace.notation.getM then
     for cmd in commands do

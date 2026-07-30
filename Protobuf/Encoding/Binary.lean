@@ -129,7 +129,16 @@ partial def getRecordWithRecursionBudget
   let rec go
       (expectedEnd? : Option Nat) (remainingRecursion : Nat) :
       Get (Option Record) := do
+      let beforeKey ← remaining
       let key ← get_varint
+      let afterKey ← remaining
+      /-
+      A protobuf tag is a uint32 value.  The general varint reader accepts
+      uint64-sized values, but accepting an overlong tag makes malformed input
+      alias a valid low-numbered field after shifting.
+      -/
+      if beforeKey - afterKey > 5 then
+        throw (.userError "protobuf: field tag varint is longer than 5 bytes")
       let wire_type := (key &&& 0b111)
       let num := (key >>> 3)
       if num = 0 || num > maxFieldNumber then

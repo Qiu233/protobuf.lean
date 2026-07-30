@@ -1,7 +1,7 @@
 # protobuf
 `protobuf` is an implementation of Google's Protocol Buffers in Lean 4, supporting `proto2`, `proto3`, and `edition`.
 
-The goal of this package is to be the standard choice among all Lean 4 protobuf implementations. So far (1/7/2026), this packages has been fully featured in terms of **all core protobuf features** a user would expect.
+The goal of this package is to be the standard choice among all Lean 4 protobuf implementations. So far (30/7/2026), this package has been fully featured in terms of **all core protobuf features** a user would expect.
 
 # Usage
 
@@ -115,6 +115,33 @@ Please read the source code under the folder `Encoding` to learn their usage.
 
 This usage is highly unrecommended and should only serve for debugging purposes.
 
+## ProtoJSON
+
+`Protobuf.Json` implements the protobuf JSON mapping for generated messages and
+reflection-based `DynamicMessage` values:
+
+```lean
+open Protobuf.Json
+
+def roundTrip (value : test.proto3.All) : IO test.proto3.All := do
+  let text ← IO.ofExcept (←
+    toJsonString value PrintOptions.withGeneratedPool)
+  IO.ofExcept (←
+    fromJsonString text test.proto3.All ParseOptions.withGeneratedPool)
+```
+
+The generated-pool options enable bracketed extension fields and resolve
+`google.protobuf.Any` payloads through runtime descriptors. Callers using
+isolated descriptor pools can instead supply their own `ExtensionResolver` and
+`TypeResolver`.
+
+The implementation covers protobuf field-name aliases, presence and required
+fields, maps, oneofs, open and closed enums, exact integer ranges, special
+floating-point values, base64 variants, recursion limits, and the standard
+well-known JSON forms for wrappers, `Timestamp`, `Duration`, `FieldMask`,
+`Struct`, `Value`, `ListValue`, and `Any`. The upstream protobuf Proto3
+Binary/JSON conformance suite is run in CI against the reflection-only adapter.
+
 ## Runtime descriptors and reflection
 
 Files produced by `#load_proto_file`, `#load_proto_dir`, or the protoc plugin
@@ -172,6 +199,19 @@ There is deliberately no automatic process-wide registry of extension
 language types. Callers choose the generated pool's resolver or provide a
 local one.
 
+Reflection-only applications which do not use generated Lean message types
+can avoid generating those definitions:
+
+```lean
+#load_proto_descriptors "proto/A.proto"
+```
+
+This command performs the same whole-descriptor-set validation and registers
+the same runtime metadata as `#load_proto_file`, but emits no static message,
+enum, or accessor definitions. It is useful for dynamic gateways and
+conformance tools, and avoids compiling specializations for otherwise unused
+generated types.
+
 ## Group wire encoding
 
 Legacy proto2 group fields are supported, including optional, required,
@@ -204,11 +244,8 @@ resolver.
 
 # Missing features
 
-Work in progress:
-
-1. Json mapping: designing, likely to be an add-on built on the reflection API.
-2. Service/RPC stubs: service and method descriptors are reflected, but no RPC
-   framework-specific code is generated.
+Service and method descriptors are reflected, but no RPC framework-specific
+stubs are generated.
 
 ## Less likely to have
 Some of them may never be supported:
