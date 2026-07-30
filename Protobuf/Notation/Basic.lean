@@ -260,6 +260,13 @@ structure ProtobufDeclBlock where
   -/
   mergeFunctions : Array Command := #[]
   /--
+  The mutually recursive required-field initialization validators.
+
+  Validators only inspect the final typed value. Keeping them separate avoids
+  pulling the wire-building core into the decoder's recursive SCC.
+  -/
+  validationFunctions : Array Command := #[]
+  /--
   The mutually recursive wire-decoding core
   (`fromMessage`/`decoder?` and oneof decoding).
 
@@ -282,6 +289,7 @@ def ProtobufDeclBlock.elaborate (block : ProtobufDeclBlock) : CommandElabM Unit 
     inhabitedInsts,
     encodingFunctions,
     mergeFunctions,
+    validationFunctions,
     decodingFunctions,
     functions,
     insts
@@ -315,6 +323,7 @@ def ProtobufDeclBlock.elaborate (block : ProtobufDeclBlock) : CommandElabM Unit 
   inhabitedInsts.forM elabCommand
   elaborateMutual encodingFunctions
   elaborateMutual mergeFunctions
+  elaborateMutual validationFunctions
   elaborateMutual decodingFunctions
   functions.forM elabCommand
   insts.forM elabCommand
@@ -325,6 +334,7 @@ def ProtobufDeclBlock.merge : ProtobufDeclBlock → ProtobufDeclBlock → Protob
     inhabitedInsts := a.inhabitedInsts ++ b.inhabitedInsts,
     encodingFunctions := a.encodingFunctions ++ b.encodingFunctions,
     mergeFunctions := a.mergeFunctions ++ b.mergeFunctions,
+    validationFunctions := a.validationFunctions ++ b.validationFunctions,
     decodingFunctions := a.decodingFunctions ++ b.decodingFunctions,
     functions := a.functions ++ b.functions,
     insts := a.insts ++ b.insts }

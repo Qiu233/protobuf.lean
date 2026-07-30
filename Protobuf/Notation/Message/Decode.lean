@@ -300,10 +300,10 @@ def construct_fromMessage
   let oneofDecodes := oneofStatePairs.1
   let finalState := oneofStatePairs.2
   let fromMessageId := push_name "fromMessage"
-  let toMessageId := push_name "toMessage"
+  let requiredValidatorId := push_name "validateRequired"
   let ret ← `(Parser.Term.doSeqItem|
     if $validateRequired:ident then
-      let _ ← $toMessageId:ident $finalState:ident
+      let _ ← $requiredValidatorId:ident $finalState:ident
       pure $finalState:ident
     else
       pure $finalState:ident)

@@ -4,6 +4,7 @@ import Protobuf.Encoding
 import Protobuf.Encoding.Builder
 import Protobuf.Encoding.Unwire
 public meta import Protobuf.Notation.Message.Metadata
+public meta import Protobuf.Notation.Message.Validate
 import Protobuf.Notation.Syntax
 
 public meta section
@@ -93,6 +94,8 @@ public def elabOneofDecCore
         return Protobuf.Encoding.Message.mk
           #[Protobuf.Encoding.Record.mk $nums:num v]
         ]*)
+  let requiredValidator ←
+    constructOneofRequiredValidator name push_name mdata
   let messageFields := mdata.filter (fun x =>
     x.internal_type?.isNone && x.enum_type?.isNone)
   let mergeAlts ← messageFields.mapM fun x => do
@@ -323,7 +326,7 @@ public def elabOneofDecCore
           $fallback:term)
   let finalize ← mkFinalize messageFields.toList
   let fromMessage?Id := push_name "fromMessage?"
-  let toMessageId := push_name "toMessage"
+  let requiredValidatorId := push_name "validateRequired"
   let fromMessage? ← `(
     /--
     Decode a standalone oneof payload using protobuf's wire-level "last one wins" rule.
@@ -363,7 +366,7 @@ public def elabOneofDecCore
         match $result:ident with
         | Option.none => pure Option.none
         | Option.some value =>
-            let _ ← $toMessageId:ident value
+            let _ ← $requiredValidatorId:ident value
             pure $result:ident
       else
         pure $result:ident)
@@ -371,6 +374,7 @@ public def elabOneofDecCore
     decls := #[ind],
     encodingFunctions := #[toMessage, toMessagePartial],
     mergeFunctions := #[merge],
+    validationFunctions := #[requiredValidator],
     decodingFunctions := #[acceptsRecord, fromMessage?]
   }
 

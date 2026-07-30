@@ -3,6 +3,7 @@ module
 public import Protobuf.ProtoMessage
 public meta import Protobuf.Notation.Message.Metadata
 public meta import Protobuf.Notation.Message.Encode
+public meta import Protobuf.Notation.Message.Validate
 public meta import Protobuf.Notation.Message.Decode
 public meta import Protobuf.Notation.Message.Accessors
 import Protobuf.Notation.Syntax
@@ -50,6 +51,8 @@ public def elabMessageDecCore
     construct_builder name push_name (push_name "toMessagePartial") "builderPartial"
   let (fromMessage', fromMessage) ← construct_fromMessage name push_name mdata
   let (_, merge) ← construct_merge name push_name mdata
+  let requiredValidators ←
+    constructMessageRequiredValidator name push_name mdata
   let (_, decoder?) ← construct_decoder? name push_name fromMessage'
   let (_, decoder_rep) ← construct_decoder_rep name push_name fromMessage'
   let defaultAccessors ←
@@ -69,6 +72,7 @@ public def elabMessageDecCore
       inhabitedInsts := #[inhInst],
       encodingFunctions := toMessage.push builder |>.push builderPartial,
       mergeFunctions := #[merge],
+      validationFunctions := requiredValidators,
       decodingFunctions := fromMessage ++ #[decoder?, decoder_rep],
       functions := defaultAccessors ++ #[encode, decode],
       insts := #[protoMessageInst]
