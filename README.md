@@ -1,7 +1,48 @@
 # protobuf
-`protobuf` is an implementation of Google's Protocol Buffers in Lean 4, supporting `proto2`, `proto3`, and `edition`.
+`protobuf` is an implementation of Google's Protocol Buffers written in Lean 4.
 
-The goal of this package is to be the standard choice among all Lean 4 protobuf implementations. So far (30/7/2026), this package has been fully featured in terms of **all core protobuf features** a user would expect.
+## Production readiness
+
+Legend: `[x]` is supported; `[x] ◩` is supported with the stated compatibility
+boundary. Markdown has no portable indeterminate checkbox, so `◩` is used as
+the half-checked marker.
+
+- [x] **Official language frontends** — `proto2`, `proto3`, Editions 2023, and
+  Editions 2024, using descriptors produced by `protoc`.
+- [x] **Static code generation** — standalone files, import trees, whole
+  directories, and a `protoc-gen-lean4` plugin all produce ordinary Lean
+  types with a typed binary API.
+- [x] **Binary protobuf semantics** — every scalar wire type, unknown fields,
+  presence, required fields, explicit defaults, packed and expanded fields,
+  maps, oneofs, recursive messages, and the standard recursion and size
+  limits.
+- [x] **Proto2 and Editions features** — open and closed enums, enum aliases,
+  extensions, groups, Editions `DELIMITED` messages, UTF-8 validation,
+  feature inheritance, and Editions symbol visibility.
+- [x] **Rich runtime and reflection** — immutable descriptors, generated and
+  isolated descriptor pools, pool overlays, extension descriptors,
+  `DynamicMessage`, and static/dynamic conversion that preserves unknown wire
+  records.
+- [x] **ProtoJSON** — generated and dynamic messages, field-name aliases,
+  extensions, `Any`, wrappers, `Timestamp`, `Duration`, `FieldMask`, `Struct`,
+  `Value`, and `ListValue`; the upstream Proto3 JSON conformance suite runs in
+  CI.
+- [x] **Schema validation and preservation** — invalid descriptor combinations
+  are rejected before generation, while unknown wire fields and retained
+  descriptor options survive processing.
+- [x] **Regression coverage** — the test suite exercises generated code,
+  plugin output by recompiling it, reflection, malformed inputs, recursion
+  limits, JSON edge cases, and the upstream conformance runner.
+- [x] ◩ **Services** — service and method descriptors are fully reflected;
+  RPC-framework-specific client/server stubs are deliberately not generated.
+- [x] ◩ **Custom options** — runtime- and default-retained option data is
+  preserved; source-retained data remains in `source_file_descriptors`.
+  Applications interpret option extensions with an explicit resolver.
+- [x] ◩ **Extension lookup** — generated and isolated-pool resolvers are
+  supported; there is intentionally no automatic process-wide registry of
+  extension language types.
+- [ ] **Legacy MessageSet and Proto1** — the MessageSet wire format is rejected,
+  and a Proto1 language frontend is not planned.
 
 # Usage
 
