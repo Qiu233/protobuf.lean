@@ -256,8 +256,13 @@ def generate_code (request : CodeGeneratorRequest) : ExceptT String IO CodeGener
   let compileTargets (desc : FileDescriptorSet)
       (targets : Std.HashMap String PUnit) :
       Protobuf.Versions.M (Std.HashMap String (Array Command)) := do
-    let desc ← Protobuf.Versions.prepareFileDescriptorSet desc
-    let desc := Protobuf.Versions.sanitizeFileDescriptorSet desc
+    let reflectionDesc ← Protobuf.Versions.prepareFileDescriptorSet desc
+    let reflectionFiles : Std.HashMap String FileDescriptorProto :=
+      reflectionDesc.file.foldl (init := {}) fun files file =>
+        match file.name with
+        | some name => files.insert name file
+        | none => files
+    let desc := Protobuf.Versions.sanitizeFileDescriptorSet reflectionDesc
     let names ← desc.file.mapM fun (file : FileDescriptorProto) =>
       match file.name with
       | some name => pure name
@@ -279,19 +284,21 @@ def generate_code (request : CodeGeneratorRequest) : ExceptT String IO CodeGener
       ix ≤ iy)
     let mut outputs : Std.HashMap String (Array Command) := {}
     for file in sorted do
+      let reflectionFile :=
+        file.name.bind (reflectionFiles[·]?) |>.getD file
       let cmds ←
         match file.syntax with
         | some stx =>
           if stx == "proto3" then
-            Protobuf.Versions.Proto3.compile_file file
+            Protobuf.Versions.Proto3.compile_file file reflectionFile
           else if stx == "proto2" then
-            Protobuf.Versions.Proto2.compile_file file
+            Protobuf.Versions.Proto2.compile_file file reflectionFile
           else if stx == "editions" then
-            Protobuf.Versions.Editions.compile_file file
+            Protobuf.Versions.Editions.compile_file file reflectionFile
           else
             throw s!"{stx} is not supported yet"
         | none =>
-          Protobuf.Versions.Proto2.compile_file file
+          Protobuf.Versions.Proto2.compile_file file reflectionFile
       let name := file.name.getD ""
       if targets.contains name then
         outputs := outputs.insert name cmds
@@ -313,6 +320,7 @@ def generate_code (request : CodeGeneratorRequest) : ExceptT String IO CodeGener
       , ""
       , "public import Protobuf.Encoding"
       , "public import Protobuf.Base64"
+      , "public import Protobuf.Reflection"
       , "meta import Protobuf.Notation"
       , String.intercalate "\n" importLines
       , ""

@@ -600,7 +600,16 @@ private partial def reprintSyntaxSafe : Syntax → Except String String
       let rendered ← renderIdentNameSafe value.eraseMacroScopes
       pure <| reprintLeafSafe info rendered
   | .node _ kind args =>
-      if kind == choiceKind then
+      if kind == `hygieneInfo then
+        /-
+        Hygienic parentheses carry an internal anonymous identifier below
+        this metadata node.  It has no source spelling: the surrounding
+        `hygienicLParen` already contains the real `(` token.  Descending into
+        it would incorrectly reject every explicitly parenthesized generated
+        term as an anonymous source identifier.
+        -/
+        pure ""
+      else if kind == choiceKind then
         match args[0]? with
         | none =>
             throw "cannot render generated command: empty parser choice node"

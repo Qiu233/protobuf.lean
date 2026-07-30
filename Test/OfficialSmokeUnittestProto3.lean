@@ -1,6 +1,7 @@
 module
 
 import Protobuf.Encoding
+import Protobuf.Reflection
 meta import Protobuf.Notation
 meta import Protobuf.Elab
 

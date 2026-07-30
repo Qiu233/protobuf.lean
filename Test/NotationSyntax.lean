@@ -236,6 +236,25 @@ run_meta do
   | .error err =>
       throwError
         "safe generic command output did not parse again: {err}"
+  let parenthesizedCommand ←
+    `(command|
+      def parenthesizedGeneratedTerm :=
+        ((String.append "a" (String.append "b" "c"))))
+  let parenthesizedRendered ←
+    match
+        Protobuf.Notation.PrettyPrinter.command.pprintSafe
+          parenthesizedCommand with
+    | .ok rendered => pure rendered
+    | .error err =>
+        throwError
+          "safe generic command printer rejected a parenthesized generated term: {err}"
+  match
+      Parser.runParserCategory
+        (← getEnv) `command parenthesizedRendered with
+  | .ok _ => pure ()
+  | .error err =>
+      throwError
+        "safe parenthesized command output did not parse again: {err}"
   let genericBadCommand ← `(command| def $badId:ident := 1)
   match
       Protobuf.Notation.PrettyPrinter.command.pprintSafe

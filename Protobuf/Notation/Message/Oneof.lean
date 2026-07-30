@@ -14,6 +14,11 @@ open Encoding Notation
 
 open Lean Meta Elab Term Command
 
+private def siblingHelper (id : Ident) (component : String) : Ident :=
+  match id.getId with
+  | .str scope _ => mkIdentFrom id (scope.str component)
+  | _ => id
+
 public def elabOneofDecCore
     (mutEnums mutOneofs messages : NameSet)
     (suppressLegacyHelpers : Bool := false) :
@@ -53,6 +58,21 @@ public def elabOneofDecCore
         Protobuf.Encoding.ProtoVal.ofGroup groupMessage)
     else
       `($builder:ident)
+  let partialBuilders ← mdata.mapM fun m => do
+    let builder ←
+      m.builder?.getDM (throwError "{decl_name%}: builder is absent")
+    if m.options.wired_as_group?.isEqSome true then
+      let toMessage ← m.toMessage?.getDM <|
+        throwErrorAt m.field_name
+          "{decl_name%}: internal error: group oneof alternative has no generated toMessage function"
+      let partialToMessage := siblingHelper toMessage "toMessagePartial"
+      `(fun x => do
+        let groupMessage ← $partialToMessage:ident x
+        Protobuf.Encoding.ProtoVal.ofGroup groupMessage)
+    else if m.internal_type?.isNone && m.enum_type?.isNone then
+      pure (siblingHelper builder "builderPartial")
+    else
+      `($builder:ident)
   let decoder? ← mdata.mapM fun m =>
     m.decoder??.getDM (throwError "{decl_name%}: decoder? is absent")
   let nums := mdata.map ProtoFieldMData.field_num
@@ -64,6 +84,16 @@ public def elabOneofDecCore
       return Protobuf.Encoding.Message.mk #[Protobuf.Encoding.Record.mk $nums:num v]
       ]*
     )
+  let toMessagePartialId := push_name "toMessagePartial"
+  let toMessagePartial ← `(partial def $toMessagePartialId:ident :
+      $name → Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message :=
+    fun val => do
+      match val with
+      $[| $(mdata.map ProtoFieldMData.field_proj) x =>
+        let v ← ($partialBuilders:term x)
+        return Protobuf.Encoding.Message.mk
+          #[Protobuf.Encoding.Record.mk $nums:num v]
+        ]*)
   let messageFields := mdata.filter (fun x =>
     x.internal_type?.isNone && x.enum_type?.isNone)
   let mergeAlts ← messageFields.mapM fun x => do
@@ -357,7 +387,7 @@ public def elabOneofDecCore
       $acceptsRecordId:ident $acceptsRecordArg)
   return {
     decls := #[ind],
-    encodingFunctions := #[toMessage],
+    encodingFunctions := #[toMessage, toMessagePartial],
     mergeFunctions := #[merge],
     decodingFunctions := #[acceptsRecord, fromMessage?],
     legacyAliases

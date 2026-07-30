@@ -115,6 +115,63 @@ Please read the source code under the folder `Encoding` to learn their usage.
 
 This usage is highly unrecommended and should only serve for debugging purposes.
 
+## Runtime descriptors and reflection
+
+Files produced by `#load_proto_file`, `#load_proto_dir`, or the protoc plugin
+register a compact serialized `FileDescriptorProto` at module initialization.
+The process-wide generated pool also contains
+`google/protobuf/descriptor.proto`:
+
+```lean
+open Protobuf.Reflection
+
+def allDescriptor : MessageDescriptor :=
+  messageDescriptor test.proto3.All
+
+#eval do
+  let some file ← generatedPool.findFileByName "Proto3.proto"
+    | throw (IO.userError "descriptor is not registered")
+  IO.println file.name
+```
+
+Descriptor identity includes its pool. Independent pools may contain
+same-named schemas without making their descriptors equal. A dynamic pool may
+also use another pool as an underlay:
+
+```lean
+let local ← DescriptorPool.new
+let overlay ← DescriptorPool.newWithUnderlay generatedPool
+```
+
+Registered files and their descriptor graphs are immutable. Pools can grow,
+including when a shared library is loaded later, so global enumeration order
+is not an initialization contract; `DescriptorPool.files` returns the local
+files sorted by name.
+
+`DynamicMessage` provides schema-aware field access and mutation while
+preserving unknown wire records. `presentValues` reports physical presence
+rather than manufacturing protobuf defaults. Singular message occurrences
+merge, repeated scalar fields accept packed and expanded wire forms, and
+unknown values of a closed enum remain unknown data. Oneof selection follows
+wire order, and Editions `DELIMITED` message fields are reflected as group wire
+data without changing their descriptor's declared `TYPE_MESSAGE`. Generated
+static messages can be converted with `DynamicMessage.ofStatic` and
+`toStatic`; conversion to a dynamic message does not reject an incomplete
+required field, while conversion back through the generated decoder does.
+
+Extensions are resolved explicitly:
+
+```lean
+let resolver := generatedExtensionResolver
+let some extension ←
+    resolver.findExtensionByNumber allDescriptor 100
+  | throw (IO.userError "extension is not registered")
+```
+
+There is deliberately no automatic process-wide registry of extension
+language types. Callers choose the generated pool's resolver or provide a
+local one.
+
 ## Group wire encoding
 
 Legacy proto2 group fields are supported, including optional, required,
@@ -140,16 +197,18 @@ Runtime- or default-retained values can reach the generator in `proto_file`
 descriptor unknown fields and are preserved while descriptors are processed.
 Source-retained values are supplied only through `source_file_descriptors` and
 are not merged into the static generation input. Custom option values are not
-exposed or interpreted after static code generation; doing so would require
-reflection support or an explicitly defined Lean code-generation meaning.
+given an automatic Lean-specific interpretation. Reflection exposes the
+retained descriptor/options messages and their unknown wire fields, so
+applications which know an option extension can interpret it with an explicit
+resolver.
 
 # Missing features
 
 Work in progress:
 
-1. Reflection API: e.g. function `descriptor : MsgType -> Descriptor`. The option `no_standard_descriptor_accessor` is currently ignored.
-2. Json mapping: designing, likely to be an add-on after we have reflection API.
-3. Service/RPC: we will need to think through frameworking issues first. Currently services are ignored.
+1. Json mapping: designing, likely to be an add-on built on the reflection API.
+2. Service/RPC stubs: service and method descriptors are reflected, but no RPC
+   framework-specific code is generated.
 
 ## Less likely to have
 Some of them may never be supported:

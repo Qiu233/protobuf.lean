@@ -18,8 +18,13 @@ def compile_proto
     (desc : FileDescriptorSet)
     (precompiledFiles : Array String := #[]) :
     M (Array Command) := do
-  let desc ← prepareFileDescriptorSet desc
-  let desc := sanitizeFileDescriptorSet desc
+  let reflectionDesc ← prepareFileDescriptorSet desc
+  let reflectionFiles : Std.HashMap String FileDescriptorProto :=
+    reflectionDesc.file.foldl (init := {}) fun files file =>
+      match file.name with
+      | some name => files.insert name file
+      | none => files
+  let desc := sanitizeFileDescriptorSet reflectionDesc
   let names ← desc.file.mapM fun x => get!! x.name
   let deps := names.zip <| desc.file.map fun x => x.dependency
   let deps := Std.HashMap.ofList deps.toList
@@ -41,14 +46,17 @@ def compile_proto
       well-known path.
       -/
       pure #[]
-    else if let some stx := file.syntax then
-      if stx == "proto3" then
-        Proto3.compile_file file
-      else if stx == "proto2" then
-        Proto2.compile_file file
-      else if stx == "editions" then
-        Editions.compile_file file
-      else
-        throw s!"{stx} is not supported yet"
     else
-      Proto2.compile_file file
+      let reflectionFile :=
+        file.name.bind (reflectionFiles[·]?) |>.getD file
+      if let some stx := file.syntax then
+        if stx == "proto3" then
+          Proto3.compile_file file reflectionFile
+        else if stx == "proto2" then
+          Proto2.compile_file file reflectionFile
+        else if stx == "editions" then
+          Editions.compile_file file reflectionFile
+        else
+          throw s!"{stx} is not supported yet"
+      else
+        Proto2.compile_file file reflectionFile

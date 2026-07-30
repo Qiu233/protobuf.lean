@@ -43,6 +43,9 @@ lean_exe testClosedEnum where
 lean_exe testUtf8Validation where
   root := `Test.Utf8Validation
 
+lean_exe testReflection where
+  root := `Test.Reflection
+
 lean_lib Tests where
   roots := #[
     `Test.EncodingWire,
@@ -58,6 +61,7 @@ lean_lib Tests where
     `Test.Extensions,
     `Test.ClosedEnum,
     `Test.Utf8Validation,
+    `Test.Reflection,
     `Test.RecursionDepth,
     `Test.RequiredMerge,
     `Test.Groups,
@@ -110,7 +114,8 @@ script test (_args) do
     "testVersionsValidation",
     "testExtensions",
     "testClosedEnum",
-    "testUtf8Validation"
+    "testUtf8Validation",
+    "testReflection"
   ]
   if buildExit != 0 then
     return buildExit
@@ -127,7 +132,8 @@ script test (_args) do
       "testVersionsValidation",
       "testExtensions",
       "testClosedEnum",
-      "testUtf8Validation"
+      "testUtf8Validation",
+      "testReflection"
     ] do
     let runExit ← runLake #["exe", executable]
     if runExit != 0 then

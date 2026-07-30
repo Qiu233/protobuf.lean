@@ -374,7 +374,10 @@ private def compile_extension (item : ExtensionItem) : M Command := do
   let opts ← field_options? field
   `(extend $extendeeId { $[$mod?]? $t $fieldId:ident = $numQ $[$opts]?; })
 
-def compile_file (file : FileDescriptorProto) : M (Array Command) := do
+def compile_file
+    (file : FileDescriptorProto)
+    (reflectionFile : FileDescriptorProto := file) :
+    M (Array Command) := do
   validateFileDescriptor file
   let prefixRev := Versions.packagePrefixRev (file.package.getD "")
   let enumItems := (← collect_enums prefixRev file.enum_type) ++ (← collect_enums_in_messages prefixRev file.message_type)
@@ -467,4 +470,14 @@ def compile_file (file : FileDescriptorProto) : M (Array Command) := do
   let mut extOut := #[]
   for item in extensionItems do
     extOut := extOut.push (← withNamePrefix item.prefixRev (compile_extension item))
-  return enumsOut ++ out ++ extOut
+  let mut reflectionOut := #[← compileFileDescriptorRegistration reflectionFile]
+  for item in enumItems do
+    reflectionOut := reflectionOut.push <|
+      ← compileEnumReflectionInstance
+        (Versions.nameFromPrefixRev item.prefixRev item.name)
+        (protoFullName item.prefixRev item.name)
+  for item in msgItems do
+    reflectionOut := reflectionOut.push <|
+      ← compileMessageReflectionInstance item.fullName
+        (protoFullName item.prefixRev item.name)
+  return enumsOut ++ out ++ extOut ++ reflectionOut

@@ -54,6 +54,8 @@ public def elabMessageDecCore
   let inhInst ← `(instance : Inhabited $name := ⟨$default'⟩)
   let (toMessage', toMessage) ← construct_toMessage name push_name mdata
   let (_, builder) ← construct_builder name push_name toMessage'
+  let (_, builderPartial) ←
+    construct_builder name push_name (push_name "toMessagePartial") "builderPartial"
   let (fromMessage', fromMessage) ← construct_fromMessage name push_name mdata
   let (_, merge) ← construct_merge name push_name mdata
   let (_, decoder?) ← construct_decoder? name push_name fromMessage'
@@ -74,7 +76,7 @@ public def elabMessageDecCore
       decls := #[struct],
       inhabitedFunctions := #[default],
       inhabitedInsts := #[inhInst],
-      encodingFunctions := toMessage.push builder,
+      encodingFunctions := toMessage.push builder |>.push builderPartial,
       mergeFunctions := #[merge],
       decodingFunctions := fromMessage ++ #[decoder?, decoder_rep],
       functions := defaultAccessors ++ #[encode, decode],

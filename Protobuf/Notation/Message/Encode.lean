@@ -14,8 +14,13 @@ open Encoding Notation
 
 open Lean Meta Elab Term Command
 
+private def siblingHelper (id : Ident) (component : String) : Ident :=
+  match id.getId with
+  | .str scope _ => mkIdentFrom id (scope.str component)
+  | _ => id
+
 private def construct_toMessageBody
-    (val msg : Ident)
+    (val msg validateRequired : Ident)
     (fields : Array ProtoFieldMData) :
     CommandElabM (Array (TSyntax ``Parser.Term.doSeqItem)) := do
   fields.mapM fun {mod, field_name, field_proj, field_num, options, internal_type?, builder?, enum_type?, oneof_type?, toMessage?, test_unset, map_info?, ..} => do
@@ -26,6 +31,15 @@ private def construct_toMessageBody
       let entry_val := mkIdent `entry_val
       let key_builder := map_info.key_builder
       let value_builder := map_info.value_builder
+      let valueBuilder : Term ←
+        if map_info.value_is_message then
+          let partialBuilder := siblingHelper value_builder "builderPartial"
+          `(if $validateRequired:ident then
+              $value_builder:ident
+            else
+              $partialBuilder:ident)
+        else
+          `($value_builder:ident)
       `(Parser.Term.doSeqItem|
         let $msg:ident ← do
           if $test_unset ($field_proj $val) then
@@ -34,7 +48,7 @@ private def construct_toMessageBody
             let $entries:ident ← ($field_proj $val).toArray.mapM (fun ($entry_key:ident, $entry_val:ident) => do
               let $submsg:ident := Protobuf.Encoding.Message.emptyWithCapacity 2
               let $submsg:ident ← (1 : Nat) <~ ($key_builder $entry_key) # $submsg
-              let $submsg:ident ← (2 : Nat) <~ ($value_builder $entry_val) # $submsg
+              let $submsg:ident ← (2 : Nat) <~ ($valueBuilder:term $entry_val) # $submsg
               Encoding.ProtoVal.ofMessage $submsg
               )
             $field_num:num <~f (pure $entries) # $msg
@@ -43,9 +57,15 @@ private def construct_toMessageBody
       let toMessage ← toMessage?.getDM <|
         throwErrorAt field_name
           "{decl_name%}: internal error: oneof field has no generated toMessage function"
+      let partialToMessage := siblingHelper toMessage "toMessagePartial"
+      let selectedToMessage ←
+        `(if $validateRequired:ident then
+            $toMessage:ident
+          else
+            $partialToMessage:ident)
       `(Parser.Term.doSeqItem|
         let $msg:ident ← (do
-          let sub? ← (Option.mapM $toMessage:ident ($field_proj $val))
+          let sub? ← (Option.mapM $selectedToMessage:term ($field_proj $val))
           let combined := Option.getD (Option.map (fun sub => Protobuf.Encoding.Message.combine $msg sub) sub?) $msg
           pure combined)
       )
@@ -58,9 +78,21 @@ private def construct_toMessageBody
           let toMessage ← toMessage?.getDM <|
             throwErrorAt field_name
               "{decl_name%}: internal error: group field has no generated toMessage function"
+          let partialToMessage := siblingHelper toMessage "toMessagePartial"
+          let selectedToMessage ←
+            `(if $validateRequired:ident then
+                $toMessage:ident
+              else
+                $partialToMessage:ident)
           `(fun x => do
-            let groupMessage ← $toMessage:ident x
+            let groupMessage ← $selectedToMessage:term x
             Protobuf.Encoding.ProtoVal.ofGroup groupMessage)
+        else if internal_type?.isNone && enum_type?.isNone then
+          let partialBuilder := siblingHelper builder "builderPartial"
+          `(if $validateRequired:ident then
+              $builder:ident
+            else
+              $partialBuilder:ident)
         else
           `($builder:ident)
       match mod with
@@ -78,6 +110,8 @@ private def construct_toMessageBody
           let $msg ← do
             if let Option.some v := ($field_proj $val) then
               $field_num:num <~ ($fieldBuilder:term v) # $msg
+            else if !$validateRequired:ident then
+              pure $msg
             else
               throw (Protobuf.Encoding.ProtoError.missingRequiredField s!"required field `{$(quote field_proj.getId.toString)}` is missing when building the message")
             )
@@ -116,18 +150,30 @@ def construct_toMessage
     (fields : Array ProtoFieldMData) :
     CommandElabM (Ident × Array Command) := do
   let toMessageId := push_name "toMessage"
+  let toMessagePartialId := push_name "toMessagePartial"
+  let toMessageCoreId := push_name "toMessageWithRequiredValidation"
   if fields.size ≤ encodingChunkSize then
     let msg ← mkIdent <$> mkFreshUserName `msg
     let val ← mkIdent <$> mkFreshUserName `val
-    let body ← construct_toMessageBody val msg fields
-    let toMessage ← `(partial def $toMessageId:ident : $name → Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message := fun $val => do
+    let validateRequired ← mkIdent <$> mkFreshUserName `validateRequired
+    let body ← construct_toMessageBody val msg validateRequired fields
+    let core ← `(partial def $toMessageCoreId:ident :
+        $name → Bool →
+          Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message :=
+      fun $val $validateRequired => do
       let $msg:ident := Protobuf.Encoding.Message.emptyWithCapacity $(quote fields.size)
       $body*
       let $msg := Protobuf.Encoding.Message.wire_map $msg
         ($(mkIdentFrom name (name.getId.str "Unknown.Fields")) $val)
       return $msg
       )
-    return (toMessageId, #[toMessage])
+    let toMessage ← `(partial def $toMessageId:ident :
+        $name → Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message :=
+      fun value => $toMessageCoreId:ident value true)
+    let toMessagePartial ← `(partial def $toMessagePartialId:ident :
+        $name → Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message :=
+      fun value => $toMessageCoreId:ident value false)
+    return (toMessageId, #[core, toMessage, toMessagePartial])
 
   let chunkCount := (fields.size + encodingChunkSize - 1) / encodingChunkSize
   let chunks ← (List.range chunkCount).toArray.mapM fun i => do
@@ -138,32 +184,47 @@ def construct_toMessage
         ((helperName name.getId "toMessage").str s!"_chunk_{i}")
     let msg ← mkIdent <$> mkFreshUserName `msg
     let val ← mkIdent <$> mkFreshUserName `val
-    let body ← construct_toMessageBody val msg chunkFields
+    let validateRequired ← mkIdent <$> mkFreshUserName `validateRequired
+    let body ← construct_toMessageBody val msg validateRequired chunkFields
     let command ← `(partial def $chunkId:ident :
-        $name → Protobuf.Encoding.Message →
+        $name → Protobuf.Encoding.Message → Bool →
           Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message :=
-      fun $val $msg => do
+      fun $val $msg $validateRequired => do
         $body*
         return $msg)
     pure (chunkId, command)
 
   let msg ← mkIdent <$> mkFreshUserName `msg
   let val ← mkIdent <$> mkFreshUserName `val
+  let validateRequired ← mkIdent <$> mkFreshUserName `validateRequired
   let calls ← chunks.mapM fun (chunkId, _) =>
     `(Parser.Term.doSeqItem|
-      let $msg:ident ← $chunkId:ident $val $msg)
-  let toMessage ← `(partial def $toMessageId:ident : $name → Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message := fun $val => do
+      let $msg:ident ← $chunkId:ident $val $msg $validateRequired)
+  let core ← `(partial def $toMessageCoreId:ident :
+      $name → Bool →
+        Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message :=
+    fun $val $validateRequired => do
     let $msg:ident := Protobuf.Encoding.Message.emptyWithCapacity $(quote fields.size)
     $calls*
     let $msg := Protobuf.Encoding.Message.wire_map $msg
       ($(mkIdentFrom name (name.getId.str "Unknown.Fields")) $val)
     return $msg
     )
-  return (toMessageId, chunks.map Prod.snd |>.push toMessage)
+  let toMessage ← `(partial def $toMessageId:ident :
+      $name → Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message :=
+    fun value => $toMessageCoreId:ident value true)
+  let toMessagePartial ← `(partial def $toMessagePartialId:ident :
+      $name → Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message :=
+    fun value => $toMessageCoreId:ident value false)
+  pure (toMessageId,
+    chunks.map Prod.snd |>.push core |>.push toMessage |>.push toMessagePartial)
 
-def construct_builder (name : Ident) (push_name : String → Ident) (toMessage : Ident) : CommandElabM (Ident × Command) := do
+def construct_builder
+    (name : Ident) (push_name : String → Ident) (toMessage : Ident)
+    (component : String := "builder") :
+    CommandElabM (Ident × Command) := do
   let val ← mkIdent <$> mkFreshUserName `val
-  let builderId := push_name "builder"
+  let builderId := push_name component
   let builder ← `(partial def $builderId:ident : $name → Except Protobuf.Encoding.ProtoError Protobuf.Encoding.ProtoVal := fun $val => do
     let m ← $toMessage:ident $val
     Encoding.ProtoVal.ofMessage m

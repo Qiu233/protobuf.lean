@@ -4,6 +4,7 @@ import Lean.Data.NameTrie
 import Protobuf.Notation.Syntax
 public import Protobuf.Internal.Desc
 public import Protobuf.Base64
+public import Protobuf.Reflection
 
 open System Lean
 
@@ -12,6 +13,32 @@ public section
 namespace Protobuf.Versions
 
 open Encoding Notation google.protobuf
+
+private def hexDigit (n : Nat) : Char :=
+  "0123456789abcdef".toList[n]!
+
+private def hexEncode (bytes : ByteArray) : String :=
+  String.ofList <| bytes.data.toList.flatMap fun byte =>
+    [hexDigit (byte.toNat / 16), hexDigit (byte.toNat % 16)]
+
+/--
+An injective declaration name derived from the UTF-8 spelling of a proto file
+name. This prevents private initializer collisions when `#load_proto_file`
+emits several files into one Lean module.
+-/
+def fileDescriptorInitializerName (fileName : String) : Name :=
+  Name.mkStr1 s!"protobuf.fileDescriptor.{hexEncode fileName.toUTF8}"
+
+private partial def chunkString (size : Nat) (value : String) : Array String :=
+  let rec go (rest : String.Slice) (out : Array String) : Array String :=
+    if rest.isEmpty then
+      out
+    else
+      go (rest.drop size) (out.push (rest.take size).toString)
+  go value.toSlice #[]
+
+def protoFullName (prefixRev : List String) (name : String) : String :=
+  String.intercalate "." (prefixRev.reverse ++ [name])
 
 def leanGeneratedTypeMemberNames : Array String :=
   /-
@@ -2748,3 +2775,77 @@ def fieldDefaultOption? (field : FieldDescriptorProto) : M (Option (TSyntax ``op
     | .«Unknown.Value» _ =>
         throw s!"{decl_name%}: unknown field type"
   some <$> `(options_entry| default = $value)
+
+/--
+Emit the downstream initializer that registers one compact serialized
+`FileDescriptorProto` in the generated pool.
+-/
+private partial def concatStringTerms
+    (terms : Array (TSyntax `term)) : M (TSyntax `term) := do
+  if terms.isEmpty then
+    `("")
+  else if terms.size == 1 then
+    return terms[0]!
+  else
+    let middle := terms.size / 2
+    let left ← concatStringTerms (terms.extract 0 middle)
+    let right ← concatStringTerms (terms.extract middle terms.size)
+    /-
+    Keep the parentheses in the syntax tree.  The protobuf command's safe
+    printer cannot infer that an injected application is one argument of the
+    surrounding `registerFileBase64!` application, and nested applications
+    otherwise render as `String.append String.append ...`.
+    -/
+    `((String.append $left $right))
+
+def compileFileDescriptorRegistration (file : FileDescriptorProto) : M Command := do
+  let fileName ← get!! file.name
+  /-
+  SourceCodeInfo is useful to a compiler plugin while generating code, but it
+  is not part of the generated-runtime descriptor in the mainstream protobuf
+  implementations and can dwarf the schema itself.  Keep descriptor options
+  (including retained custom options), while omitting this compiler-only
+  location table from every downstream module.
+  -/
+  let file := { file with source_code_info := none }
+  let bytes ←
+    match FileDescriptorProto.«protobuf.internal».encode file with
+    | .ok bytes => pure bytes
+    | .error err => throw s!"cannot serialize descriptor for `{fileName}`: {err}"
+  let encoded := Protobuf.Base64.encode bytes
+  let chunkTerms : Array (TSyntax `term) :=
+    (chunkString 4096 encoded).map quote
+  let payload ← concatStringTerms chunkTerms
+  let initializer := mkIdent (fileDescriptorInitializerName fileName)
+  `(private initialize $initializer : Protobuf.Reflection.FileDescriptor ←
+      Protobuf.Reflection.generatedPool.registerFileBase64! $payload)
+
+def compileMessageReflectionInstance
+    (leanName : Name) (protobufFullName : String) : M Command := do
+  let typeId := mkIdent leanName
+  let fullName := quote protobufFullName
+  let toMessagePartial :=
+    mkIdent (leanName.eraseMacroScopes.str "protobuf.internal" |>.str "toMessagePartial")
+  let fromMessage :=
+    mkIdent (leanName.eraseMacroScopes.str "protobuf.internal" |>.str "fromMessage")
+  `(instance : Protobuf.Reflection.ReflectMessage $typeId := {
+      descriptor := Protobuf.Reflection.MessageDescriptor.mk
+        Protobuf.Reflection.generatedPool $fullName,
+      toMessagePartial := $toMessagePartial,
+      fromMessage := fun wire => $fromMessage wire
+    })
+
+def compileEnumReflectionInstance
+    (leanName : Name) (protobufFullName : String) : M Command := do
+  let typeId := mkIdent leanName
+  let fullName := quote protobufFullName
+  let toInt32 :=
+    mkIdent (leanName.eraseMacroScopes.str "protobuf.internal" |>.str "toInt32")
+  let fromInt32 :=
+    mkIdent (leanName.eraseMacroScopes.str "protobuf.internal" |>.str "fromInt32")
+  `(instance : Protobuf.Reflection.ReflectEnum $typeId := {
+      descriptor := Protobuf.Reflection.EnumDescriptor.mk
+        Protobuf.Reflection.generatedPool $fullName,
+      toInt32 := $toInt32,
+      fromInt32 := $fromInt32
+    })

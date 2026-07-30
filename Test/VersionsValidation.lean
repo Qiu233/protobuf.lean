@@ -1075,8 +1075,12 @@ private def testEditionsClosedEnumSupport : IO Unit := do
   }
   match compileResult file with
   | .ok commands =>
-      unless commands.size == 1 do
-        throw (IO.userError "Editions CLOSED enum did not produce one declaration")
+      let enumCommands :=
+        commands.filter
+          (·.raw.getKind.toString == "Protobuf.Notation.enumDec")
+      unless enumCommands.size == 1 do
+        throw (IO.userError
+          "Editions CLOSED enum did not produce exactly one enum declaration")
   | .error err =>
       throw (IO.userError s!"Editions CLOSED enum was rejected: {err}")
 
