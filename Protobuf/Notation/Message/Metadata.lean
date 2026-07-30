@@ -276,7 +276,7 @@ structure ProtoFieldMData where
   map_info? : Option MapFieldMData
   is_scalar : Bool
   internal_type? : Option InternalType
-  /-- the `«Default.Value»` of the type -/
+  /-- the canonical default value of the type -/
   default_lean_value : Term
   /-- the default value term in constructor so that use-site `{...}` won't need to initialize everything -/
   default_ctor_value : Term
@@ -821,7 +821,7 @@ def computeMData.ordinary.computeTestUnset [Monad m] [MonadQuotation m] [MonadEr
         | _ => `((· == 0))
       else if enum_type?.isSome then
         let x := helperIdent proto_type "Default.Value"
-        `((· == $x)) -- TODO: maybe make `Enum.«Default.Value»` a `@[match_pattern]`?
+        `((· == $x)) -- TODO: maybe make the enum default a `@[match_pattern]`?
       else throwErrorAt name "{decl_name%}: internal error: strict non-scalar type"
     | .option => `(Option.isNone) -- oneofs always go here
     | .array => `(Array.isEmpty)

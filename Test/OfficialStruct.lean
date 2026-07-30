@@ -49,10 +49,10 @@ private def officialStructRoundtrip : Bool :=
       ("list", { kind := some (.list_value list) })
     ]
   }
-  match root.encode with
+  match Protobuf.encode root with
   | .error _ => false
   | .ok bytes =>
-      match google.protobuf.Struct.decode bytes with
+      match Protobuf.decodeThe google.protobuf.Struct bytes with
       | .error _ => false
       | .ok decoded =>
           match decoded.fields.get? "object", decoded.fields.get? "list" with

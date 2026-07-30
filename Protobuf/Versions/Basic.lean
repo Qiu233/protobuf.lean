@@ -162,57 +162,10 @@ def registerType (raw : String) : M Unit := do
   modifyThe M.State (fun s => { s with types := s.types.insert x raw })
 
 def reservedFieldNames : List String :=
-  [ "toMessage"
-  , "fromMessage"
-  , "fromMessage?" -- invalid protobuf name
-  , "builder"
-  , "merge"
-  , "decoder?" -- invalid protobuf name
-  , "decoder_rep"
-  , "decoder_rep_packed"
-  , "Default.Value" -- invalid protobuf name
-  , "Unknown.Fields" -- invalid protobuf name
-  , "encode"
-  , "decode"
-  ] ++ leanGeneratedTypeMemberNames.toList
+  leanGeneratedTypeMemberNames.toList
 
 def reservedEnumValueNames : List String :=
-  [ "toInt32"
-  , "fromInt32"
-  , "builder"
-  , "decoder?" -- invalid protobuf name
-  , "decoder_rep"
-  , "decoder_rep_packed"
-  , "Default.Value" -- invalid protobuf name
-  , "Unknown.Value" -- invalid protobuf name
-  ] ++ leanGeneratedTypeMemberNames.toList
-
-def legacyMessageHelperNames : Array String :=
-  #["toMessage", "fromMessage", "builder", "merge", "decoder_rep",
-    "encode", "decode"]
-
-/--
-Whether a generated message can safely expose all historical flat helper
-aliases.
-
-Nested protobuf types occupy the same Lean namespace as message helpers.
-Explicit-default value/presence accessors add dynamic `get_x` and `has_x`
-names, so include those in the collision set as well.
--/
-def messageUsesLegacyHelpers (msg : DescriptorProto) : Bool :=
-  let nestedNames :=
-    msg.nested_type.filterMap (·.name) ++
-      msg.enum_type.filterMap (·.name) ++
-      msg.oneof_decl.filterMap (·.name)
-  let dynamicAccessors :=
-    msg.field.foldl (init := #[]) fun names field =>
-      if field.default_value.isSome then
-        match field.name with
-        | some name => names.push s!"get_{name}" |>.push s!"has_{name}"
-        | none => names
-      else
-        names
-  !(legacyMessageHelperNames ++ dynamicAccessors).any nestedNames.contains
+  leanGeneratedTypeMemberNames.toList
 
 /--
 Choose the generated Lean component for a real protobuf oneof.
@@ -232,10 +185,10 @@ def syntheticOneofTypeComponent
 private def reservedLeanName (name : String) : String :=
   /-
   Appending `_` is not collision-free for fields: protoc accepts both
-  `builder` and `builder_` in one message (with a JSON-name warning).  A dot
+  `rec` and `rec_` in one message (with a JSON-name warning).  A dot
   cannot occur in a protobuf identifier, while `Name.mkStr1` still represents
   the result as one Lean name component (printed as, for example,
-  `«builder.protobuf»`).  Thus this namespace is disjoint from every field
+  `«rec.protobuf»`).  Thus this namespace is disjoint from every field
   name a valid schema can supply.
   -/
   s!"{name}.protobuf"
@@ -458,7 +411,8 @@ private def validateMapKeyType
     | .TYPE_STRING => true
     | _ => false
   if !legal then
-    throw s!"{context}.key: illegal map key type {fieldType.toInt32}"
+    throw s!"{context}.key: illegal map key type {
+      FieldDescriptorProto.Type.«protobuf.internal».toInt32 fieldType}"
   if field.type_name.isSome then
     throw s!"{context}.key: scalar map key cannot set type_name"
 
@@ -736,7 +690,8 @@ private def validateDescriptorDependencies
       let supportsOptionImports :=
         file.«syntax» == some "editions" &&
           file.edition.any fun edition =>
-            edition.toInt32 ≥ Edition.EDITION_2024.toInt32
+            Edition.«protobuf.internal».toInt32 edition ≥
+              Edition.«protobuf.internal».toInt32 Edition.EDITION_2024
       unless supportsOptionImports do
         throw s!"{fileName}: option imports are not supported before Edition 2024"
     for dependency in file.option_dependency do
@@ -834,7 +789,7 @@ private def featureEditionDescription : Edition → String
   | .EDITION_2023 => "2023"
   | .EDITION_2024 => "2024"
   | .EDITION_2026 => "2026"
-  | edition => toString edition.toInt32
+  | edition => toString (Edition.«protobuf.internal».toInt32 edition)
 
 /--
 Validate only the built-in fields of `FeatureSet`.
@@ -857,7 +812,8 @@ private def validateBuiltinFeatureSet
       throw s!"{context}: built-in feature `{featureName}` is only valid under editions syntax"
     let edition ← file.edition.getDM
       (throw s!"{context}: built-in feature `{featureName}` requires file.edition")
-    if edition.toInt32 < introduced.toInt32 then
+    if Edition.«protobuf.internal».toInt32 edition <
+        Edition.«protobuf.internal».toInt32 introduced then
       throw s!"{context}: {featureName} is not supported before Edition {featureEditionDescription introduced}"
     unless allowed do
       throw s!"{context}: {featureName} can only be set on {allowedTargets}, not {featureTargetDescription target}"
@@ -1055,7 +1011,8 @@ private def descriptorSupportsEdition2024Features
     (file : FileDescriptorProto) : Bool :=
   file.«syntax» == some "editions" &&
     file.edition.any fun edition =>
-      edition.toInt32 ≥ Edition.EDITION_2024.toInt32
+      Edition.«protobuf.internal».toInt32 edition ≥
+        Edition.«protobuf.internal».toInt32 Edition.EDITION_2024
 
 private partial def validateMessageSymbolVisibilityFeatureSupport
     (fileName prefixName : String) (messages : Array DescriptorProto) :
@@ -1702,8 +1659,8 @@ private def validateRawServiceIdentifiers
 /--
 Validate source-language identifiers on the raw descriptor set.
 
-This deliberately runs only at the whole-set boundary, before helper names
-such as `builder.protobuf` are introduced by `sanitizeFileDescriptorSet`.
+This deliberately runs only at the whole-set boundary, before collision-proof
+Lean names such as `rec.protobuf` are introduced by `sanitizeFileDescriptorSet`.
 File paths, JSON names, defaults, and reserved-name strings are not protobuf
 identifiers and are intentionally left untouched.
 -/

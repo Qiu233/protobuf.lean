@@ -20,8 +20,7 @@ private def siblingHelper (id : Ident) (component : String) : Ident :=
   | _ => id
 
 public def elabOneofDecCore
-    (mutEnums mutOneofs messages : NameSet)
-    (suppressLegacyHelpers : Bool := false) :
+    (mutEnums mutOneofs messages : NameSet) :
     Syntax → CommandElabM ProtobufDeclBlock := fun stx => do
   let `(oneofDec| oneof $rawName { $[$[$mod]? $t' $n = $fidx $[$optionsStx]? ;]* }) := stx | throwUnsupportedSyntax
   let name := protectGeneratedTypeName rawName
@@ -368,36 +367,17 @@ public def elabOneofDecCore
             pure $result:ident
       else
         pure $result:ident)
-  let legacyComponents := legacyOneofHelperComponents
-  let alternativeNames := mdata.map fun field =>
-    field.field_name.getId.eraseMacroScopes
-  let aliasCollides := legacyComponents.any fun component =>
-    alternativeNames.contains (Name.mkStr1 component)
-  let legacyAliases : Array (Name × Name) ←
-    if aliasCollides || suppressLegacyHelpers then
-      pure #[]
-    else
-      legacyHelperAliases name legacyComponents
-  let legacyAcceptsRecord :=
-    mkIdentFrom name
-      ((name.getId.eraseMacroScopes.append `Internal).str "acceptsRecord")
-  let legacyAcceptsRecordCmd ←
-    `(def $legacyAcceptsRecord:ident
-        ($acceptsRecordArg : Protobuf.Encoding.Record) : Bool :=
-      $acceptsRecordId:ident $acceptsRecordArg)
   return {
     decls := #[ind],
     encodingFunctions := #[toMessage, toMessagePartial],
     mergeFunctions := #[merge],
-    decodingFunctions := #[acceptsRecord, fromMessage?],
-    legacyAliases
-    aliases := #[legacyAcceptsRecordCmd]
+    decodingFunctions := #[acceptsRecord, fromMessage?]
   }
 
 @[scoped command_elab oneofDec]
 public def elabOneofDec : CommandElab := fun stx => do
   let (name, alternatives) ← oneofAlternativesOfSyntax stx
-  let r ← elabOneofDecCore {} {} {} false stx
+  let r ← elabOneofDecCore {} {} {} stx
   r.elaborate
   registerOneofAlternatives name alternatives
 

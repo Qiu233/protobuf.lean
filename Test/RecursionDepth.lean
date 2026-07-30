@@ -51,24 +51,24 @@ private def repeatedSiblings (count : Nat) : ByteArray :=
     {}
 
 private def parses (bytes : ByteArray) : Bool :=
-  (_root_.test.recursion_depth.Node.decode bytes).isOk
+  (Protobuf.decodeThe _root_.test.recursion_depth.Node bytes).isOk
 
 private def fails (bytes : ByteArray) : Bool :=
-  match _root_.test.recursion_depth.Node.decode bytes with
+  match Protobuf.decodeThe _root_.test.recursion_depth.Node bytes with
   | .error _ => true
   | .ok _ => false
 
 private def mutualParses (bytes : ByteArray) : Bool :=
-  (_root_.test.recursion_depth.MutualA.decode bytes).isOk
+  (Protobuf.decodeThe _root_.test.recursion_depth.MutualA bytes).isOk
 
 private def hitsRecursionLimit (bytes : ByteArray) : Bool :=
-  match _root_.test.recursion_depth.Node.decode bytes with
+  match Protobuf.decodeThe _root_.test.recursion_depth.Node bytes with
   | .error (.userError errorMessage) =>
       errorMessage == "protobuf: message recursion limit exceeded"
   | _ => false
 
 private def mutualHitsRecursionLimit (bytes : ByteArray) : Bool :=
-  match _root_.test.recursion_depth.MutualA.decode bytes with
+  match Protobuf.decodeThe _root_.test.recursion_depth.MutualA bytes with
   | .error (.userError errorMessage) =>
       errorMessage == "protobuf: message recursion limit exceeded"
   | _ => false

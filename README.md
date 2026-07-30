@@ -55,7 +55,10 @@ open Protobuf Encoding Notation
 instance : Repr ByteArray where
   reprPrec x p := s!"{reprPrec x.data p}"
 
-#eval test.a.Q.encode { q := test.a.Q.q_Type.a { t := some 1 } }
+#eval Protobuf.encode {
+  q := test.a.Q.q_Type.a { t := some 1 }
+  : test.a.Q
+}
 ```
 
 ## A folder of .proto files
@@ -105,10 +108,46 @@ message A {
   repeated int32 a = 1 [packed = true];
 }
 
-#eval A.encode { a := #[1, 2, 3] }
+#eval Protobuf.encode { a := #[1, 2, 3] : A }
 ```
 
 With this you can define messages in a very convenient and compact way, and it does not require the `protoc` command to be present.
+
+## Binary encoding and decoding
+
+Every generated message implements `Protobuf.ProtoMessage`. Its methods are
+exported from the `Protobuf` namespace:
+
+```lean
+def roundTrip (value : A) : Except Encoding.ProtoError A := do
+  let bytes ← Protobuf.encode value
+  Protobuf.decode bytes
+
+def parseA (bytes : ByteArray) : Except Encoding.ProtoError A :=
+  Protobuf.decodeThe A bytes
+```
+
+`decodeThe` is an always-inlined positional wrapper around `decode`; it is
+useful when the result type cannot be inferred from context.
+
+### Migration from generated helper names
+
+Earlier versions generated binary and wire helpers directly below every
+message, enum, and oneof namespace. Those compatibility names have been
+removed completely:
+
+- Replace `Message.encode value` with `Protobuf.encode value`.
+- Replace `Message.decode bytes` with `Protobuf.decodeThe Message bytes`, or
+  use `Protobuf.decode bytes` when Lean can infer the result type.
+- Explicit-default accessors now live only at
+  `Message.«Explicit.Default.Accessors».field.get` and `.has`.
+- The former message, enum, and oneof helper spellings are ordinary schema
+  names again; fields, enum values, alternatives, and nested types may use
+  names such as `encode`, `toMessage`, `toInt32`, or `merge`.
+
+There are intentionally no deprecated aliases or collision-dependent
+fallbacks. Names below `«protobuf.internal»` are generator implementation
+details and are not a public migration target.
 
 ## Using encoding/decoding API
 Please read the source code under the folder `Encoding` to learn their usage.

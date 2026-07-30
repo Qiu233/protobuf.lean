@@ -89,7 +89,8 @@ def loadDescriptorSet : IO FileDescriptorSet := do
   let bytes ← IO.FS.readBinFile descriptorSetPath
   let r := Binary.Get.run (Binary.getThe Protobuf.Encoding.Message) bytes
   let msg ← ofProtoExcept (Encoding.protoDecodeParseResultExcept r.toExcept)
-  let desc ← ofProtoExcept (FileDescriptorSet.fromMessage msg)
+  let desc ← ofProtoExcept
+    (FileDescriptorSet.«protobuf.internal».fromMessage msg)
   return desc
 
 def testDescriptorSet : IO Unit := do

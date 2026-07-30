@@ -1,6 +1,6 @@
 module
 
-import Protobuf.Encoding
+public import Protobuf.ProtoMessage
 public meta import Protobuf.Notation.Message.Metadata
 public meta import Protobuf.Notation.Message.Encode
 public meta import Protobuf.Notation.Message.Decode
@@ -22,14 +22,13 @@ structure MessageElabResult where
 
 public def elabMessageDecCore
     (mutEnums mutOneofs messages : NameSet)
-    (localOneofs : LocalOneofAlternatives)
-    (suppressLegacyHelpers : Bool := false) :
+    (localOneofs : LocalOneofAlternatives) :
     Syntax → CommandElabM MessageElabResult := fun stx => do
   let `(messageDec| message $rawName $[$msgOptions?]? { $[$[$mod]? $t' $n = $fidx $[$optionsStx]? ;]* }) := stx | throwUnsupportedSyntax
   let name := protectGeneratedTypeName rawName
   let safeFieldNames := n.map protectGeneratedMemberName
   let msgOptions := Options.parseD msgOptions?
-  msgOptions.validate #[`legacy_helpers]
+  msgOptions.validate #[]
   let mdata ←
     computeMData mutEnums mutOneofs messages name mod t' safeFieldNames
       fidx optionsStx
@@ -42,13 +41,6 @@ public def elabMessageDecCore
   let struct ← `(structure $name where
     $[$safeFieldNames:ident : $(mdata.map fun x => x.lean_type) := $defs]*
     «Unknown.Fields» : Std.HashMap Nat (Array Encoding.ProtoVal) := {})
-  let legacyComponents := legacyMessageHelperComponents
-  let fieldNames := mdata.map fun field =>
-    field.field_name.getId.eraseMacroScopes
-  let aliasCollides := legacyComponents.any fun component =>
-    fieldNames.contains (Name.mkStr1 component)
-  let legacyHelpers :=
-    msgOptions.legacyHelpers && !aliasCollides && !suppressLegacyHelpers
   let push_name (component : String) := helperIdent name component
   let (default', default) ← construct_default name push_name mdata
   let inhInst ← `(instance : Inhabited $name := ⟨$default'⟩)
@@ -61,14 +53,13 @@ public def elabMessageDecCore
   let (_, decoder?) ← construct_decoder? name push_name fromMessage'
   let (_, decoder_rep) ← construct_decoder_rep name push_name fromMessage'
   let defaultAccessors ←
-    constructExplicitDefaultAccessors name mdata legacyHelpers
-  let (_, encode) ← construct_encode name push_name toMessage'
-  let (_, decode) ← construct_decode name push_name fromMessage'
-  let legacyAliases ←
-    if legacyHelpers then
-      legacyHelperAliases name legacyComponents
-    else
-      pure #[]
+    constructExplicitDefaultAccessors name mdata
+  let (encodeId, encode) ← construct_encode name push_name toMessage'
+  let (decodeId, decode) ← construct_decode name push_name fromMessage'
+  let protoMessageInst ←
+    `(instance : Protobuf.ProtoMessage $name where
+        encode := $encodeId:ident
+        decode := $decodeId:ident)
   return {
     messageName := name
     fieldTags
@@ -80,7 +71,7 @@ public def elabMessageDecCore
       mergeFunctions := #[merge],
       decodingFunctions := fromMessage ++ #[decoder?, decoder_rep],
       functions := defaultAccessors ++ #[encode, decode],
-      legacyAliases
+      insts := #[protoMessageInst]
     }
   }
 
@@ -88,7 +79,7 @@ public def elabMessageDecCore
 public def elabMessageDec : CommandElab := fun stx => do
   let `(messageDec| message $rawName $[$msgOptions?]? { $[$[$mod]? $t' $n = $fidx $[$optionsStx]? ;]* }) := stx | throwUnsupportedSyntax
   let name := protectGeneratedTypeName rawName
-  let r ← elabMessageDecCore {} {} {name.getId} {} false stx
+  let r ← elabMessageDecCore {} {} {name.getId} {} stx
   r.declBlock.elaborate
   registerMessageFieldTags r.messageName r.fieldTags
 

@@ -307,6 +307,7 @@ def generate_code (request : CodeGeneratorRequest) : ExceptT String IO CodeGener
       [ "module"
       , ""
       , "public import Protobuf.Encoding"
+      , "public import Protobuf.ProtoMessage"
       , "public import Protobuf.Base64"
       , "public import Protobuf.Reflection"
       , "meta import Protobuf.Notation"
@@ -366,7 +367,7 @@ public def main : IO UInt32 := do
   let stdErr ← IO.getStderr
   let stdOut ← IO.getStdout
   let input ← stdIn.readBinToEnd
-  let request := CodeGeneratorRequest.decode input
+  let request := Protobuf.decodeThe CodeGeneratorRequest input
   let request ← match request with
     | .ok r => pure r
     | .error _ =>
@@ -380,7 +381,7 @@ public def main : IO UInt32 := do
       -- response while the plugin itself exits successfully.  A non-zero exit
       -- is reserved for failures such as an unparseable request.
       pure (supportedResponse (error? := some err))
-  let resultBin ← match result.encode with
+  let resultBin ← match Protobuf.encode result with
     | .ok r => pure r
     | .error err =>
       stdErr.putStrLn s!"{exeName}: failed to serialize protobuf: {err}"

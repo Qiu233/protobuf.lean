@@ -43,8 +43,8 @@ message WideCodegen {
     toMessage_chunk_0 := 17
     fromMessage_chunk_0 := 18
   }
-  let wire ← IO.ofExcept (WideCodegen.encode expected)
-  let actual ← IO.ofExcept (WideCodegen.decode wire)
+  let wire ← IO.ofExcept (Protobuf.encode expected)
+  let actual ← IO.ofExcept (Protobuf.decodeThe WideCodegen wire)
   unless actual.f01 == -1 &&
       actual.f16 == 16 &&
       actual.toMessage_chunk_0 == 17 &&

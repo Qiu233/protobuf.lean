@@ -157,10 +157,10 @@ def mkBatch (itemCount : Nat) : Batch :=
   }
 
 def encodeProto (batch : Batch) : IO ByteArray :=
-  ofProtoExcept <| batch.encode
+  ofProtoExcept <| Protobuf.encode batch
 
 def decodeProto (bytes : ByteArray) : IO Batch :=
-  ofProtoExcept <| _root_.bench.perf.Batch.decode bytes
+  ofProtoExcept <| Protobuf.decodeThe _root_.bench.perf.Batch bytes
 
 def encodeJson (batch : Batch) : String :=
   (toJson batch).compress

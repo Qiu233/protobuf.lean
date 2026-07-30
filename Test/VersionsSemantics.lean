@@ -259,25 +259,31 @@ private def testHandcraftedDescriptorNumericDefaults : IO Unit := do
 
 private def testProto2Defaults : IO Unit := do
   assertEq
-    _root_.test.versions.proto2.DefaultEnum.DEFAULT_ENUM_NEGATIVE.toInt32
+    (_root_.test.versions.proto2.DefaultEnum.«protobuf.internal».toInt32
+      _root_.test.versions.proto2.DefaultEnum.DEFAULT_ENUM_NEGATIVE)
     (-1 : Int32)
     "proto2 negative enum value changed"
   assert
-    (_root_.test.versions.proto2.HelperNameAlias.«toInt32.protobuf» ==
+    (_root_.test.versions.proto2.HelperNameAlias.toInt32 ==
       _root_.test.versions.proto2.HelperNameAlias.toInt32_)
-    "reserved enum helper name collided with its underscore-suffixed alias"
+    "former enum helper name did not remain an ordinary enum value"
   let value : _root_.test.versions.proto2.Defaults := default
   assert value.spaced.isNone "absent proto2 string default gained presence"
-  assertEq (_root_.test.versions.proto2.Defaults.get_spaced value) "  padded \t"
+  assertEq
+    (_root_.test.versions.proto2.Defaults.«Explicit.Default.Accessors».spaced.get
+      value) "  padded \t"
     "proto2 explicit default value accessor did not return the schema default"
-  assert (!_root_.test.versions.proto2.Defaults.has_spaced value)
+  assert
+    (!_root_.test.versions.proto2.Defaults.«Explicit.Default.Accessors».spaced.has
+      value)
     "proto2 explicit default accessor manufactured field presence"
   assert value.escaped.isNone "absent proto2 bytes default gained presence"
   assert value.enum_reserved_name.isNone "absent proto2 enum default gained presence"
   assertEq
-    (_root_.test.versions.proto2.Defaults.get_enum_reserved_name value)
-    _root_.test.versions.proto2.DefaultEnum.«builder.protobuf»
-    "proto2 enum value accessor did not return its sanitized schema default"
+    (_root_.test.versions.proto2.Defaults.«Explicit.Default.Accessors».enum_reserved_name.get
+      value)
+    _root_.test.versions.proto2.DefaultEnum.builder
+    "proto2 enum value accessor did not return its schema default"
   assert value.positive_infinity.isNone "absent proto2 +inf default gained presence"
   assert value.negative_infinity.isNone "absent proto2 -inf default gained presence"
   assert value.not_a_number.isNone "absent proto2 nan default gained presence"
@@ -285,18 +291,20 @@ private def testProto2Defaults : IO Unit := do
   assert value.negative_infinity_float.isNone "absent proto2 float -inf gained presence"
   assert value.not_a_number_float.isNone "absent proto2 float nan gained presence"
   assertEq
-    (_root_.test.versions.proto2.Defaults.get_octal_default value)
+    (_root_.test.versions.proto2.Defaults.«Explicit.Default.Accessors».octal_default.get
+      value)
     (63 : Int32)
     "proto2 octal integer default was not interpreted by protoc semantics"
   assertEq
-    (_root_.test.versions.proto2.Defaults.get_hex_default value)
+    (_root_.test.versions.proto2.Defaults.«Explicit.Default.Accessors».hex_default.get
+      value)
     (4294967295 : UInt32)
     "proto2 hexadecimal integer default changed"
   let explicit : _root_.test.versions.proto2.Defaults := {
     spaced := some "  padded \t"
     escaped := some expectedBytes
     enum_reserved_name :=
-      some _root_.test.versions.proto2.DefaultEnum.«builder.protobuf»
+      some _root_.test.versions.proto2.DefaultEnum.builder
     positive_infinity := some positiveInfinity
     negative_infinity := some negativeInfinity
     not_a_number := some notANumber
@@ -305,9 +313,9 @@ private def testProto2Defaults : IO Unit := do
     not_a_number_float := some notANumberFloat
   }
   let encoded ← IO.ofExcept <|
-    _root_.test.versions.proto2.Defaults.toMessage explicit
+    _root_.test.versions.proto2.Defaults.«protobuf.internal».toMessage explicit
   let decoded ← IO.ofExcept <|
-    _root_.test.versions.proto2.Defaults.fromMessage encoded
+    _root_.test.versions.proto2.Defaults.«protobuf.internal».fromMessage encoded
   assertEq decoded.spaced explicit.spaced "proto2 spaced string default roundtrip changed"
   assertEq decoded.escaped explicit.escaped "proto2 escaped bytes default roundtrip changed"
   assertEq decoded.enum_reserved_name explicit.enum_reserved_name
@@ -325,7 +333,7 @@ private def testProto2FirstEnumDefault : IO Unit := do
   let first :=
     _root_.test.versions.proto2.NonZeroFirstEnum.NON_ZERO_FIRST
   assertEq
-    _root_.test.versions.proto2.NonZeroFirstEnum.«Default.Value»
+    _root_.test.versions.proto2.NonZeroFirstEnum.«protobuf.internal».«Default.Value»
     first
     "proto2 implicit enum default did not use the first declaration"
 
@@ -344,15 +352,21 @@ private def testProto2RequiredPresence : IO Unit := do
   let absent : _root_.test.versions.proto2.RequiredFields := default
   assert absent.scalar.isNone "default proto2 required scalar gained presence"
   assert absent.enum_value.isNone "default proto2 required enum gained presence"
-  assertEq (_root_.test.versions.proto2.RequiredFields.get_scalar absent) (0 : Int32)
+  assertEq
+    (_root_.test.versions.proto2.RequiredFields.«Explicit.Default.Accessors».scalar.get
+      absent) (0 : Int32)
     "required scalar value accessor did not expose its explicit default"
-  assert (!_root_.test.versions.proto2.RequiredFields.has_scalar absent)
+  assert
+    (!_root_.test.versions.proto2.RequiredFields.«Explicit.Default.Accessors».scalar.has
+      absent)
     "required scalar default manufactured presence"
   assertMissingRequired
-    (_root_.test.versions.proto2.RequiredFields.toMessage absent)
+    (_root_.test.versions.proto2.RequiredFields.«protobuf.internal».toMessage
+      absent)
     "encoding absent proto2 required fields"
   assertMissingRequired
-    (_root_.test.versions.proto2.RequiredFields.fromMessage Message.empty)
+    (_root_.test.versions.proto2.RequiredFields.«protobuf.internal».fromMessage
+      Message.empty)
     "decoding absent proto2 required fields"
 
   let present : _root_.test.versions.proto2.RequiredFields := {
@@ -360,13 +374,15 @@ private def testProto2RequiredPresence : IO Unit := do
     enum_value := some _root_.test.versions.proto2.DefaultEnum.DEFAULT_ENUM_ZERO
   }
   let wire ← IO.ofExcept <|
-    _root_.test.versions.proto2.RequiredFields.toMessage present
+    _root_.test.versions.proto2.RequiredFields.«protobuf.internal».toMessage
+      present
   assertEq (wire.getRecordsOf 1).size 1
     "present proto2 required scalar default was omitted"
   assertEq (wire.getRecordsOf 2).size 1
     "present proto2 required enum default was omitted"
   let decoded ← IO.ofExcept <|
-    _root_.test.versions.proto2.RequiredFields.fromMessage wire
+    _root_.test.versions.proto2.RequiredFields.«protobuf.internal».fromMessage
+      wire
   assertEq decoded.scalar present.scalar
     "proto2 required scalar default did not roundtrip with presence"
   assertEq decoded.enum_value present.enum_value
@@ -379,15 +395,18 @@ private def testProto2RequiredPresence : IO Unit := do
   let newer : _root_.test.versions.proto2.RequiredFields := {
     scalar := some 0
     enum_value :=
-      some _root_.test.versions.proto2.DefaultEnum.«builder.protobuf»
+      some _root_.test.versions.proto2.DefaultEnum.builder
   }
-  let merged := _root_.test.versions.proto2.RequiredFields.merge older newer
+  let merged :=
+    _root_.test.versions.proto2.RequiredFields.«protobuf.internal».merge
+      older newer
   assertEq merged.scalar newer.scalar
     "proto2 required scalar merge did not prefer later presence"
   assertEq merged.enum_value newer.enum_value
     "proto2 required enum merge did not prefer later presence"
   let keepOlder :=
-    _root_.test.versions.proto2.RequiredFields.merge older default
+    _root_.test.versions.proto2.RequiredFields.«protobuf.internal».merge
+      older default
   assertEq keepOlder.scalar older.scalar
     "proto2 required scalar merge discarded earlier presence"
   assertEq keepOlder.enum_value older.enum_value
@@ -395,7 +414,8 @@ private def testProto2RequiredPresence : IO Unit := do
 
 private def testEditionsDefaults : IO Unit := do
   assertEq
-    _root_.test.versions.editions.DefaultEnum.DEFAULT_ENUM_NEGATIVE.toInt32
+    (_root_.test.versions.editions.DefaultEnum.«protobuf.internal».toInt32
+      _root_.test.versions.editions.DefaultEnum.DEFAULT_ENUM_NEGATIVE)
     (-1 : Int32)
     "Editions negative enum value changed"
   let value : _root_.test.versions.editions.Semantics := default
@@ -411,18 +431,20 @@ private def testEditionsDefaults : IO Unit := do
   assert value.required.isNone "default Editions required scalar gained presence"
   assert value.required_enum.isNone "default Editions required enum gained presence"
   assertMissingRequired
-    (_root_.test.versions.editions.Semantics.toMessage value)
+    (_root_.test.versions.editions.Semantics.«protobuf.internal».toMessage value)
     "encoding absent Editions required fields"
   assertMissingRequired
-    (_root_.test.versions.editions.Semantics.fromMessage Message.empty)
+    (_root_.test.versions.editions.Semantics.«protobuf.internal».fromMessage
+      Message.empty)
     "decoding absent Editions required fields"
 
-  let encoded ← match _root_.test.versions.editions.Semantics.toMessage {
+  let encoded ← match
+      _root_.test.versions.editions.Semantics.«protobuf.internal».toMessage {
       value with
       spaced := some "  padded \t"
       escaped := some expectedBytes
       enum_reserved_name :=
-        some _root_.test.versions.editions.DefaultEnum.«builder.protobuf»
+        some _root_.test.versions.editions.DefaultEnum.builder
       positive_infinity := some positiveInfinity
       negative_infinity := some negativeInfinity
       not_a_number := some notANumber
@@ -451,7 +473,8 @@ private def testEditionsDefaults : IO Unit := do
   assertEq (encoded.getRecordsOf 15).size 1
     "Editions required enum default should be encoded when present"
   let decoded ← IO.ofExcept <|
-    _root_.test.versions.editions.Semantics.fromMessage encoded
+    _root_.test.versions.editions.Semantics.«protobuf.internal».fromMessage
+      encoded
   assertEq decoded.required (some 0)
     "Editions required scalar default did not roundtrip with presence"
   assertEq decoded.required_enum
@@ -460,7 +483,8 @@ private def testEditionsDefaults : IO Unit := do
 
 private def testProto3Mapping : IO Unit := do
   assertEq
-    _root_.test.versions.proto3.SignedEnum.SIGNED_ENUM_NEGATIVE.toInt32
+    (_root_.test.versions.proto3.SignedEnum.«protobuf.internal».toInt32
+      _root_.test.versions.proto3.SignedEnum.SIGNED_ENUM_NEGATIVE)
     (-1 : Int32)
     "proto3 negative enum value changed"
   let value : _root_.test.versions.proto3.Semantics := {
@@ -472,7 +496,7 @@ private def testProto3Mapping : IO Unit := do
       _root_.test.versions.proto3.AliasedEnum.ALIASED_ENUM_ZERO_ALIAS
   }
   let encoded ← IO.ofExcept <|
-    _root_.test.versions.proto3.Semantics.toMessage value
+    _root_.test.versions.proto3.Semantics.«protobuf.internal».toMessage value
   assert (encoded.getRecordsOf 1).isEmpty
     "proto3 implicit scalar default should not be encoded"
   assertEq (encoded.getRecordsOf 2).size 1
@@ -488,7 +512,8 @@ private def testProto3Mapping : IO Unit := do
   assert (encoded.getRecordsOf 6).isEmpty
     "zero-valued enum alias was encoded as a non-default field"
   let decoded ← match
-      _root_.test.versions.proto3.Semantics.fromMessage encoded with
+      _root_.test.versions.proto3.Semantics.«protobuf.internal».fromMessage
+        encoded with
     | .ok result => pure result
     | .error err => throw (IO.userError err.toString)
   assert

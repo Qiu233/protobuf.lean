@@ -33,12 +33,15 @@ private def rawWire : ByteArray :=
 private def testProto2 : IO Unit := do
   let absent : _root_.test.utf8.proto2.RawStrings := default
   assert
-    (_root_.test.utf8.proto2.RawStrings.get_singular absent == raw #[0xff])
+    (_root_.test.utf8.proto2.RawStrings.«Explicit.Default.Accessors».singular.get
+      absent == raw #[0xff])
     "proto2 invalid UTF-8 schema default was not preserved by its value accessor"
-  assert (!_root_.test.utf8.proto2.RawStrings.has_singular absent)
+  assert
+    (!_root_.test.utf8.proto2.RawStrings.«Explicit.Default.Accessors».singular.has
+      absent)
     "proto2 invalid UTF-8 schema default manufactured presence"
   let value ← ofProtoExcept
-    (_root_.test.utf8.proto2.RawStrings.decode rawWire)
+    (Protobuf.decodeThe _root_.test.utf8.proto2.RawStrings rawWire)
   assert (value.singular == some (raw #[0xff, 0xfe, 0x61]))
     "proto2 singular string did not preserve invalid UTF-8"
   assert (value.repeated == #[raw #[0xc3, 0x28], raw #[0x6f, 0x6b]])
@@ -58,9 +61,9 @@ private def testProto2 : IO Unit := do
         #[raw #[0xfe, 0x63], raw #[0x6f, 0x6b]])
     "proto2 repeated string extension did not preserve invalid UTF-8"
   let encoded ← ofProtoExcept
-    (_root_.test.utf8.proto2.RawStrings.encode value)
+    (Protobuf.encode value)
   let reparsed ← ofProtoExcept
-    (_root_.test.utf8.proto2.RawStrings.decode encoded)
+    (Protobuf.decodeThe _root_.test.utf8.proto2.RawStrings encoded)
   assert (reparsed.singular == value.singular &&
       reparsed.repeated == value.repeated &&
       reparsed.mapped[(raw #[0xff])]? == value.mapped[(raw #[0xff])]?)
@@ -69,7 +72,7 @@ private def testProto2 : IO Unit := do
 private def testEditions : IO Unit := do
   let editionWire : ByteArray := ⟨rawWire.data.extract 0 26⟩
   let value ← ofProtoExcept
-    (_root_.test.utf8.editions.RawStrings.decode editionWire)
+    (Protobuf.decodeThe _root_.test.utf8.editions.RawStrings editionWire)
   assert (value.singular == some (raw #[0xff, 0xfe, 0x61]))
     "Editions NONE singular string did not preserve invalid UTF-8"
   assert (value.repeated == #[raw #[0xc3, 0x28], raw #[0x6f, 0x6b]])
@@ -82,7 +85,8 @@ private def testEditions : IO Unit := do
     "Editions NONE oneof did not inherit UTF-8 behavior"
 
   let invalidVerified : ByteArray := ⟨#[0x32, 0x01, 0xff]⟩
-  match _root_.test.utf8.editions.RawStrings.decode invalidVerified with
+  match
+      Protobuf.decodeThe _root_.test.utf8.editions.RawStrings invalidVerified with
   | .error (.invalidBuffer _) => pure ()
   | .error error =>
       throw (IO.userError s!"VERIFY returned the wrong error: {error}")

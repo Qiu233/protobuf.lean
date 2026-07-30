@@ -64,7 +64,6 @@ private def Options.recognized : Array Name :=
     `deprecated,
     `allow_alias,
     `closed,
-    `legacy_helpers,
 
     --
     `wired_as_group,
@@ -79,8 +78,7 @@ private def Options.recognized : Array Name :=
   ]
 
 private def Options.boolean : Array Name :=
-  #[`packed, `deprecated, `allow_alias, `closed, `legacy_helpers,
-    `wired_as_group]
+  #[`packed, `deprecated, `allow_alias, `closed, `wired_as_group]
 
 private def Options.repeatable : Array Name :=
   #[`targets]
@@ -168,10 +166,6 @@ def Options.allow_alias? (options : Options) : Option Bool := options.is_true? `
 def Options.closed (options : Options) : Bool := options.is_true? `closed |>.getD false
 
 @[always_inline]
-def Options.legacyHelpers (options : Options) : Bool :=
-  options.is_true? `legacy_helpers |>.getD true
-
-@[always_inline]
 def Options.wired_as_group? (options : Options) : Option Bool := options.is_true? `wired_as_group
 
 @[always_inline]
@@ -246,43 +240,6 @@ def protectGeneratedTypeName (typeId : Ident) : Ident :=
         mkIdentFrom typeId normalized
   | _ => mkIdentFrom typeId normalized
 
-def legacyMessageHelperComponents : Array String :=
-  #["Default.Value", "toMessage", "builder", "fromMessage", "merge",
-    "decoder?", "decoder_rep", "encode", "decode"]
-
-def legacyOneofHelperComponents : Array String :=
-  #["toMessage", "merge", "fromMessage?"]
-
-def legacyEnumHelperComponents : Array String :=
-  #["toInt32", "fromInt32", "builder", "decoder?", "decoder_rep",
-    "decoder_rep_packed", "Default.Value"]
-
-/--
-Build compatibility name mappings exposing canonical helpers at their
-historical flat names.
-
-Generated declarations may be private when proto notation occurs in a Lean
-`module`.  The ordinary `export` elaborator resolves a nested private helper
-such as `M.Choice.«protobuf.internal».fromMessage?` through the parent `M`
-namespace instead.  We therefore retain the exact user names here and resolve
-their actual (possibly private) kernel names after all canonical definitions
-have elaborated. Public targets use environment aliases; private-module targets
-use reducible wrappers because root-qualified private names bypass aliases.
-Both retain the canonical function type, including optional defaults.
--/
-def legacyHelperAliases
-    (typeId : Ident) (components : Array String) :
-    CommandElabM (Array (Name × Name)) := do
-  let rawOwner := typeId.getId.eraseMacroScopes
-  let currNamespace ← getCurrNamespace
-  let owner :=
-    if (`_root_).isPrefixOf rawOwner then
-      rawOwner.replacePrefix `_root_ .anonymous
-    else
-      currNamespace ++ rawOwner
-  return components.map fun component =>
-    (owner.str component, helperName owner component)
-
 structure ProtobufDeclBlock where
   decls : Array Command := #[]
   inhabitedFunctions : Array Command := #[]
@@ -316,10 +273,6 @@ structure ProtobufDeclBlock where
   -/
   functions : Array Command := #[]
   insts : Array Command := #[]
-  /-- Historical user name to canonical helper user name. -/
-  legacyAliases : Array (Name × Name) := #[]
-  /-- Compatibility wrapper declarations. -/
-  aliases : Array Command := #[]
 deriving Inhabited, Repr
 
 def ProtobufDeclBlock.elaborate (block : ProtobufDeclBlock) : CommandElabM Unit := do
@@ -331,9 +284,7 @@ def ProtobufDeclBlock.elaborate (block : ProtobufDeclBlock) : CommandElabM Unit 
     mergeFunctions,
     decodingFunctions,
     functions,
-    insts,
-    legacyAliases,
-    aliases
+    insts
   } := block
   let elaborateMutual (commands : Array Command) : CommandElabM Unit := do
     unless commands.isEmpty do
@@ -367,40 +318,6 @@ def ProtobufDeclBlock.elaborate (block : ProtobufDeclBlock) : CommandElabM Unit 
   elaborateMutual decodingFunctions
   functions.forM elabCommand
   insts.forM elabCommand
-  unless legacyAliases.isEmpty do
-    let env ← getEnv
-    let actualNamesByUser :=
-      env.constants.toList.foldl
-        (init := ({} : NameMap Name))
-        fun names (actualName, _) =>
-          names.insert (privateToUserName actualName) actualName
-    for (aliasName, targetUserName) in legacyAliases do
-      let targetName :=
-        if env.contains targetUserName then
-          targetUserName
-        else
-          actualNamesByUser.find? targetUserName |>.getD targetUserName
-      unless env.contains targetName do
-        throwError
-          "cannot resolve canonical protobuf helper `{targetUserName}` while creating compatibility alias `{aliasName}`"
-      if isPrivateName targetName then
-        /-
-        Root-qualified references in the defining module are normalized to a
-        private kernel name before environment aliases are consulted.  A
-        reducible wrapper gives that spelling a real declaration while
-        retaining the canonical helper's full type (including `optParam`
-        defaults). Public generated modules continue to use zero-cost
-        environment aliases below.
-        -/
-        let aliasId := mkIdent (`_root_ ++ aliasName)
-        let targetId := mkIdent (`_root_ ++ targetUserName)
-        let aliasCommand ←
-          `(abbrev $aliasId:ident := @$targetId:ident)
-        elabCommand aliasCommand
-      else
-        modifyEnv fun currentEnv =>
-          addAlias currentEnv aliasName targetName
-  aliases.forM elabCommand
 
 def ProtobufDeclBlock.merge : ProtobufDeclBlock → ProtobufDeclBlock → ProtobufDeclBlock := fun a b =>
   { decls := a.decls ++ b.decls,
@@ -410,6 +327,4 @@ def ProtobufDeclBlock.merge : ProtobufDeclBlock → ProtobufDeclBlock → Protob
     mergeFunctions := a.mergeFunctions ++ b.mergeFunctions,
     decodingFunctions := a.decodingFunctions ++ b.decodingFunctions,
     functions := a.functions ++ b.functions,
-    insts := a.insts ++ b.insts,
-    legacyAliases := a.legacyAliases ++ b.legacyAliases,
-    aliases := a.aliases ++ b.aliases }
+    insts := a.insts ++ b.insts }

@@ -42,14 +42,14 @@ private def proto2Expected : ByteArray := bytes #[
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match proto2Sample.encode with
+  match Protobuf.encode proto2Sample with
   | .ok wire => wire == proto2Expected
   | .error _ => false
 
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match group_support.proto2.LegacyGroups.decode proto2Expected with
+  match Protobuf.decodeThe group_support.proto2.LegacyGroups proto2Expected with
   | .ok value =>
       match value.optionalgroup, value.requiredgroup with
       | some optionalGroup, some requiredGroup =>
@@ -72,7 +72,7 @@ private def proto2MergeWire : ByteArray := bytes #[
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match group_support.proto2.LegacyGroups.decode proto2MergeWire with
+  match Protobuf.decodeThe group_support.proto2.LegacyGroups proto2MergeWire with
   | .ok value =>
       match value.optionalgroup with
       | some group =>
@@ -89,7 +89,7 @@ private def proto2RequiredMergeWire : ByteArray := bytes #[
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match group_support.proto2.RequiredGroupMerge.decode
+  match Protobuf.decodeThe group_support.proto2.RequiredGroupMerge
       proto2RequiredMergeWire with
   | .ok value =>
       match value.value with
@@ -109,11 +109,11 @@ private def recursiveProto2Sample :
 #guard_msgs (info) in
 #eval
   let expected := bytes #[0x0b, 0x0a, 0x00, 0x0c]
-  match recursiveProto2Sample.encode with
+  match Protobuf.encode recursiveProto2Sample with
   | .error _ => false
   | .ok wire =>
       wire == expected &&
-      match group_support.proto2.RecursiveLegacy.decode wire with
+      match Protobuf.decodeThe group_support.proto2.RecursiveLegacy wire with
       | .ok value =>
           match value.child with
           | some child => child.parent.isSome
@@ -128,7 +128,7 @@ private def proto2WrongWire : ByteArray := bytes #[
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match group_support.proto2.LegacyGroups.decode proto2WrongWire with
+  match Protobuf.decodeThe group_support.proto2.LegacyGroups proto2WrongWire with
   | .ok value =>
       value.optionalgroup.isNone &&
       (match value.«Unknown.Fields»[5]? with
@@ -138,7 +138,7 @@ private def proto2WrongWire : ByteArray := bytes #[
               values.size == 1 && data == bytes #[0x08, 0x01]
           | _ => false
       | none => false) &&
-      (match value.encode with
+      (match Protobuf.encode value with
       | .ok wire => wire == bytes #[
           0x3b, 0x08, 0x09, 0x3c,
           0x2a, 0x02, 0x08, 0x01
@@ -164,7 +164,7 @@ private def inheritedEditionsSample :
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match inheritedEditionsSample.encode with
+  match Protobuf.encode inheritedEditionsSample with
   | .ok wire =>
       wire == bytes #[0x08, 0x07, 0x13, 0x08, 0x08, 0x14]
   | .error _ => false
@@ -179,7 +179,7 @@ private def inheritedMapSample :
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match inheritedMapSample.encode with
+  match Protobuf.encode inheritedMapSample with
   | .ok wire =>
       -- Map entries and their message values remain length-delimited even
       -- under an inherited file-level DELIMITED feature.
@@ -200,14 +200,14 @@ private def editionsExpected : ByteArray := bytes #[
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match editionsSample.encode with
+  match Protobuf.encode editionsSample with
   | .ok wire => wire == editionsExpected
   | .error _ => false
 
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match group_support.editions.DelimitedFields.decode editionsExpected with
+  match Protobuf.decodeThe group_support.editions.DelimitedFields editionsExpected with
   | .ok value =>
       (match value.singular with
       | some payload =>
@@ -230,7 +230,7 @@ private def editionsOneofMergeWire : ByteArray := bytes #[
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match group_support.editions.DelimitedFields.decode editionsOneofMergeWire with
+  match Protobuf.decodeThe group_support.editions.DelimitedFields editionsOneofMergeWire with
   | .ok value =>
       match value.choice with
       | some (.grouped_choice payload) =>
@@ -241,7 +241,7 @@ private def editionsOneofMergeWire : ByteArray := bytes #[
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match group_support.editions.DelimitedFields.decode
+  match Protobuf.decodeThe group_support.editions.DelimitedFields
       (bytes #[0x1b, 0x08, 0x01, 0x1c, 0x20, 0x09]) with
   | .ok value =>
       match value.choice with
@@ -254,11 +254,11 @@ private def proto2ExtensionRoundtrip : Bool :=
   match host.set_extensiongroup { value := some 17 } with
   | .error _ => false
   | .ok host =>
-      match host.encode with
+      match Protobuf.encode host with
       | .error _ => false
       | .ok wire =>
           wire == bytes #[0xa3, 0x06, 0x08, 0x11, 0xa4, 0x06] &&
-          match group_support.proto2.ExtensionHost.decode wire with
+          match Protobuf.decodeThe group_support.proto2.ExtensionHost wire with
           | .error _ => false
           | .ok decoded =>
               match decoded.get_extensiongroup? with
@@ -274,11 +274,11 @@ private def editionsExtensionRoundtrip : Bool :=
   match host.set_delimited_extension { a := some 18 } with
   | .error _ => false
   | .ok host =>
-      match host.encode with
+      match Protobuf.encode host with
       | .error _ => false
       | .ok wire =>
           wire == bytes #[0xa3, 0x06, 0x08, 0x12, 0xa4, 0x06] &&
-          match group_support.editions.ExtensionHost.decode wire with
+          match Protobuf.decodeThe group_support.editions.ExtensionHost wire with
           | .error _ => false
           | .ok decoded =>
               match decoded.get_delimited_extension? with
@@ -293,7 +293,7 @@ private def editionsExtensionRoundtrip : Bool :=
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match group_support.editions.DelimitedFields.decode
+  match Protobuf.decodeThe group_support.editions.DelimitedFields
       (bytes #[0x20, 0x09, 0x1b, 0x08, 0x01, 0x1c]) with
   | .ok value =>
       match value.choice with
@@ -326,33 +326,33 @@ private def mixedChain (depth : Nat) : ByteArray :=
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  (group_support.editions.RecursiveNode.decode (groupChain 100)).isOk
+  (Protobuf.decodeThe group_support.editions.RecursiveNode (groupChain 100)).isOk
 
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match group_support.editions.RecursiveNode.decode (groupChain 101) with
+  match Protobuf.decodeThe group_support.editions.RecursiveNode (groupChain 101) with
   | .error _ => true
   | .ok _ => false
 
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match group_support.editions.MixedNode.decode (mixedChain 100) with
+  match Protobuf.decodeThe group_support.editions.MixedNode (mixedChain 100) with
   | .ok _ => true
   | .error _ => false
 
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match group_support.editions.MixedNode.decode (mixedChain 101) with
+  match Protobuf.decodeThe group_support.editions.MixedNode (mixedChain 101) with
   | .error _ => true
   | .ok _ => false
 
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match group_support.editions.DelimitedFields.decode
+  match Protobuf.decodeThe group_support.editions.DelimitedFields
       (bytes #[0x0a, 0x02, 0x08, 0x01]) with
   | .ok value =>
       value.singular.isNone &&

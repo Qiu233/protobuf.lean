@@ -498,12 +498,7 @@ partial def compile_message (item : MsgItem) : M DeclOutput := do
   let extras ← IO.mkRef #[]
   let commitM (c : M Command) := c >>= fun x => extras.modify fun cs => cs.push x
   let noneMod? : Array (Option (TSyntax ``message_entry_modifier)) := oneofIds.map (fun _ => Option.none)
-  let msgOptions? ←
-    if messageUsesLegacyHelpers msg then
-      pure none
-    else
-      some <$> `(options| [legacy_helpers = false])
-  let decl ← `(message $typeId $[$msgOptions?]? {
+  let decl ← `(message $typeId {
     $[$[$mods]? $types $ids:ident = $numsQ $[$opts]?;]*
     $[ $[$noneMod?]? $oneofTypes $oneofIds:ident = $oneofNums;]*
   })

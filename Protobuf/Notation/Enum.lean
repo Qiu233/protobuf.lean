@@ -195,26 +195,6 @@ public def elabEnumDecCore : Syntax → CommandElabM ProtobufDeclBlock := fun st
   let (_, decoder_rep) ← construct_decoder_rep name push_name fromInt32Id isKnownId isClosedId
   let (_, decoder_rep_packed) ←
     construct_decoder_rep_packed name push_name fromInt32Id isKnownId isClosedId
-  let legacyComponents := legacyEnumHelperComponents
-  let valueNames := safeEntries.map fun value =>
-    value.getId.eraseMacroScopes
-  let aliasCollides := legacyComponents.any fun component =>
-    valueNames.contains (Name.mkStr1 component)
-  let legacyAliases : Array (Name × Name) ←
-    if aliasCollides then
-      pure #[]
-    else
-      legacyHelperAliases name legacyComponents
-  let legacyIsKnown :=
-    mkIdentFrom name
-      ((name.getId.eraseMacroScopes.append `Internal).str "isKnown")
-  let legacyIsClosed :=
-    mkIdentFrom name
-      ((name.getId.eraseMacroScopes.append `Internal).str "isClosed")
-  let legacyIsKnownCmd ←
-    `(def $legacyIsKnown:ident : $name → Bool := $isKnownId:ident)
-  let legacyIsClosedCmd ←
-    `(def $legacyIsClosed:ident : Bool := $isClosedId:ident)
   return {
     decls := #[ind]
     functions := #[
@@ -229,9 +209,7 @@ public def elabEnumDecCore : Syntax → CommandElabM ProtobufDeclBlock := fun st
     ]
     inhabitedFunctions := #[default_value]
     inhabitedInsts := #[inhabited]
-    insts := #[beq],
-    legacyAliases
-    aliases := #[legacyIsKnownCmd, legacyIsClosedCmd]
+    insts := #[beq]
   }
 
 @[scoped command_elab enumDec]

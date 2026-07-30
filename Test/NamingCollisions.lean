@@ -36,42 +36,6 @@ run_meta do
   | .error err =>
       throwError
         "rendered collision-proof oneof command did not parse again: {err}"
-  let aliasOwner := mkIdent `ParserCollisionAlias
-  let helperNamespace :=
-    mkIdent (Name.mkStr1 Protobuf.Notation.helperNamespaceComponent)
-  let helperIds := #[mkIdent `encode, mkIdent `decode]
-  let namespaceCommand ←
-    `(command| namespace $aliasOwner)
-  let exportCommand ←
-    `(command| export $helperNamespace ($helperIds*))
-  let renderedNamespace ←
-    match
-        Protobuf.Notation.PrettyPrinter.command.pprintSafe
-          namespaceCommand with
-    | .ok rendered => pure rendered
-    | .error err =>
-        throwError "helper namespace syntax could not be rendered: {err}"
-  let renderedExport ←
-    match
-        Protobuf.Notation.PrettyPrinter.command.pprintSafe exportCommand with
-    | .ok rendered => pure rendered
-    | .error err =>
-        throwError "helper export syntax could not be rendered: {err}"
-  unless renderedNamespace.contains "ParserCollisionAlias" &&
-      renderedExport.contains "protobuf.internal" &&
-      renderedExport.contains "export" do
-    throwError
-      "helper export command lost its canonical namespace: {renderedExport}"
-  match
-      Parser.runParserCategory (← getEnv) `command renderedNamespace with
-  | .ok _ => pure ()
-  | .error err =>
-      throwError "rendered helper namespace command did not parse again: {err}"
-  match
-      Parser.runParserCategory (← getEnv) `command renderedExport with
-  | .ok _ => pure ()
-  | .error err =>
-      throwError "rendered helper export command did not parse again: {err}"
 
 #load_proto_file "Test/NamingCollisionsProto3.proto"
 #load_proto_file "Test/NamingCollisionsProto2.proto"
@@ -94,9 +58,8 @@ run_meta do
 #check naming_collisions.proto3.AutomaticEnum.«casesOn.protobuf»
 #check naming_collisions.proto3.OneofProjectionOwner.«rec.protobuf»
 #check naming_collisions.proto3.OneofProjectionOwner.«rec.protobuf_Type»
-#check naming_collisions.proto3.OneofProjectionOwner.«encode.protobuf»
-#check naming_collisions.proto3.OneofProjectionOwner.«encode.protobuf_Type»
 #check naming_collisions.proto3.OneofProjectionOwner.encode
+#check naming_collisions.proto3.OneofProjectionOwner.encode_Type
 
 private def proto3Sample : naming_collisions.proto3.HelperOwner := {
   builder_value := some { value := 11 }
@@ -112,13 +75,11 @@ private def proto3Sample : naming_collisions.proto3.HelperOwner := {
 #guard_msgs (info) in
 #eval
   match
-      naming_collisions.proto3.HelperOwner.«protobuf.internal».encode
-        proto3Sample with
+      Protobuf.encode proto3Sample with
   | .error _ => false
   | .ok wire =>
       match
-          naming_collisions.proto3.HelperOwner.«protobuf.internal».decode
-            wire with
+          Protobuf.decodeThe naming_collisions.proto3.HelperOwner wire with
       | .error _ => false
       | .ok decoded =>
           decoded.builder_value.any fun
@@ -143,13 +104,11 @@ private def proto3Oneof :
 #guard_msgs (info) in
 #eval
   match
-      naming_collisions.proto3.OneofOwner.«protobuf.internal».encode
-        proto3Oneof with
+      Protobuf.encode proto3Oneof with
   | .error _ => false
   | .ok wire =>
       match
-          naming_collisions.proto3.OneofOwner.«protobuf.internal».decode
-            wire with
+          Protobuf.decodeThe naming_collisions.proto3.OneofOwner wire with
       | .error _ => false
       | .ok decoded =>
           match decoded.choice with
@@ -163,25 +122,26 @@ private def proto3Oneof :
           | _ => false
 
 private def proto3OneofProjection :
-    naming_collisions.proto3.OneofProjectionOwner := {
+  naming_collisions.proto3.OneofProjectionOwner := {
   «rec.protobuf» := some (.value 25)
-  «encode.protobuf» := some (.text "projection")
+  encode := some (.text "projection")
 }
 
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match proto3OneofProjection.encode with
+  match Protobuf.encode proto3OneofProjection with
   | .error _ => false
   | .ok wire =>
       match
-          naming_collisions.proto3.OneofProjectionOwner.decode wire with
+          Protobuf.decodeThe
+            naming_collisions.proto3.OneofProjectionOwner wire with
       | .error _ => false
       | .ok decoded =>
           (match decoded.«rec.protobuf» with
           | some (.value value) => value == 25
           | _ => false) &&
-          (match decoded.«encode.protobuf» with
+          (match decoded.encode with
           | some (.text value) => value == "projection"
           | _ => false)
 
@@ -193,8 +153,8 @@ private def proto3OneofProjection :
 #check naming_collisions.proto2.AutomaticEnum.«ctorElim.protobuf»
 #check naming_collisions.proto2.OneofProjectionOwner.«rec.protobuf»
 #check naming_collisions.proto2.OneofProjectionOwner.«rec.protobuf_Type»
-#check naming_collisions.proto2.OneofProjectionOwner.«encode.protobuf»
 #check naming_collisions.proto2.OneofProjectionOwner.encode
+#check naming_collisions.proto2.OneofProjectionOwner.encode_Type
 
 /-- info: true -/
 #guard_msgs (info) in
@@ -225,8 +185,8 @@ private def proto3OneofProjection :
 #check naming_collisions.editions.OneofOwner.«choice_Type.protobuf.oneof»
 #check naming_collisions.editions.OneofProjectionOwner.«rec.protobuf»
 #check naming_collisions.editions.OneofProjectionOwner.«rec.protobuf_Type»
-#check naming_collisions.editions.OneofProjectionOwner.«encode.protobuf»
 #check naming_collisions.editions.OneofProjectionOwner.encode
+#check naming_collisions.editions.OneofProjectionOwner.encode_Type
 
 /-- info: true -/
 #guard_msgs (info) in
@@ -269,6 +229,27 @@ message DirectAutomaticMessage {
   DirectAutomaticOneof selected = 0;
 }
 
+enum DirectFormerHelperEnum {
+  toInt32 = 0;
+  fromInt32 = 1;
+  builder = 2;
+}
+
+oneof DirectFormerHelperOneof {
+  int32 toMessage = 1;
+  int32 merge = 2;
+  int32 fromMessage = 3;
+}
+
+message DirectFormerHelperMessage {
+  int32 encode = 1;
+  int32 decode = 2;
+  int32 toMessage = 3;
+  int32 fromMessage = 4;
+  int32 merge = 5;
+  DirectFormerHelperEnum enum_value = 6;
+}
+
 #check DirectAutomaticEnum.«rec.protobuf»
 #check DirectAutomaticEnum.«casesOn.protobuf»
 #check DirectAutomaticOneof.«rec.protobuf»
@@ -278,6 +259,41 @@ message DirectAutomaticMessage {
 #check DirectAutomaticMessage.«ctorIdx.protobuf»
 #check DirectAutomaticMessage.«_sizeOf_1.protobuf»
 #check DirectAutomaticMessage.«_sizeOf_inst.protobuf»
+#check DirectFormerHelperEnum.toInt32
+#check DirectFormerHelperEnum.fromInt32
+#check DirectFormerHelperEnum.builder
+#check DirectFormerHelperOneof.toMessage
+#check DirectFormerHelperOneof.merge
+#check DirectFormerHelperOneof.fromMessage
+#check DirectFormerHelperMessage.encode
+#check DirectFormerHelperMessage.decode
+#check DirectFormerHelperMessage.toMessage
+#check DirectFormerHelperMessage.fromMessage
+#check DirectFormerHelperMessage.merge
+
+/-- info: true -/
+#guard_msgs (info) in
+#eval
+  let value : DirectFormerHelperMessage := {
+    encode := 71
+    decode := 72
+    toMessage := 73
+    fromMessage := 74
+    merge := 75
+    enum_value := .builder
+  }
+  match Protobuf.encode value with
+  | .error _ => false
+  | .ok wire =>
+      match Protobuf.decodeThe DirectFormerHelperMessage wire with
+      | .error _ => false
+      | .ok decoded =>
+          decoded.encode == 71 &&
+            decoded.decode == 72 &&
+            decoded.toMessage == 73 &&
+            decoded.fromMessage == 74 &&
+            decoded.merge == 75 &&
+            decoded.enum_value == DirectFormerHelperEnum.builder
 
 proto_mutual {
   message DirectQualifiedOwner {
@@ -312,7 +328,7 @@ oneof DirectSingleMessageOneof {
 #eval
   let old : DirectSingleMessageOneof := .child { value := 61 }
   let new : DirectSingleMessageOneof := .child { value := 62 }
-  match DirectSingleMessageOneof.merge old new with
+  match DirectSingleMessageOneof.«protobuf.internal».merge old new with
   | .child value => value.value == 62
 
 /-- info: true -/
@@ -347,10 +363,10 @@ oneof DirectSingleMessageOneof {
     «_sizeOf_inst.protobuf» := 47
     selected := some (.«rec.protobuf» 43)
   }
-  match value.encode with
+  match Protobuf.encode value with
   | .error _ => false
   | .ok wire =>
-      match DirectAutomaticMessage.decode wire with
+      match Protobuf.decodeThe DirectAutomaticMessage wire with
       | .error _ => false
       | .ok decoded =>
           decoded.«mk.protobuf» == 41 &&

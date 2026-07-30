@@ -15,8 +15,10 @@ open scoped Protobuf.Notation
 #check _root_.google.protobuf.Any
 #check _root_.google.protobuf.Struct
 
-#check _root_.protobuf_test_messages.proto3.TestAllTypesProto3.encode
-#check _root_.protobuf_test_messages.proto3.TestAllTypesProto3.decode
+#synth Protobuf.ProtoMessage
+  _root_.protobuf_test_messages.proto3.TestAllTypesProto3
+#check Protobuf.decodeThe
+  _root_.protobuf_test_messages.proto3.TestAllTypesProto3
 #check _root_.protobuf_test_messages.proto3.TestAllTypesProto3.«protobuf.internal».toMessage._chunk_0
 #check _root_.protobuf_test_messages.proto3.TestAllTypesProto3.«protobuf.internal».fromMessage._chunk_0
 
@@ -29,9 +31,10 @@ open scoped Protobuf.Notation
   let expected :
       _root_.protobuf_test_messages.proto3.ForeignMessage := { c := 123 }
   let wire ← IO.ofExcept <|
-    _root_.protobuf_test_messages.proto3.ForeignMessage.encode expected
+    Protobuf.encode expected
   let decoded ← IO.ofExcept <|
-    _root_.protobuf_test_messages.proto3.ForeignMessage.decode wire
+    Protobuf.decodeThe
+      _root_.protobuf_test_messages.proto3.ForeignMessage wire
   unless decoded.c == 123 do
     throw (IO.userError "official conformance message roundtrip failed")
   pure ()

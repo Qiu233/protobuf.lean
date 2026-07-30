@@ -33,7 +33,7 @@ private def compositeWire : ByteArray :=
   ]⟩
 
 private def testProto2 : IO Unit := do
-  let value ← ofProtoExcept (_root_.test.closed.proto2.ClosedMessage.decode compositeWire)
+  let value ← ofProtoExcept (Protobuf.decodeThe _root_.test.closed.proto2.ClosedMessage compositeWire)
   assert value.singular.isNone "closed singular enum accepted an unknown value"
   assert (value.expanded == #[
     _root_.test.closed.proto2.ClosedEnum.CLOSED_ENUM_ONE,
@@ -133,7 +133,7 @@ private def testProto2 : IO Unit := do
     ⟨5, .VARINT 123⟩
   ]
   let ordered ← ofProtoExcept
-    (_root_.test.closed.proto2.ClosedMessage.fromMessage knownThenUnknown)
+    (_root_.test.closed.proto2.ClosedMessage.«protobuf.internal».fromMessage knownThenUnknown)
   assert (ordered.singular ==
       some _root_.test.closed.proto2.ClosedEnum.CLOSED_ENUM_ONE)
     "unknown closed enum overwrote a previously known singular value"
@@ -152,7 +152,7 @@ private def testProto2 : IO Unit := do
     ⟨3, .LEN ⟨#[0x81, 0x80, 0x80, 0x80, 0x10]⟩⟩
   ]
   let edge ← ofProtoExcept
-    (_root_.test.closed.proto2.ClosedMessage.fromMessage packedNegative)
+    (_root_.test.closed.proto2.ClosedMessage.«protobuf.internal».fromMessage packedNegative)
   assert (edge.packed == #[
       _root_.test.closed.proto2.ClosedEnum.CLOSED_ENUM_ONE])
     "packed closed enum did not recognize a value after int32 truncation"
@@ -168,13 +168,13 @@ private def testProto2 : IO Unit := do
   ]
   let outer := Message.mk #[⟨4, ← ofProtoExcept (ProtoVal.ofMessage entry)⟩]
   let mapped ← ofProtoExcept
-    (_root_.test.closed.proto2.ClosedMessage.fromMessage outer)
+    (_root_.test.closed.proto2.ClosedMessage.«protobuf.internal».fromMessage outer)
   assert mapped.mapped.isEmpty
     "map entry containing both unknown and known closed enum values was accepted"
   assert (((mapped.«Unknown.Fields»[4]?).getD #[]).size == 1)
     "rejected closed-enum map entry was not retained"
 
-  match _root_.test.closed.proto2.ClosedEnum.builder
+  match _root_.test.closed.proto2.ClosedEnum.«protobuf.internal».builder
       (_root_.test.closed.proto2.ClosedEnum.«Unknown.Value» 123) with
   | .error _ => pure ()
   | .ok _ => throw (IO.userError "closed enum builder accepted Unknown.Value")
@@ -182,7 +182,7 @@ private def testProto2 : IO Unit := do
 private def testEditions : IO Unit := do
   let editionWire : ByteArray := ⟨compositeWire.data.extract 0 27⟩
   let value ← ofProtoExcept
-    (_root_.test.closed.editions.ClosedMessage.decode editionWire)
+    (Protobuf.decodeThe _root_.test.closed.editions.ClosedMessage editionWire)
   assert value.singular.isNone "Editions CLOSED singular accepted unknown"
   assert (value.expanded == #[
     _root_.test.closed.editions.ClosedEnum.CLOSED_ENUM_ONE,

@@ -65,15 +65,13 @@ grep -Fq '«structure»' \
   "$output_root/PluginGenerated/keywords/lean-keywords.lean"
 grep -Fq '«choice_Type.protobuf.oneof»' \
   "$output_root/PluginGenerated/NamingCollisionsProto3.lean"
-grep -Eq 'legacy_helpers[^=]*=[[:space:]]*false' \
-  "$output_root/PluginGenerated/NamingCollisionsProto2.lean"
 for generated in \
     NamingCollisionsProto3.lean \
     NamingCollisionsProto2.lean \
     NamingCollisionsEditions.lean; do
   grep -Fq 'rec.protobuf' \
     "$output_root/PluginGenerated/$generated"
-  grep -Fq 'encode.protobuf' \
+  grep -Fq 'encode_Type' \
     "$output_root/PluginGenerated/$generated"
   grep -Fq 'rec.protobuf_Type' \
     "$output_root/PluginGenerated/$generated"

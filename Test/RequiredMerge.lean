@@ -110,7 +110,7 @@ private def deferredErrorThenOneofScalarWire : ByteArray :=
 
 private def testProto2 : IO Unit := do
   let optional ←
-    match _root_.test.required_merge.proto2.OptionalOuter.decode splitChildWire with
+    match Protobuf.decodeThe _root_.test.required_merge.proto2.OptionalOuter splitChildWire with
     | .ok value => pure value
     | .error error =>
         throw (IO.userError s!"proto2 optional split merge failed: {error}")
@@ -120,7 +120,7 @@ private def testProto2 : IO Unit := do
     "proto2 optional split merge lost required child fields"
 
   let required ←
-    match _root_.test.required_merge.proto2.RequiredOuter.decode splitChildWire with
+    match Protobuf.decodeThe _root_.test.required_merge.proto2.RequiredOuter splitChildWire with
     | .ok value => pure value
     | .error error =>
         throw (IO.userError s!"proto2 required split merge failed: {error}")
@@ -130,24 +130,24 @@ private def testProto2 : IO Unit := do
     "proto2 required split merge lost required child fields"
 
   assertMissingRequired
-    (_root_.test.required_merge.proto2.OptionalOuter.decode incompleteChildWire)
+    (Protobuf.decodeThe _root_.test.required_merge.proto2.OptionalOuter incompleteChildWire)
     "proto2 optional final child initialization"
   assertMissingRequired
-    (_root_.test.required_merge.proto2.RequiredOuter.decode incompleteChildWire)
+    (Protobuf.decodeThe _root_.test.required_merge.proto2.RequiredOuter incompleteChildWire)
     "proto2 required final child initialization"
   assertMissingRequired
-    (_root_.test.required_merge.proto2.RepeatedOuter.decode splitChildWire)
+    (Protobuf.decodeThe _root_.test.required_merge.proto2.RepeatedOuter splitChildWire)
     "proto2 repeated child occurrences must remain distinct elements"
   assertMissingRequired
-    (_root_.test.required_merge.proto2.MapOuter.decode
+    (Protobuf.decodeThe _root_.test.required_merge.proto2.MapOuter
       mapEntryMissingValueWire)
     "proto2 map entry with an absent message value"
   assertMissingRequired
-    (_root_.test.required_merge.proto2.MapOuter.decode
+    (Protobuf.decodeThe _root_.test.required_merge.proto2.MapOuter
       mapEntryEmptyValueWire)
     "proto2 map entry with an explicit empty message value"
   let mapReplaced ←
-    match _root_.test.required_merge.proto2.MapOuter.decode
+    match Protobuf.decodeThe _root_.test.required_merge.proto2.MapOuter
         mapIncompleteThenCompleteWire with
     | .ok value => pure value
     | .error error =>
@@ -158,11 +158,11 @@ private def testProto2 : IO Unit := do
   assert (mapChild.a == some 1 && mapChild.b == some 2)
     "proto2 replacement map value changed"
   assertMissingRequired
-    (_root_.test.required_merge.proto2.MapOuter.decode
+    (Protobuf.decodeThe _root_.test.required_merge.proto2.MapOuter
       mapCompleteThenIncompleteWire)
     "proto2 final incomplete duplicate map value"
   let mapMerged ←
-    match _root_.test.required_merge.proto2.MapOuter.decode
+    match Protobuf.decodeThe _root_.test.required_merge.proto2.MapOuter
         mapSplitValueInOneEntryWire with
     | .ok value => pure value
     | .error error =>
@@ -173,11 +173,11 @@ private def testProto2 : IO Unit := do
   assert (mergedMapChild.a == some 1 && mergedMapChild.b == some 2)
     "proto2 repeated value records in one map entry lost fields"
   assertMissingRequired
-    (_root_.test.required_merge.proto2.MapOuter.decode
+    (Protobuf.decodeThe _root_.test.required_merge.proto2.MapOuter
       mapIncompleteEntriesDoNotMergeWire)
     "proto2 duplicate map entries must replace rather than merge"
   assertTruncated
-    (_root_.test.required_merge.proto2.DeferredErrorMapOuter.decode
+    (Protobuf.decodeThe _root_.test.required_merge.proto2.DeferredErrorMapOuter
       deferredErrorThenMapReplacementWire)
     "proto2 malformed losing duplicate map value"
   for (wire, detail) in #[
@@ -185,7 +185,7 @@ private def testProto2 : IO Unit := do
       (mapWrongValueWire, "value")
     ] do
     let decoded ←
-      match _root_.test.required_merge.proto2.MapOuter.decode wire with
+      match Protobuf.decodeThe _root_.test.required_merge.proto2.MapOuter wire with
       | .ok value => pure value
       | .error error =>
           throw (IO.userError
@@ -199,7 +199,7 @@ private def testProto2 : IO Unit := do
       s!"proto2 wrong-wire inner {detail} did not retain the outer entry"
 
   let sameCase ←
-    match _root_.test.required_merge.proto2.OneofOuter.decode splitChildWire with
+    match Protobuf.decodeThe _root_.test.required_merge.proto2.OneofOuter splitChildWire with
     | .ok value => pure value
     | .error error =>
         throw (IO.userError s!"proto2 oneof same-case split merge failed: {error}")
@@ -212,7 +212,7 @@ private def testProto2 : IO Unit := do
 
   let cleared ←
     match
-      _root_.test.required_merge.proto2.OneofOuter.decode
+      Protobuf.decodeThe _root_.test.required_merge.proto2.OneofOuter
         incompleteThenScalarWire
     with
     | .ok value => pure value
@@ -225,15 +225,15 @@ private def testProto2 : IO Unit := do
       throw (IO.userError "proto2 later oneof scalar did not clear incomplete message")
 
   assertMissingRequired
-    (_root_.test.required_merge.proto2.OneofOuter.decode scalarThenIncompleteWire)
+    (Protobuf.decodeThe _root_.test.required_merge.proto2.OneofOuter scalarThenIncompleteWire)
     "proto2 final incomplete oneof message"
   assertTruncated
-    (_root_.test.required_merge.proto2.DeferredErrorOneofOuter.decode
+    (Protobuf.decodeThe _root_.test.required_merge.proto2.DeferredErrorOneofOuter
       deferredErrorThenOneofScalarWire)
     "proto2 malformed cleared oneof message"
 
   let merged :=
-    _root_.test.required_merge.proto2.OneofOuter.merge
+    _root_.test.required_merge.proto2.OneofOuter.«protobuf.internal».merge
       {
         choice := some (.child { a := some 1 })
       }
@@ -248,7 +248,7 @@ private def testProto2 : IO Unit := do
       throw (IO.userError "proto2 MergeFrom selected wrong oneof case")
 
   let replaced :=
-    _root_.test.required_merge.proto2.OneofOuter.merge merged {
+    _root_.test.required_merge.proto2.OneofOuter.«protobuf.internal».merge merged {
       choice := some (.scalar 7)
     }
   match replaced.choice with
@@ -259,7 +259,7 @@ private def testProto2 : IO Unit := do
 
 private def testEditions : IO Unit := do
   let optional ←
-    match _root_.test.required_merge.editions.OptionalOuter.decode splitChildWire with
+    match Protobuf.decodeThe _root_.test.required_merge.editions.OptionalOuter splitChildWire with
     | .ok value => pure value
     | .error error =>
         throw (IO.userError s!"Editions optional split merge failed: {error}")
@@ -269,7 +269,7 @@ private def testEditions : IO Unit := do
     "Editions optional split merge lost required child fields"
 
   let required ←
-    match _root_.test.required_merge.editions.RequiredOuter.decode splitChildWire with
+    match Protobuf.decodeThe _root_.test.required_merge.editions.RequiredOuter splitChildWire with
     | .ok value => pure value
     | .error error =>
         throw (IO.userError s!"Editions required split merge failed: {error}")
@@ -279,24 +279,24 @@ private def testEditions : IO Unit := do
     "Editions required split merge lost required child fields"
 
   assertMissingRequired
-    (_root_.test.required_merge.editions.OptionalOuter.decode incompleteChildWire)
+    (Protobuf.decodeThe _root_.test.required_merge.editions.OptionalOuter incompleteChildWire)
     "Editions optional final child initialization"
   assertMissingRequired
-    (_root_.test.required_merge.editions.RequiredOuter.decode incompleteChildWire)
+    (Protobuf.decodeThe _root_.test.required_merge.editions.RequiredOuter incompleteChildWire)
     "Editions required final child initialization"
   assertMissingRequired
-    (_root_.test.required_merge.editions.RepeatedOuter.decode splitChildWire)
+    (Protobuf.decodeThe _root_.test.required_merge.editions.RepeatedOuter splitChildWire)
     "Editions repeated child occurrences must remain distinct elements"
   assertMissingRequired
-    (_root_.test.required_merge.editions.MapOuter.decode
+    (Protobuf.decodeThe _root_.test.required_merge.editions.MapOuter
       mapEntryMissingValueWire)
     "Editions map entry with an absent message value"
   assertMissingRequired
-    (_root_.test.required_merge.editions.MapOuter.decode
+    (Protobuf.decodeThe _root_.test.required_merge.editions.MapOuter
       mapEntryEmptyValueWire)
     "Editions map entry with an explicit empty message value"
   let mapReplaced ←
-    match _root_.test.required_merge.editions.MapOuter.decode
+    match Protobuf.decodeThe _root_.test.required_merge.editions.MapOuter
         mapIncompleteThenCompleteWire with
     | .ok value => pure value
     | .error error =>
@@ -307,11 +307,11 @@ private def testEditions : IO Unit := do
   assert (mapChild.a == some 1 && mapChild.b == some 2)
     "Editions replacement map value changed"
   assertMissingRequired
-    (_root_.test.required_merge.editions.MapOuter.decode
+    (Protobuf.decodeThe _root_.test.required_merge.editions.MapOuter
       mapCompleteThenIncompleteWire)
     "Editions final incomplete duplicate map value"
   let mapMerged ←
-    match _root_.test.required_merge.editions.MapOuter.decode
+    match Protobuf.decodeThe _root_.test.required_merge.editions.MapOuter
         mapSplitValueInOneEntryWire with
     | .ok value => pure value
     | .error error =>
@@ -322,11 +322,11 @@ private def testEditions : IO Unit := do
   assert (mergedMapChild.a == some 1 && mergedMapChild.b == some 2)
     "Editions repeated value records in one map entry lost fields"
   assertMissingRequired
-    (_root_.test.required_merge.editions.MapOuter.decode
+    (Protobuf.decodeThe _root_.test.required_merge.editions.MapOuter
       mapIncompleteEntriesDoNotMergeWire)
     "Editions duplicate map entries must replace rather than merge"
   assertTruncated
-    (_root_.test.required_merge.editions.DeferredErrorMapOuter.decode
+    (Protobuf.decodeThe _root_.test.required_merge.editions.DeferredErrorMapOuter
       deferredErrorThenMapReplacementWire)
     "Editions malformed losing duplicate map value"
   for (wire, detail) in #[
@@ -334,7 +334,7 @@ private def testEditions : IO Unit := do
       (mapWrongValueWire, "value")
     ] do
     let decoded ←
-      match _root_.test.required_merge.editions.MapOuter.decode wire with
+      match Protobuf.decodeThe _root_.test.required_merge.editions.MapOuter wire with
       | .ok value => pure value
       | .error error =>
           throw (IO.userError
@@ -348,7 +348,7 @@ private def testEditions : IO Unit := do
       s!"Editions wrong-wire inner {detail} did not retain the outer entry"
 
   let sameCase ←
-    match _root_.test.required_merge.editions.OneofOuter.decode splitChildWire with
+    match Protobuf.decodeThe _root_.test.required_merge.editions.OneofOuter splitChildWire with
     | .ok value => pure value
     | .error error =>
         throw (IO.userError s!"Editions oneof same-case split merge failed: {error}")
@@ -361,7 +361,7 @@ private def testEditions : IO Unit := do
 
   let cleared ←
     match
-      _root_.test.required_merge.editions.OneofOuter.decode
+      Protobuf.decodeThe _root_.test.required_merge.editions.OneofOuter
         incompleteThenScalarWire
     with
     | .ok value => pure value
@@ -374,19 +374,19 @@ private def testEditions : IO Unit := do
       throw (IO.userError "Editions later oneof scalar did not clear incomplete message")
 
   assertMissingRequired
-    (_root_.test.required_merge.editions.OneofOuter.decode scalarThenIncompleteWire)
+    (Protobuf.decodeThe _root_.test.required_merge.editions.OneofOuter scalarThenIncompleteWire)
     "Editions final incomplete oneof message"
   assertInvalidBuffer
-    (_root_.test.required_merge.editions.OneofOuter.decode
+    (Protobuf.decodeThe _root_.test.required_merge.editions.OneofOuter
       invalidUtf8ThenScalarWire)
     "Editions invalid UTF-8 in a cleared oneof message"
   assertTruncated
-    (_root_.test.required_merge.editions.DeferredErrorOneofOuter.decode
+    (Protobuf.decodeThe _root_.test.required_merge.editions.DeferredErrorOneofOuter
       deferredErrorThenOneofScalarWire)
     "Editions malformed cleared oneof message"
 
   let merged :=
-    _root_.test.required_merge.editions.OneofOuter.merge
+    _root_.test.required_merge.editions.OneofOuter.«protobuf.internal».merge
       {
         choice := some (.child { a := some 1 })
       }
@@ -401,7 +401,7 @@ private def testEditions : IO Unit := do
       throw (IO.userError "Editions MergeFrom selected wrong oneof case")
 
   let replaced :=
-    _root_.test.required_merge.editions.OneofOuter.merge merged {
+    _root_.test.required_merge.editions.OneofOuter.«protobuf.internal».merge merged {
       choice := some (.scalar 7)
     }
   match replaced.choice with

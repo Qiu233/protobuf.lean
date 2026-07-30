@@ -33,32 +33,6 @@ public def elabProtoMutual : CommandElab := fun stx => do
     localOneofDecls.foldl (init := ({} : LocalOneofAlternatives))
       fun alternatives (name, fields) =>
         alternatives.insert name.getId fields
-  let declarationNames := NameSet.ofArray <| ds.filterMap fun declaration =>
-    let inner := declaration.raw[0]
-    match inner.getKind with
-    | ``messageDec =>
-        match inner with
-        | `(messageDec| message $name $[$_msgOptions?]? {
-            $[$[$_mod]? $_t' $_n = $_fidx $[$_optionsStx]? ;]* }) =>
-            some (protectGeneratedTypeName name).getId
-        | _ => none
-    | ``oneofDec =>
-        match inner with
-        | `(oneofDec| oneof $name {
-            $[$[$_mod]? $_t' $_n = $_fidx $[$_optionsStx]? ;]* }) =>
-            some (protectGeneratedTypeName name).getId
-        | _ => none
-    | ``enumDec =>
-        match inner with
-        | `(enumDec| enum $name $[$_opts?]? {
-            $[$_entry = $_value:enum_value;]* }) =>
-            some (protectGeneratedTypeName name).getId
-        | _ => none
-    | _ => none
-  let hasSiblingCollision (owner : Ident) (components : Array String) : Bool :=
-    let ownerName := owner.getId.eraseMacroScopes
-    components.any fun component =>
-      declarationNames.contains (ownerName.str component)
   let messages := NameSet.ofArray <| ds.filterMap fun x =>
     match x with
     | `(proto_decl| message $name $[$msgOptions?]? { $[$[$mod]? $t' $n = $fidx $[$optionsStx]? ;]* }) =>
@@ -72,37 +46,14 @@ public def elabProtoMutual : CommandElab := fun stx => do
     match inner.getKind with
     | ``enumDec => throwErrorAt inner "enums cannot be inside proto_mutual"
     | ``messageDec => do
-        let `(messageDec| message $rawName $[$_msgOptions?]? {
-            $[$[$_mod]? $_t' $fieldNames = $_fidx
-              $[$fieldOptions]? ;]* }) := inner
-          | throwUnsupportedSyntax
-        let name := protectGeneratedTypeName rawName
-        let mut helperComponents := legacyMessageHelperComponents
-        for fieldName in fieldNames, optionsStx? in fieldOptions do
-          let options := Options.parseD optionsStx?
-          if options.default?.isSome then
-            let fieldName := fieldName.getId.eraseMacroScopes.toString
-            helperComponents :=
-              helperComponents.push s!"get_{fieldName}"
-                |>.push s!"has_{fieldName}"
-        let suppressLegacyHelpers :=
-          hasSiblingCollision name helperComponents
         let result ←
-          elabMessageDecCore {} oneofs messages localOneofs
-            suppressLegacyHelpers inner
+          elabMessageDecCore {} oneofs messages localOneofs inner
         block := block.merge result.declBlock
         messageFields :=
           messageFields.push (result.messageName, result.fieldTags)
     | ``oneofDec => do
-        let `(oneofDec| oneof $rawName {
-            $[$[$_mod]? $_t' $_n = $_fidx
-              $[$_optionsStx]? ;]* }) := inner
-          | throwUnsupportedSyntax
-        let name := protectGeneratedTypeName rawName
-        let suppressLegacyHelpers :=
-          hasSiblingCollision name legacyOneofHelperComponents
         let result ←
-          elabOneofDecCore {} oneofs messages suppressLegacyHelpers inner
+          elabOneofDecCore {} oneofs messages inner
         block := block.merge result
     | _ => throwErrorAt x "invalid kind"
   -- runTermElabM fun _ => do

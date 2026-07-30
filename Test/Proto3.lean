@@ -37,9 +37,9 @@ def mkMapEntry (key : String) (value? : Option Int32 := none) : Except ProtoErro
 
 def testDefaults : IO Unit := do
   let val : _root_.test.proto3.All := default
-  let msg ← ofExcept (_root_.test.proto3.All.toMessage val)
+  let msg ← ofExcept (_root_.test.proto3.All.«protobuf.internal».toMessage val)
   assert msg.records.isEmpty "proto3 defaults should not serialize"
-  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage Message.empty)
+  let decoded ← ofExcept (_root_.test.proto3.All.«protobuf.internal».fromMessage Message.empty)
   assertEq decoded.int32_field (0 : Int32) "default int32_field mismatch"
   assertEq decoded.string_field "" "default string_field mismatch"
   assertEq decoded.bool_field false "default bool_field mismatch"
@@ -67,18 +67,18 @@ def testDefaults : IO Unit := do
 def testOptionalPresence : IO Unit := do
   let base : _root_.test.proto3.All := default
   let val : _root_.test.proto3.All := { base with opt_int32 := some 0 }
-  let msg ← ofExcept (_root_.test.proto3.All.toMessage val)
+  let msg ← ofExcept (_root_.test.proto3.All.«protobuf.internal».toMessage val)
   assert ((Message.getRecordsOf msg 17).size == 1) "optional field should serialize when set"
-  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  let decoded ← ofExcept (_root_.test.proto3.All.«protobuf.internal».fromMessage msg)
   assertEq decoded.opt_int32 (some (0 : Int32)) "optional presence mismatch"
 
 def testSubPresence : IO Unit := do
   let sub : _root_.test.proto3.Sub := { id := 0, label := "z" }
   let base : _root_.test.proto3.All := default
   let val : _root_.test.proto3.All := { base with sub := some sub }
-  let msg ← ofExcept (_root_.test.proto3.All.toMessage val)
+  let msg ← ofExcept (_root_.test.proto3.All.«protobuf.internal».toMessage val)
   assert ((Message.getRecordsOf msg 16).size == 1) "message field should serialize when present"
-  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  let decoded ← ofExcept (_root_.test.proto3.All.«protobuf.internal».fromMessage msg)
   match decoded.sub with
   | some v =>
       assertEq v.id (0 : Int32) "message field presence mismatch"
@@ -90,20 +90,22 @@ def testSingularLastWins : IO Unit := do
   let msg := Message.set msg 1 (.VARINT 9)
   let msg := Message.set msg 2 (.LEN "first".toUTF8)
   let msg := Message.set msg 2 (.LEN "".toUTF8)
-  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  let decoded ← ofExcept (_root_.test.proto3.All.«protobuf.internal».fromMessage msg)
   assertEq decoded.int32_field (9 : Int32) "duplicate singular int32 should keep last value"
   assertEq decoded.string_field "" "duplicate singular string should keep last value, including empty"
 
 def testSubMessageMerge : IO Unit := do
   let sub1 : _root_.test.proto3.Sub := { id := 1, label := "" }
   let sub2 : _root_.test.proto3.Sub := { id := 0, label := "merged" }
-  let msg1 ← ofExcept sub1.toMessage
-  let msg2 ← ofExcept sub2.toMessage
+  let msg1 ← ofExcept
+    (_root_.test.proto3.Sub.«protobuf.internal».toMessage sub1)
+  let msg2 ← ofExcept
+    (_root_.test.proto3.Sub.«protobuf.internal».toMessage sub2)
   let val1 ← ofExcept <| ProtoVal.ofMessage msg1
   let val2 ← ofExcept <| ProtoVal.ofMessage msg2
   let msg := Message.set Message.empty 16 val1
   let msg := Message.set msg 16 val2
-  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  let decoded ← ofExcept (_root_.test.proto3.All.«protobuf.internal».fromMessage msg)
   match decoded.sub with
   | some v =>
       assertEq v.id (1 : Int32) "submessage merge should retain earlier scalar when later message omits it"
@@ -114,9 +116,9 @@ def testOneof : IO Unit := do
   let choice : _root_.test.proto3.All.choice_Type := _root_.test.proto3.All.choice_Type.oneof_int32 7
   let base : _root_.test.proto3.All := default
   let val : _root_.test.proto3.All := { base with choice := some choice }
-  let msg ← ofExcept (_root_.test.proto3.All.toMessage val)
+  let msg ← ofExcept (_root_.test.proto3.All.«protobuf.internal».toMessage val)
   assert ((Message.getRecordsOf msg 22).size == 1) "oneof field did not serialize"
-  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  let decoded ← ofExcept (_root_.test.proto3.All.«protobuf.internal».fromMessage msg)
   match decoded.choice with
   | some (.oneof_int32 v) => assertEq v (7 : Int32) "oneof int32 value mismatch"
   | _ => throw (IO.userError "oneof decode mismatch")
@@ -124,7 +126,7 @@ def testOneof : IO Unit := do
 def testOneofLastWins : IO Unit := do
   let msg := Message.set Message.empty 22 (.VARINT 7)
   let msg := Message.set msg 23 (.LEN "later".toUTF8)
-  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  let decoded ← ofExcept (_root_.test.proto3.All.«protobuf.internal».fromMessage msg)
   match decoded.choice with
   | some (.oneof_string v) => assertEq v "later" "oneof should keep the last wire member"
   | _ => throw (IO.userError "oneof last-one-wins mismatch")
@@ -132,13 +134,15 @@ def testOneofLastWins : IO Unit := do
 def testOneofMessageMergesSameCase : IO Unit := do
   let sub1 : _root_.test.proto3.Sub := { id := 1, label := "" }
   let sub2 : _root_.test.proto3.Sub := { id := 0, label := "later" }
-  let msg1 ← ofExcept sub1.toMessage
-  let msg2 ← ofExcept sub2.toMessage
+  let msg1 ← ofExcept
+    (_root_.test.proto3.Sub.«protobuf.internal».toMessage sub1)
+  let msg2 ← ofExcept
+    (_root_.test.proto3.Sub.«protobuf.internal».toMessage sub2)
   let val1 ← ofExcept <| ProtoVal.ofMessage msg1
   let val2 ← ofExcept <| ProtoVal.ofMessage msg2
   let msg := Message.set Message.empty 24 val1
   let msg := Message.set msg 24 val2
-  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  let decoded ← ofExcept (_root_.test.proto3.All.«protobuf.internal».fromMessage msg)
   match decoded.choice with
   | some (.oneof_sub v) =>
       assertEq v.id (1 : Int32) "oneof message merge should retain earlier scalar when later message omits it"
@@ -152,7 +156,7 @@ def testPackedAndUnpacked : IO Unit := do
     rep_int32 := #[(1 : Int32), 2],
     rep_int32_unpacked := #[(3 : Int32), 4]
   }
-  let msg ← ofExcept (_root_.test.proto3.All.toMessage val)
+  let msg ← ofExcept (_root_.test.proto3.All.«protobuf.internal».toMessage val)
   let repPacked := Message.getRecordsOf msg 18
   assert (repPacked.size == 1) "packed repeated field should be a single record"
   match repPacked[0]!.value with
@@ -164,20 +168,20 @@ def testPackedAndUnpacked : IO Unit := do
     match r.value with
     | .VARINT _ => pure ()
     | _ => throw (IO.userError "unpacked repeated field should use VARINT wire type")
-  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  let decoded ← ofExcept (_root_.test.proto3.All.«protobuf.internal».fromMessage msg)
   assertEq decoded.rep_int32 #[(1 : Int32), 2] "packed repeated decode mismatch"
   assertEq decoded.rep_int32_unpacked #[(3 : Int32), 4] "unpacked repeated decode mismatch"
 
 def testPackedAcceptsUnpacked : IO Unit := do
   let msg := Message.set Message.empty 18 (.VARINT 1)
   let msg := Message.set msg 18 (.VARINT 2)
-  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  let decoded ← ofExcept (_root_.test.proto3.All.«protobuf.internal».fromMessage msg)
   assertEq decoded.rep_int32 #[(1 : Int32), 2] "packed field should accept unpacked encoding"
 
 def testUnpackedAcceptsPacked : IO Unit := do
   let packed ← ofExcept (mkPackedVarints #[3, 4])
   let msg := Message.set Message.empty 19 packed
-  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  let decoded ← ofExcept (_root_.test.proto3.All.«protobuf.internal».fromMessage msg)
   assertEq decoded.rep_int32_unpacked #[(3 : Int32), 4] "unpacked field should accept packed encoding"
 
 def testPackedConcatenatesSegments : IO Unit := do
@@ -186,15 +190,15 @@ def testPackedConcatenatesSegments : IO Unit := do
   let msg := Message.set Message.empty 18 packed12
   let msg := Message.set msg 18 packed3
   let msg := Message.set msg 18 (.VARINT 4)
-  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  let decoded ← ofExcept (_root_.test.proto3.All.«protobuf.internal».fromMessage msg)
   assertEq decoded.rep_int32 #[(1 : Int32), 2, 3, 4] "packed repeated field should concatenate multiple packed segments and unpacked records"
 
 def testMapRoundtrip : IO Unit := do
   let map := Std.HashMap.ofList [("a", (1 : Int32)), ("b", (2 : Int32))]
   let base : _root_.test.proto3.All := default
   let val : _root_.test.proto3.All := { base with map_str_int32 := map }
-  let msg ← ofExcept (_root_.test.proto3.All.toMessage val)
-  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  let msg ← ofExcept (_root_.test.proto3.All.«protobuf.internal».toMessage val)
+  let decoded ← ofExcept (_root_.test.proto3.All.«protobuf.internal».fromMessage msg)
   assertEq (decoded.map_str_int32.get? "a") (some (1 : Int32)) "map value mismatch for key a"
   assertEq (decoded.map_str_int32.get? "b") (some (2 : Int32)) "map value mismatch for key b"
 
@@ -203,18 +207,18 @@ def testMapDuplicateKeyLastWins : IO Unit := do
   let entry2 ← ofExcept <| mkMapEntry "dup" (some 9)
   let msg := Message.set Message.empty 21 entry1
   let msg := Message.set msg 21 entry2
-  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  let decoded ← ofExcept (_root_.test.proto3.All.«protobuf.internal».fromMessage msg)
   assertEq (decoded.map_str_int32.get? "dup") (some (9 : Int32)) "duplicate map key should keep last value"
 
 def testMapMissingValueDefaults : IO Unit := do
   let entry ← ofExcept <| mkMapEntry "no_value"
   let msg := Message.set Message.empty 21 entry
-  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  let decoded ← ofExcept (_root_.test.proto3.All.«protobuf.internal».fromMessage msg)
   assertEq (decoded.map_str_int32.get? "no_value") (some (0 : Int32)) "map entry with missing value should use default"
 
 def testUnknownEnum : IO Unit := do
   let msg := Message.set Message.empty 15 (.VARINT 9)
-  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  let decoded ← ofExcept (_root_.test.proto3.All.«protobuf.internal».fromMessage msg)
   match decoded.color with
   | _root_.test.proto3.Color.«Unknown.Value» raw =>
       assertEq raw (9 : Int32) "unknown enum raw value mismatch"
@@ -222,11 +226,11 @@ def testUnknownEnum : IO Unit := do
 
 def testUnknownFields : IO Unit := do
   let msg := Message.set Message.empty 99 (.VARINT 123)
-  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  let decoded ← ofExcept (_root_.test.proto3.All.«protobuf.internal».fromMessage msg)
   match decoded.«Unknown.Fields».get? 99 with
   | some vals => assert (vals.size == 1) "unknown field should be preserved"
   | none => throw (IO.userError "unknown field missing")
-  let roundtrip ← ofExcept (_root_.test.proto3.All.toMessage decoded)
+  let roundtrip ← ofExcept (_root_.test.proto3.All.«protobuf.internal».toMessage decoded)
   assert ((Message.getRecordsOf roundtrip 99).size == 1) "unknown field should round-trip"
 
   let invalid : _root_.test.proto3.All := {
@@ -236,7 +240,7 @@ def testUnknownFields : IO Unit := do
         .VARINT (1 <<< 64)
       ]
   }
-  match invalid.encode with
+  match Protobuf.encode invalid with
   | .error .invalidVarint => pure ()
   | .error error =>
       throw (IO.userError
@@ -254,7 +258,7 @@ def testGroupWireMismatch : IO Unit := do
   }
   let msg := Message.set Message.empty 16 (.GROUPED grouped)
   let msg := Message.set msg 21 (.GROUPED grouped)
-  let decoded ← ofExcept (_root_.test.proto3.All.fromMessage msg)
+  let decoded ← ofExcept (_root_.test.proto3.All.«protobuf.internal».fromMessage msg)
   assert decoded.sub.isNone
     "GROUP wire must not be accepted for an ordinary embedded message"
   assert decoded.map_str_int32.isEmpty

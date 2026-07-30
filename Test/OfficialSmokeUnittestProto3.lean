@@ -49,21 +49,23 @@ private def expectedAllTypesWire : ByteArray := ⟨#[
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match packedSample.encode with
+  match Protobuf.encode packedSample with
   | .ok wire => wire == expectedPackedWire
   | .error _ => false
 
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match allTypesSample.encode with
+  match Protobuf.encode allTypesSample with
   | .ok wire => wire == expectedAllTypesWire
   | .error _ => false
 
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  match _root_.proto3_unittest.TestPackedTypes.decode expectedPackedWire with
+  match
+      Protobuf.decodeThe _root_.proto3_unittest.TestPackedTypes
+        expectedPackedWire with
   | .ok value =>
       value.packed_int32 == #[(150 : Int32), (-1 : Int32)] &&
       value.packed_sint32 == #[(-1 : Int32), (1 : Int32)] &&

@@ -105,6 +105,6 @@ message OneofParentAfterMutualValid {
   OneofParentMutualValidChoice choice = 0;
 }
 
-#check OneofParentImportedValid.encode
-#check OneofParentMutualValid.decode
-#check OneofParentAfterMutualValid.encode
+#synth Protobuf.ProtoMessage OneofParentImportedValid
+#synth Protobuf.ProtoMessage OneofParentMutualValid
+#synth Protobuf.ProtoMessage OneofParentAfterMutualValid

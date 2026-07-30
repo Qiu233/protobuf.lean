@@ -40,7 +40,7 @@ meta def read_proto (srcFile : FilePath) (protoPath : FilePath) : ExceptT String
     (Binary.Get.run (Binary.getThe Encoding.Message) bin |>.toExcept).mapError fun e =>
       s!"failed to parse protoc output: {e}"
   let desc ← liftExcept <|
-    (google.protobuf.FileDescriptorSet.fromMessage data).mapError fun e =>
+    (google.protobuf.FileDescriptorSet.«protobuf.internal».fromMessage data).mapError fun e =>
       s!"failed to parse protoc output: {e}"
   /-
   Keep every transitive descriptor for whole-set static validation, including
@@ -69,7 +69,7 @@ meta def read_proto_files (srcFiles : Array FilePath) (protoPath : FilePath) :
     (Binary.Get.run (Binary.getThe Encoding.Message) bin |>.toExcept).mapError fun e =>
       s!"failed to parse protoc output: {e}"
   let desc ← liftExcept <|
-    (google.protobuf.FileDescriptorSet.fromMessage data).mapError fun e =>
+    (google.protobuf.FileDescriptorSet.«protobuf.internal».fromMessage data).mapError fun e =>
       s!"failed to parse protoc output: {e}"
   -- See `read_proto`: validation needs the complete descriptor graph.
   return desc

@@ -1,6 +1,7 @@
 module
 
 public import Protobuf.Encoding
+public import Protobuf.ProtoMessage
 public import Binary
 meta import Protobuf.Notation
 meta import Protobuf.Elab
@@ -41,6 +42,6 @@ extend A {
 
 #check A.has_w
 
-#eval A.«Default.Value»
+#eval A.«protobuf.internal».«Default.Value»
 #eval default (α := A)
 #eval { : A}

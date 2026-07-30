@@ -2876,14 +2876,18 @@ private def ofProtoExcept (result : Except ProtoError α) : IO α :=
   IO.ofExcept result
 
 private def testCurrentDescriptorFields : IO Unit := do
-  unless Edition.EDITION_2026.toInt32 == (1002 : Int32) do
+  unless Edition.«protobuf.internal».toInt32 Edition.EDITION_2026 ==
+      (1002 : Int32) do
     throw (IO.userError "EDITION_2026 descriptor value changed")
   let features : FeatureSet := {
     enforce_naming_style := some .STYLE2026
     default_symbol_visibility := some .STRICT
     enforce_proto_limits := some .PROTO_LIMITS2026
   }
-  let features' ← ofProtoExcept (FeatureSet.fromMessage (← ofProtoExcept features.toMessage))
+  let features' ← ofProtoExcept
+    (FeatureSet.«protobuf.internal».fromMessage
+      (← ofProtoExcept
+        (FeatureSet.«protobuf.internal».toMessage features)))
   unless features'.enforce_naming_style == features.enforce_naming_style do
     throw (IO.userError "FeatureSet.enforce_naming_style did not roundtrip")
   unless features'.default_symbol_visibility == features.default_symbol_visibility do
@@ -2903,7 +2907,10 @@ private def testCurrentDescriptorFields : IO Unit := do
       visibility := some .VISIBILITY_EXPORT
     }]
   }
-  let file' ← ofProtoExcept (FileDescriptorProto.fromMessage (← ofProtoExcept file.toMessage))
+  let file' ← ofProtoExcept
+    (FileDescriptorProto.«protobuf.internal».fromMessage
+      (← ofProtoExcept
+        (FileDescriptorProto.«protobuf.internal».toMessage file)))
   unless file'.option_dependency == file.option_dependency do
     throw (IO.userError "FileDescriptorProto.option_dependency did not roundtrip")
   unless file'.message_type[0]!.visibility == some .VISIBILITY_LOCAL do

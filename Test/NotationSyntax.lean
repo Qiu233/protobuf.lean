@@ -393,8 +393,10 @@ run_meta do
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  ElaboratedSigned.fromInt32 (-1) == ElaboratedSigned.NEGATIVE &&
-  ElaboratedSigned.NEGATIVE.toInt32 == (-1 : Int32)
+  ElaboratedSigned.«protobuf.internal».fromInt32 (-1) ==
+      ElaboratedSigned.NEGATIVE &&
+    ElaboratedSigned.«protobuf.internal».toInt32
+      ElaboratedSigned.NEGATIVE == (-1 : Int32)
 
 enum ElaboratedRadix {
   ZERO = 0;
@@ -418,9 +420,12 @@ message ElaboratedNumericLiterals {
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  ElaboratedRadix.OCTAL.toInt32 == (63 : Int32) &&
-    ElaboratedRadix.HEX.toInt32 == (64 : Int32) &&
-    ElaboratedRadix.NEGATIVE_OCTAL.toInt32 == (-8 : Int32)
+  ElaboratedRadix.«protobuf.internal».toInt32 ElaboratedRadix.OCTAL ==
+      (63 : Int32) &&
+    ElaboratedRadix.«protobuf.internal».toInt32 ElaboratedRadix.HEX ==
+      (64 : Int32) &&
+    ElaboratedRadix.«protobuf.internal».toInt32
+      ElaboratedRadix.NEGATIVE_OCTAL == (-8 : Int32)
 
 /-- info: true -/
 #guard_msgs (info) in
@@ -455,7 +460,7 @@ message ElaboratedNumericLiterals {
 #guard_msgs (info) in
 #eval
   match
-      ElaboratedNumericLiterals.toMessage {
+      ElaboratedNumericLiterals.«protobuf.internal».toMessage {
         octal_default := some 1
       } with
   | .ok wire =>
@@ -482,17 +487,17 @@ message NumericAliasHolder {
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  NumericAlias.NUMERIC_ALIAS_ZERO ==
+    NumericAlias.NUMERIC_ALIAS_ZERO ==
       NumericAlias.NUMERIC_ALIAS_ZERO_ALIAS &&
-    NumericAlias.Internal.isKnown
+    NumericAlias.«protobuf.internal».isKnown
       NumericAlias.NUMERIC_ALIAS_ZERO_ALIAS &&
     match
-        NumericAliasHolder.toMessage {
+        NumericAliasHolder.«protobuf.internal».toMessage {
           value := NumericAlias.NUMERIC_ALIAS_ZERO_ALIAS
         } with
     | .ok msg =>
         msg.records.isEmpty &&
-          match NumericAliasHolder.fromMessage msg with
+          match NumericAliasHolder.«protobuf.internal».fromMessage msg with
           | .ok decoded =>
               decoded.value ==
                   NumericAlias.NUMERIC_ALIAS_ZERO_ALIAS &&
@@ -503,11 +508,11 @@ message NumericAliasHolder {
 /-- info: true -/
 #guard_msgs (info) in
 #eval
-  EnumHelperNameCollision.Internal.isKnown
+  EnumHelperNameCollision.«protobuf.internal».isKnown
       EnumHelperNameCollision.isKnown &&
-    EnumHelperNameCollision.Internal.isKnown
+    EnumHelperNameCollision.«protobuf.internal».isKnown
       EnumHelperNameCollision.Internal &&
-    !EnumHelperNameCollision.Internal.isClosed
+    !EnumHelperNameCollision.«protobuf.internal».isClosed
 
 message ExplicitAccessorCollision {
   optional int32 foo = 1 [default = 7];
@@ -681,11 +686,13 @@ message IntegerDefaultBoundaries {
 #guard_msgs (info) in
 #eval
   let value : IntegerDefaultBoundaries := default
-  IntegerDefaultBoundaries.get_i32_min value == (-2147483648 : Int32) &&
-    IntegerDefaultBoundaries.get_u32_max value == (4294967295 : UInt32) &&
-    IntegerDefaultBoundaries.get_i64_min value ==
+  IntegerDefaultBoundaries.«Explicit.Default.Accessors».i32_min.get value ==
+      (-2147483648 : Int32) &&
+    IntegerDefaultBoundaries.«Explicit.Default.Accessors».u32_max.get value ==
+      (4294967295 : UInt32) &&
+    IntegerDefaultBoundaries.«Explicit.Default.Accessors».i64_min.get value ==
       (-9223372036854775808 : Int64) &&
-    IntegerDefaultBoundaries.get_u64_max value ==
+    IntegerDefaultBoundaries.«Explicit.Default.Accessors».u64_max.get value ==
       (18446744073709551615 : UInt64)
 
 message StaticBinaryDefaults {
@@ -698,7 +705,8 @@ message StaticBinaryDefaults {
 #guard_msgs (info) in
 #eval
   let value : StaticBinaryDefaults := default
-  StaticBinaryDefaults.get_binary value == (⟨#[0, 255]⟩ : ByteArray) &&
-    StaticBinaryDefaults.get_text value == "hi" &&
-    (StaticBinaryDefaults.get_unchecked value).bytes ==
+  StaticBinaryDefaults.«Explicit.Default.Accessors».binary.get value ==
+      (⟨#[0, 255]⟩ : ByteArray) &&
+    StaticBinaryDefaults.«Explicit.Default.Accessors».text.get value == "hi" &&
+    (StaticBinaryDefaults.«Explicit.Default.Accessors».unchecked.get value).bytes ==
       (⟨#[255]⟩ : ByteArray)
