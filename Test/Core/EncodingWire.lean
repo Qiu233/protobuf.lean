@@ -167,6 +167,74 @@ abbrev testSpannedWireParser : Except String Unit := do
     (SpannedMessage.decode (⟨#[0x0b, 0x14]⟩ : ByteArray))
     "spanned parser accepted a mismatching end-group tag"
 
+abbrev testSpannedTypedReaders : Except String Unit := do
+  let varintSource : ByteArray := ⟨#[
+    0xee,
+    0x00, 0x01, 0x96, 0x01,
+    0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0x01,
+    0xdd
+  ]⟩
+  let varints : SpannedRecord := ⟨1, .len {
+    source := varintSource
+    start := 1
+    stop := varintSource.size - 1
+  }⟩
+  assertEq
+    (← ofProtoExcept
+      (varints.appendRepeatedVarint_uint64 #[42]))
+    #[42, 0, 1, 150, 0xffffffffffffffff]
+    "spanned packed varint reader returned the wrong typed values"
+
+  let fixed32s : SpannedRecord := ⟨2, .len {
+    source := ⟨#[
+      0x78, 0x56, 0x34, 0x12,
+      0xef, 0xcd, 0xab, 0x89
+    ]⟩
+    start := 0
+    stop := 8
+  }⟩
+  assertEq
+    (← ofProtoExcept
+      (fixed32s.appendRepeatedI32_fixed32 #[]))
+    #[0x12345678, 0x89abcdef]
+    "spanned packed fixed32 reader returned the wrong typed values"
+
+  let scalar : SpannedRecord :=
+    ⟨3, .varint 0xffffffffffffffff⟩
+  assertEq (← ofProtoExcept scalar.getVarint_int64) (-1)
+    "spanned scalar int64 reader lost two's-complement semantics"
+
+  let utf8 := "borrowed UTF-8".toUTF8
+  let stringRecord : SpannedRecord := ⟨4, .len {
+    source := utf8
+    start := 0
+    stop := utf8.size
+  }⟩
+  assertEq (← ofProtoExcept stringRecord.getString) "borrowed UTF-8"
+    "spanned string reader decoded the wrong payload"
+
+  let nestedBytes : ByteArray := ⟨#[0x08, 0x96, 0x01]⟩
+  let nestedRecord : SpannedRecord := ⟨5, .len {
+    source := nestedBytes
+    start := 0
+    stop := nestedBytes.size
+  }⟩
+  let nested ← ofProtoExcept (nestedRecord.getMessage)
+  assertTrue
+    (nested.records.size == 1 &&
+      nested.records[0]!.fieldNum == 1)
+    "spanned embedded-message reader parsed the wrong records"
+
+  let malformedFixed : SpannedRecord := ⟨6, .len {
+    source := ⟨#[1, 2, 3]⟩
+    start := 0
+    stop := 3
+  }⟩
+  assertProtoFails
+    (malformedFixed.appendRepeatedI32_fixed32 #[])
+    "spanned packed fixed32 reader accepted a partial element"
+
 abbrev testTypedPackedBuilders : Except String Unit := do
   let check {α : Type}
       (values : Array α) (typed : Array α → Except ProtoError ProtoVal)
@@ -348,6 +416,10 @@ abbrev testPackedFixed64 : Except String Unit := do
 /-- info: true -/
 #guard_msgs (info) in
 #eval (match testSpannedWireParser with | .ok () => true | .error _ => false)
+
+/-- info: true -/
+#guard_msgs (info) in
+#eval (match testSpannedTypedReaders with | .ok () => true | .error _ => false)
 
 /-- info: true -/
 #guard_msgs (info) in

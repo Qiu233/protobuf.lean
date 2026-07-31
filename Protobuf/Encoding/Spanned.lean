@@ -218,4 +218,65 @@ partial def SpannedMessage.toMessage
 
 end
 
+mutual
+
+/-- Borrow an owned compatibility value without serializing it. -/
+partial def ProtoVal.toSpannedValue : ProtoVal → SpannedValue
+  | .VARINT value => .varint (UInt64.ofNat value)
+  | .I64 value => .i64 (UInt64.ofBitVec value)
+  | .LEN data => .len {
+      source := data
+      start := 0
+      stop := data.size
+    }
+  | .GROUPED message => .grouped message.toSpannedMessage
+  | .I32 value => .i32 (UInt32.ofBitVec value)
+
+partial def Record.toSpannedRecord
+    (record : Record) : SpannedRecord :=
+  ⟨record.fieldNum, record.value.toSpannedValue⟩
+
+partial def Message.toSpannedMessage
+    (message : Message) : SpannedMessage :=
+  ⟨message.records.map Record.toSpannedRecord⟩
+
+end
+
+/-- Concatenate spanned message occurrences in one allocation. -/
+@[noinline]
+def SpannedMessage.combineMany
+    (messages : Array SpannedMessage) : SpannedMessage :=
+  let capacity :=
+    messages.foldl (init := 0) fun size message =>
+      size + message.records.size
+  let records :=
+    messages.foldl (init := Array.emptyWithCapacity capacity)
+      fun records message =>
+        message.records.foldl (init := records) Array.push
+  ⟨records⟩
+
+/--
+Amortized-constant accumulator for singular embedded-message occurrences on
+the borrowed decoding path.
+-/
+inductive SpannedMessageChunks where
+  | empty
+  | single (message : SpannedMessage)
+  | many (messages : Array SpannedMessage)
+deriving Inhabited
+
+def SpannedMessageChunks.push
+    (chunks : SpannedMessageChunks)
+    (message : SpannedMessage) : SpannedMessageChunks :=
+  match chunks with
+  | .empty => .single message
+  | .single first => .many #[first, message]
+  | .many messages => .many (messages.push message)
+
+def SpannedMessageChunks.toMessage? :
+    SpannedMessageChunks → Option SpannedMessage
+  | .empty => none
+  | .single message => some message
+  | .many messages => some (SpannedMessage.combineMany messages)
+
 end Protobuf.Encoding
