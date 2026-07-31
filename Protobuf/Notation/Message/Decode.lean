@@ -132,14 +132,17 @@ def construct_fromMessage
   let state := mkIdent `st
   let seen := mkIdent `seen
   let pending := mkIdent `pendingMessages
+  let oneofPending := mkIdent `pendingOneofMessages
   let state' := mkIdent `st'
   let seen' := mkIdent `seen'
   let pending' := mkIdent `pendingMessages'
+  let oneofPending' := mkIdent `pendingOneofMessages'
   let recursionBudget := mkIdent `recursionBudget
   let validateRequired := mkIdent `validateRequired
   let unknownField := mkIdent `«Unknown.Fields»
   let unknownProj := mkIdentFrom name (name.getId.append unknownField.getId)
   let oneofFields := fields.filter (fun x => x.oneof_type?.isSome)
+  let hasOneofs := !oneofFields.isEmpty
   let regularFields := fields.filter (fun x => x.oneof_type?.isNone)
   let regularMessageFields := regularFields.filter (fun x =>
     x.map_info?.isNone &&
@@ -161,14 +164,27 @@ def construct_fromMessage
   Singular message fields cannot be decoded occurrence-by-occurrence: protobuf
   first merges all occurrences and only then constructs the resulting child.
   `pendingMessages` stores their already parsed wire messages until the fold is
-  complete. Nested decoders run in partial mode; the outermost generated
-  decoder validates required initialization on the final typed tree, after all
-  parse errors have been observed. This remains generated, statically typed
-  code; the array is only an internal accumulator, not reflection.
+  complete. `pendingOneofMessages` stores the raw payload of a currently active
+  message-valued oneof member; scalar members live directly in `state`.
+  Nested decoders run in partial mode; the outermost generated decoder validates
+  required initialization on the final typed tree, after all parse errors have
+  been observed. These arrays are generated internal accumulators, not
+  reflection.
   -/
-  let stateTy ← `(($name × Array Bool × Array (Option Protobuf.Encoding.Message)))
-  let mkState : Term → Term → Term → CommandElabM Term := fun st sn pd => do
-    `((($st, $sn, $pd) : $stateTy))
+  let stateTy ←
+    if hasOneofs then
+      `(($name × Array Bool ×
+        Array (Option Protobuf.Encoding.Message) ×
+        Array (Option (Nat × Protobuf.Encoding.Message))))
+    else
+      `(($name × Array Bool ×
+        Array (Option Protobuf.Encoding.Message)))
+  let mkState : Term → Term → Term → CommandElabM Term :=
+    fun st sn pd => do
+      if hasOneofs then
+        `((($st, $sn, $pd, $oneofPending:ident) : $stateTy))
+      else
+        `((($st, $sn, $pd) : $stateTy))
   let unknownState ← mkState state' seen pending
   let unknownBody ← `(do
     let $state':ident : $name := {
@@ -184,9 +200,11 @@ def construct_fromMessage
     state,
     seen,
     pending,
+    oneofPending? := if hasOneofs then some oneofPending else none,
     state',
     seen',
     pending',
+    oneofPending'? := if hasOneofs then some oneofPending' else none,
     recursionBudget,
     unknownField,
     unknownProj,
@@ -201,21 +219,26 @@ def construct_fromMessage
   let pendingInit ← `(Parser.Term.doSeqItem|
     let $pending:ident : Array (Option Protobuf.Encoding.Message) :=
       Array.replicate $(quote regularMessageFields.size) Option.none)
+  let oneofPendingInits : Array DoSeqItem ←
+    if hasOneofs then
+      let init ← `(Parser.Term.doSeqItem|
+        let $oneofPending:ident :
+            Array (Option (Nat × Protobuf.Encoding.Message)) :=
+          Array.replicate $(quote oneofFields.size) Option.none)
+      pure #[init]
+    else
+      pure #[]
   let foldAcc := mkIdent `acc
   /-
-  Oneofs are intentionally deferred during the main fold because their semantics
-  span all members of the union ("last one wins", with same-member submessages
-  merged). The message-level field has dummy number zero, so each oneof emits a
-  statically generated record classifier for its real member numbers and wire
-  types. Classification does not recursively decode message values; the
-  whole-message oneof pass below decodes each winning or cleared message case
-  once. A non-member, wrong-wire record, or unknown CLOSED enum value falls
-  through to Unknown.Fields.
+  Each oneof contributes a generated record classifier and accumulator
+  transition. The main wire scan updates the matching slot immediately:
+  scalars obey last-one-wins, while consecutive occurrences of the same
+  message member merge raw wire payloads until finalize. A non-member,
+  wrong-wire record, or unknown CLOSED enum value falls through to
+  Unknown.Fields.
   -/
-  let pureState ← mkState state seen pending
   let oneofDispatch ←
-    constructOneofDispatch
-      oneofFields.toList recVar pureState unknownBody
+    constructOneofDispatch branchContext oneofFields.zipIdx.toList
   let fallback ← mkIdent <$> mkFreshUserName `fallback
   let fallbackInit ← `(Parser.Term.doSeqItem|
     let $fallback:ident :
@@ -252,6 +275,19 @@ def construct_fromMessage
           let chunkDispatch ←
             constructBalancedDispatch
               recVar chunkFallback chunkCases 0 chunkCases.size
+          let chunkPendingProjection ←
+            if hasOneofs then
+              `(($chunkAcc:ident).2.2.1)
+            else
+              `(($chunkAcc:ident).2.2)
+          let chunkOneofPendingBinds : Array DoSeqItem ←
+            if hasOneofs then
+              let bind ← `(Parser.Term.doSeqItem|
+                let $oneofPending:ident :=
+                  ($chunkAcc:ident).2.2.2)
+              pure #[bind]
+            else
+              pure #[]
           let chunkCommand ← `(partial def $chunkId:ident :
               (Unit → Except Protobuf.Encoding.ProtoError $stateTy) →
               $stateTy →
@@ -262,7 +298,8 @@ def construct_fromMessage
                 $recursionBudget:ident => do
               let $state:ident := ($chunkAcc:ident).1
               let $seen:ident := ($chunkAcc:ident).2.1
-              let $pending:ident := ($chunkAcc:ident).2.2
+              let $pending:ident := $chunkPendingProjection:term
+              $chunkOneofPendingBinds*
               $chunkDispatch:term)
           pure (maxFieldNum, chunkId, chunkCommand)
       let dispatch ←
@@ -277,41 +314,75 @@ def construct_fromMessage
   -/
   let dispatchBody ←
     recoverInvalidWireType stateTy dispatchBody unknownBody
+  let initialFoldState ← mkState state seen pending
+  let foldPendingProjection ←
+    if hasOneofs then
+      `(($acc:ident).2.2.1)
+    else
+      `(($acc:ident).2.2)
+  let foldOneofPendingBinds : Array DoSeqItem ←
+    if hasOneofs then
+      let bind ← `(Parser.Term.doSeqItem|
+        let $oneofPending:ident := ($acc:ident).2.2.2)
+      pure #[bind]
+    else
+      pure #[]
   let foldExpr ← `((Protobuf.Encoding.Message.records $msg).foldlM
-      (init := ((($state:ident, $seen:ident, $pending:ident) : $stateTy)))
+      (init := $initialFoldState:term)
       (fun ($acc:ident : $stateTy) $recVar:ident => do
         let $state:ident := ($acc:ident).1
         let $seen:ident := ($acc:ident).2.1
-        let $pending:ident := ($acc:ident).2.2
+        let $pending:ident := $foldPendingProjection:term
+        $foldOneofPendingBinds*
         $fallbackInit
         $dispatchBody:term))
   let foldBody ← `(Parser.Term.doSeqItem| let $foldAcc:ident : $stateTy ← $foldExpr:term)
   let stateAfterFold := mkIdent `st
   let seenAfterFold := mkIdent `seen
   let pendingAfterFold := mkIdent `pendingMessages
+  let oneofPendingAfterFold := mkIdent `pendingOneofMessages
   let foldStateBind ← `(Parser.Term.doSeqItem| let $stateAfterFold:ident : $name := ($foldAcc:ident).1)
   let foldSeenBind ← `(Parser.Term.doSeqItem| let $seenAfterFold:ident : Array Bool := ($foldAcc:ident).2.1)
+  let pendingAfterFoldProjection ←
+    if hasOneofs then
+      `(($foldAcc:ident).2.2.1)
+    else
+      `(($foldAcc:ident).2.2)
   let foldPendingBind ← `(Parser.Term.doSeqItem|
     let $pendingAfterFold:ident : Array (Option Protobuf.Encoding.Message) :=
-      ($foldAcc:ident).2.2)
+      $pendingAfterFoldProjection:term)
+  let foldOneofPendingBinds : Array DoSeqItem ←
+    if hasOneofs then
+      let bind ← `(Parser.Term.doSeqItem|
+        let $oneofPendingAfterFold:ident :
+            Array (Option (Nat × Protobuf.Encoding.Message)) :=
+          ($foldAcc:ident).2.2.2)
+      pure #[bind]
+    else
+      pure #[]
   let (messageDecodes, stateAfterMessages) ←
     constructPendingMessageDecodes
       name stateAfterFold pendingAfterFold recursionBudget
         regularMessageFields
-  let oneofStatePairs ← oneofFields.foldlM
+  let oneofStatePairs ← oneofFields.zipIdx.foldlM
     (init := (#[], stateAfterMessages))
-    (fun (accState : Array (TSyntax ``Parser.Term.doSeqItem) × Ident) x => do
+    (fun (accState : Array (TSyntax ``Parser.Term.doSeqItem) × Ident)
+        (x, i) => do
       let (items, currentState) := accState
       let field := x.field_name
-      let fromMessage? := x.fromMessage??.get!
+      let finalizePending :=
+        helperIdent x.proto_type "finalizePendingMessage"
       let oneofVal ← mkIdent <$> mkFreshUserName (x.field_name.getId)
       let nextState ← mkIdent <$> mkFreshUserName `st
       let item1 ← `(Parser.Term.doSeqItem|
         let $oneofVal:ident ←
-          $fromMessage?:ident $msg $recursionBudget:ident false)
+          $finalizePending:ident
+            (($(x.field_proj) $currentState:ident,
+              ($oneofPendingAfterFold:ident)[$(quote i)]!))
+            $recursionBudget:ident)
       let item2 ← `(Parser.Term.doSeqItem| let $nextState:ident : $name := { $currentState:ident with $field:ident := $oneofVal:ident })
       pure (items.push item1 |>.push item2, nextState))
-  let oneofDecodes := oneofStatePairs.1
+  let oneofFinalizations := oneofStatePairs.1
   let finalState := oneofStatePairs.2
   let fromMessageId := push_name "fromMessage"
   let requiredValidatorId := push_name "validateRequired"
@@ -330,12 +401,14 @@ def construct_fromMessage
     $stateInit
     $seenInit
     $pendingInit
+    $oneofPendingInits*
     $foldBody
     $foldStateBind
     $foldSeenBind
     $foldPendingBind
+    $foldOneofPendingBinds*
     $messageDecodes*
-    $oneofDecodes*
+    $oneofFinalizations*
     $ret
     )
   return (fromMessageId, dispatchHelpers.push fromMessage)

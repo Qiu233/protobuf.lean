@@ -60,9 +60,11 @@ structure DecodeFoldContext where
   state : Ident
   seen : Ident
   pending : Ident
+  oneofPending? : Option Ident
   state' : Ident
   seen' : Ident
   pending' : Ident
+  oneofPending'? : Option Ident
   recursionBudget : Ident
   unknownField : Ident
   unknownProj : Ident
@@ -74,7 +76,20 @@ structure DecodeFoldContext where
 private def DecodeFoldContext.mkState
     (ctx : DecodeFoldContext) (state seen pending : Term) :
     CommandElabM Term := do
-  `((($state, $seen, $pending) : $(ctx.stateTy)))
+  match ctx.oneofPending? with
+  | some oneofPending =>
+      `((($state, $seen, $pending, $oneofPending:ident) :
+        $(ctx.stateTy)))
+  | none =>
+      `((($state, $seen, $pending) : $(ctx.stateTy)))
+
+private def DecodeFoldContext.mkStateWithOneof
+    (ctx : DecodeFoldContext) (state seen pending oneofPending : Term) :
+    CommandElabM Term := do
+  if ctx.oneofPending?.isNone then
+    throwError
+      "{decl_name%}: internal error: oneof state requested for a message without oneofs"
+  `((($state, $seen, $pending, $oneofPending) : $(ctx.stateTy)))
 
 private def DecodeFoldContext.seenUpdate
     (ctx : DecodeFoldContext) (field : ProtoFieldMData) :
@@ -99,7 +114,6 @@ private def constructMapBranch
     recursionBudget,
     unknownField := _,
     unknownProj := _,
-    stateTy,
     unknownBody,
     ..
   } := ctx
@@ -116,6 +130,7 @@ private def constructMapBranch
   let entryBudget := mkIdent `entryBudget
   let map := mkIdent `map
   let field := fieldMData.field_name
+  let successState ← ctx.mkState state' seen' pending
   let decodeValue ←
     if mapInfo.value_is_message then
       /-
@@ -153,7 +168,7 @@ private def constructMapBranch
       $field:ident := $map:ident
     }
     let $seen':ident := $seenUpdate:term
-    pure (($state':ident, $seen':ident, $pending:ident) : $stateTy))
+    pure $successState:term)
   match mapInfo.value_enum_type? with
   | none => pure normalBody
   | some _ =>
@@ -196,7 +211,6 @@ private def constructRepeatedBranch
     seen',
     unknownField,
     unknownProj,
-    stateTy,
     unknownBody,
     ..
   } := ctx
@@ -207,6 +221,7 @@ private def constructRepeatedBranch
   `packed` controls serialization only.
   -/
   let xs := mkIdent `xs
+  let successState ← ctx.mkState state' seen' pending
   let normalBody ←
     if fieldMData.enum_type?.isSome then
       pure unknownBody
@@ -222,7 +237,7 @@ private def constructRepeatedBranch
           $field:ident := values
         }
         let $seen':ident := $seenUpdate:term
-        pure (($state':ident, $seen':ident, $pending:ident) : $stateTy))
+        pure $successState:term)
     | none =>
       let decodeRepeated ←
         if fieldMData.options.wired_as_group?.isEqSome true then
@@ -268,7 +283,7 @@ private def constructRepeatedBranch
           $field:ident := values
         }
         let $seen':ident := $seenUpdate:term
-        pure (($state':ident, $seen':ident, $pending:ident) : $stateTy))
+        pure $successState:term)
   match fieldMData.enum_type? with
   | none => pure normalBody
   | some _ =>
@@ -287,7 +302,7 @@ private def constructRepeatedBranch
                 ($(fieldMData.field_proj) $state:ident).push value
             }
             let $seen':ident := $seenUpdate:term
-            pure (($state':ident, $seen':ident, $pending:ident) : $stateTy)
+            pure $successState:term
           else
             $unknownBody:term
       | .LEN _ => do
@@ -326,7 +341,7 @@ private def constructRepeatedBranch
             $unknownField:ident := unknownFields
           }
           let $seen':ident := $seenUpdate:term
-          pure (($state':ident, $seen':ident, $pending:ident) : $stateTy)
+          pure $successState:term
       | _ =>
           throw (.invalidWireType
             s!"expected VARINT or LEN for repeated enum field"))
@@ -342,7 +357,6 @@ private def constructSingularScalarBranch
     pending,
     state',
     seen',
-    stateTy,
     unknownBody,
     ..
   } := ctx
@@ -373,6 +387,7 @@ private def constructSingularScalarBranch
   let value := mkIdent `value
   match fieldMData.mod with
   | .optional | .required =>
+    let unchangedState ← ctx.mkState state seen pending
     let successState ← ctx.mkState state' seen pending
     match fieldMData.enum_type? with
     | none =>
@@ -398,7 +413,7 @@ private def constructSingularScalarBranch
             if $enumIsClosed:ident then
               $unknownBody:term
             else
-              pure (($state:ident, $seen:ident, $pending:ident) : $stateTy))
+              pure $unchangedState:term)
   | .default =>
     let unchangedState ← ctx.mkState state seen pending
     let successState ← ctx.mkState state' seen' pending
@@ -497,16 +512,44 @@ def constructRegularBranches
   fields.mapM (constructRegularBranch ctx)
 
 def constructOneofDispatch
-    (oneofs : List ProtoFieldMData) (recVar : Ident)
-    (knownState unknownBody : Term) : CommandElabM Term := do
+    (ctx : DecodeFoldContext)
+    (oneofs : List (ProtoFieldMData × Nat)) : CommandElabM Term := do
   match oneofs with
-  | [] => pure unknownBody
-  | field :: rest =>
+  | [] => pure ctx.unknownBody
+  | (field, pendingIndex) :: rest =>
     let fallback ←
-      constructOneofDispatch rest recVar knownState unknownBody
+      constructOneofDispatch ctx rest
     let acceptsRecord := helperIdent field.proto_type "acceptsRecord"
-    `(if $acceptsRecord:ident $recVar:ident then
-        pure $knownState:term
+    let decodeRecord := helperIdent field.proto_type "decodeRecord"
+    let oneofValue ←
+      mkIdent <$> mkFreshUserName field.field_name.getId
+    let pendingValue ←
+      mkIdent <$> mkFreshUserName `pendingOneofMessage
+    let state' := ctx.state'
+    let some oneofPending := ctx.oneofPending?
+      | throwError
+          "{decl_name%}: internal error: oneof dispatch has no pending state"
+    let some oneofPending' := ctx.oneofPending'?
+      | throwError
+          "{decl_name%}: internal error: oneof dispatch has no updated pending state"
+    let fieldName := field.field_name
+    let updatedState ←
+      ctx.mkStateWithOneof
+        state' ctx.seen ctx.pending oneofPending'
+    `(if $acceptsRecord:ident $(ctx.recVar) then do
+        let ($oneofValue:ident, $pendingValue:ident) ←
+          $decodeRecord:ident
+            (($(field.field_proj) $(ctx.state)),
+              ($oneofPending:ident)[$(quote pendingIndex)]!)
+            $(ctx.recVar) $(ctx.recursionBudget)
+        let $state':ident : $(ctx.name) := {
+          $(ctx.state) with
+          $fieldName:ident := $oneofValue:ident
+        }
+        let $oneofPending':ident :=
+          ($oneofPending:ident).set!
+            $(quote pendingIndex) $pendingValue:ident
+        pure $updatedState:term
       else
         $fallback:term)
 
