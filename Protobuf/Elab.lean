@@ -12,7 +12,7 @@ public meta register_option protobuf.trace.notation : Bool := { defValue := fals
 
 public meta register_option protobuf.trace.descriptor : Bool := { defValue := false }
 
-syntax inClause := " in " str
+public syntax inClause := " in " str
 
 /-- relative to package root -/
 syntax (name := loadProtoFileCommand) "#load_proto_file " str (inClause)? : command

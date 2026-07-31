@@ -4,7 +4,7 @@ open Lake DSL
 package "protobuf" where
   version := v!"0.1.0"
 
-require binary from git "https://github.com/Lean-zh/binary"
+require binary from git "https://github.com/Lean-zh/binary" @ "ca69df6c3efc2a57dd9647ab23dd84bb0ba76ff1"
 
 @[default_target]
 lean_lib Protobuf where
