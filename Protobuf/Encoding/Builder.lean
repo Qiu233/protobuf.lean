@@ -19,7 +19,8 @@ def Message.push (msg : Message) (r : Record) : Message := {msg with records := 
 def Message.set (msg : Message) (fieldNum : Nat) (value : ProtoVal) : Message := msg.push { fieldNum, value }
 
 /-
-Validate a raw wire tree before a generated encoder passes it to `Binary.Put`.
+Validate a raw wire tree and compute its exact encoded size before passing it
+to `Binary.Put`.
 
 Decoded unknown fields already satisfy these invariants, and statically
 generated builders only construct valid values.  Generated message structures
@@ -27,36 +28,81 @@ also expose `Unknown.Fields`, however, so callers can inject an out-of-domain
 `Nat` varint or field number.  Reject those values explicitly instead of
 letting the low-level `UInt64.ofNat` conversion truncate them.
 -/
+private def varintSize (value : UInt64) : Nat :=
+  if value < 0x80 then 1
+  else if value < 0x4000 then 2
+  else if value < 0x200000 then 3
+  else if value < 0x10000000 then 4
+  else if value < 0x800000000 then 5
+  else if value < 0x40000000000 then 6
+  else if value < 0x2000000000000 then 7
+  else if value < 0x100000000000000 then 8
+  else if value < 0x8000000000000000 then 9
+  else 10
+
 mutual
-  partial def ProtoVal.validateForEncoding : ProtoVal → Except ProtoError Unit
+  partial def ProtoVal.validateAndEncodedSize :
+      ProtoVal → Except ProtoError Nat
     | .VARINT value =>
         if value > (1 <<< 64) - 1 then
           throw .invalidVarint
         else
-          pure ()
+          pure (varintSize (UInt64.ofNat value))
     | .LEN data =>
         if data.size > (1 <<< 31) - 1 then
           throw (.userError
             "length-delimited protobuf value exceeds the 2 GiB limit")
         else
-          pure ()
+          pure (varintSize (UInt64.ofNat data.size) + data.size)
     | .GROUPED message =>
-        message.validateForEncoding
+        message.validateAndEncodedSize
     | .I64 _
+        => pure 8
     | .I32 _ =>
-        pure ()
+        pure 4
 
-  partial def Record.validateForEncoding
-      (record : Record) : Except ProtoError Unit := do
+  partial def Record.validateAndEncodedSize
+      (record : Record) : Except ProtoError Nat := do
     if record.fieldNum == 0 || record.fieldNum > (1 <<< 29) - 1 then
       throw (.invalidWireType
         s!"protobuf field number {record.fieldNum} is outside 1..536870911")
-    record.value.validateForEncoding
+    let wireType : UInt64 :=
+      match record.value with
+      | .VARINT _ => 0
+      | .I64 _ => 1
+      | .LEN _ => 2
+      | .GROUPED _ => 3
+      | .I32 _ => 5
+    let keySize :=
+      varintSize ((UInt64.ofNat record.fieldNum <<< 3) ||| wireType)
+    let payloadSize ← record.value.validateAndEncodedSize
+    if record.value.isGROUPED then
+      -- A group has both a start and an end tag of the same encoded size.
+      return keySize + payloadSize + keySize
+    return keySize + payloadSize
 
-  partial def Message.validateForEncoding
-      (message : Message) : Except ProtoError Unit :=
-    message.records.forM Record.validateForEncoding
+  partial def Message.validateAndEncodedSize
+      (message : Message) : Except ProtoError Nat := do
+    let mut size := 0
+    for record in message.records do
+      size := size + (← record.validateAndEncodedSize)
+    return size
 end
+
+partial def ProtoVal.validateForEncoding
+    (value : ProtoVal) : Except ProtoError Unit := do
+  let _ ← value.validateAndEncodedSize
+  pure ()
+
+partial def Record.validateForEncoding
+    (record : Record) : Except ProtoError Unit := do
+  let _ ← record.validateAndEncodedSize
+  pure ()
+
+partial def Message.validateForEncoding
+    (message : Message) : Except ProtoError Unit := do
+  let _ ← message.validateAndEncodedSize
+  pure ()
 
 @[always_inline]
 private def ProtoVal.ofLengthDelimited (data : ByteArray) :
@@ -68,12 +114,14 @@ private def ProtoVal.ofLengthDelimited (data : ByteArray) :
 @[noinline]
 def ProtoVal.ofMessage : Message → Except Protobuf.Encoding.ProtoError ProtoVal := fun s =>
   do
-    s.validateForEncoding
-    ProtoVal.ofLengthDelimited (Put.run (put s))
+    let encodedSize ← s.validateAndEncodedSize
+    if encodedSize > (1 <<< 31) - 1 then
+      throw (.userError "length-delimited protobuf value exceeds the 2 GiB limit")
+    ProtoVal.ofLengthDelimited (Put.run (put s) encodedSize)
 
 @[noinline]
 def ProtoVal.ofGroup : Message → Except Protobuf.Encoding.ProtoError ProtoVal := fun s => do
-  s.validateForEncoding
+  let _ ← s.validateAndEncodedSize
   return ProtoVal.GROUPED s
 
 @[always_inline]

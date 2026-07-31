@@ -275,10 +275,10 @@ def construct_encode (name : Ident) (push_name : String → Ident) (toMessage : 
   let encodeId := push_name "encode"
   let s ← `(partial def $encodeId:ident : $name → Except Encoding.ProtoError ByteArray := fun x => do
     let wireMsg ← $toMessage:ident x
-    wireMsg.validateForEncoding
-    let bytes := Binary.Put.run (Binary.put wireMsg)
-    if bytes.size > (1 <<< 31) - 1 then
+    let encodedSize ← wireMsg.validateAndEncodedSize
+    if encodedSize > (1 <<< 31) - 1 then
       throw (.userError "serialized protobuf message exceeds the 2 GiB limit")
+    let bytes := Binary.Put.run (Binary.put wireMsg) encodedSize
     return bytes)
   return (encodeId, s)
 

@@ -738,11 +738,11 @@ def DynamicMessage.validateKnownFields
 
 def DynamicMessage.encode (message : DynamicMessage) :
     Except ReflectionError ByteArray := do
-  let _ ← mapWireError message.wire.validateForEncoding
-  let bytes := Binary.Put.run (Binary.put message.wire)
-  if bytes.size > 0x7fffffff then
+  let encodedSize ← mapWireError message.wire.validateAndEncodedSize
+  if encodedSize > 0x7fffffff then
     throw (.wire (.userError
       "serialized protobuf message exceeds the 2 GiB limit"))
+  let bytes := Binary.Put.run (Binary.put message.wire) encodedSize
   return bytes
 
 def DynamicMessage.ofStatic

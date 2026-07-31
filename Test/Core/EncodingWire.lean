@@ -105,6 +105,23 @@ abbrev testRawEncodingValidation : Except String Unit := do
   discard <| ofProtoExcept <|
     (Message.set Message.empty 1 (.VARINT 0xffffffffffffffff)).validateForEncoding
 
+  let sized : Message := {
+    records := #[
+      ⟨1, .VARINT 150⟩,
+      ⟨16, .I64 (0x0123456789abcdef : UInt64).toBitVec⟩,
+      ⟨2, .LEN ⟨#[1, 2, 3]⟩⟩,
+      ⟨3, .GROUPED {
+        records := #[⟨4, .I32 (0x12345678 : UInt32).toBitVec⟩]
+      }⟩
+    ]
+  }
+  let encodedSize ← ofProtoExcept sized.validateAndEncodedSize
+  let bytes := Binary.Put.run (Binary.put sized) encodedSize
+  assertEq encodedSize 25
+    "validated encoded size did not account for all wire forms"
+  assertEq encodedSize bytes.size
+    "validated encoded size differs from the actual writer output"
+
 abbrev testTypedPackedBuilders : Except String Unit := do
   let check {α : Type}
       (values : Array α) (typed : Array α → Except ProtoError ProtoVal)
