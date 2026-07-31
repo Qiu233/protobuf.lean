@@ -20,6 +20,24 @@ private def siblingHelper (id : Ident) (component : String) : Ident :=
   | .str scope _ => mkIdentFrom id (scope.str component)
   | _ => id
 
+private def InternalType.recordDecoder : InternalType → Ident
+  | .string => mkIdent ``Encoding.Record.getString
+  | .raw_string => mkIdent ``Encoding.Record.getUnvalidatedString
+  | .bytes => mkIdent ``Encoding.Record.getBytes
+  | .bool => mkIdent ``Encoding.Record.getBool
+  | .int32 => mkIdent ``Encoding.Record.getVarint_int32
+  | .uint32 => mkIdent ``Encoding.Record.getVarint_uint32
+  | .int64 => mkIdent ``Encoding.Record.getVarint_int64
+  | .uint64 => mkIdent ``Encoding.Record.getVarint_uint64
+  | .sint32 => mkIdent ``Encoding.Record.getVarint_sint32
+  | .sint64 => mkIdent ``Encoding.Record.getVarint_sint64
+  | .double => mkIdent ``Encoding.Record.getI64_double
+  | .fixed64 => mkIdent ``Encoding.Record.getI64_fixed64
+  | .sfixed64 => mkIdent ``Encoding.Record.getI64_sfixed64
+  | .float => mkIdent ``Encoding.Record.getI32_float
+  | .fixed32 => mkIdent ``Encoding.Record.getI32_fixed32
+  | .sfixed32 => mkIdent ``Encoding.Record.getI32_sfixed32
+
 public def elabOneofDecCore
     (mutEnums mutOneofs messages : NameSet) :
     Syntax → CommandElabM ProtobufDeclBlock := fun stx => do
@@ -73,8 +91,6 @@ public def elabOneofDecCore
       pure (siblingHelper builder "builderPartial")
     else
       `($builder:ident)
-  let decoder? ← mdata.mapM fun m =>
-    m.decoder??.getDM (throwError "{decl_name%}: decoder? is absent")
   let nums := mdata.map ProtoFieldMData.field_num
   let toMessageId := push_name "toMessage"
   let toMessage ← `(partial def $toMessageId:ident : $name → Except Protobuf.Encoding.ProtoError Protobuf.Encoding.Message := fun val => do
@@ -132,7 +148,6 @@ public def elabOneofDecCore
           | _, new => new)
   let msg ← mkIdent <$> mkFreshUserName `msg
   let recVar := mkIdent `r
-  let recMsg := mkIdent `recordMsg
   let recursionBudget := mkIdent `recursionBudget
   let validateRequired := mkIdent `validateRequired
   let state := mkIdent `st
@@ -211,59 +226,10 @@ public def elabOneofDecCore
     partial def $acceptsRecordId:ident
         ($acceptsRecordArg : Protobuf.Encoding.Record) : Bool :=
       $acceptsBody:term)
-  let validatePending := mkIdent `validatePending
+  let validatePendingId := push_name "validatePendingMessage"
+  let pending := mkIdent `pending
   let pendingField := mkIdent `pendingField
   let pendingMessage := mkIdent `pendingMessage
-  let ds ← mdata.zip decoder? |>.mapM fun (x, d) => do
-    let decode ←
-      if x.internal_type?.isSome || x.enum_type?.isSome then
-        if x.enum_type?.isSome then
-          `(do
-            let value? ← ($d:ident $recMsg:ident $(x.field_num):num)
-            match value? with
-            | Option.some v =>
-                let _ ← $validatePending:ident $state:ident
-                pure (((Option.some ($(x.field_proj) v), Option.none) : $stateTy))
-            -- A closed-enum value outside the declared set is an unknown
-            -- field and must not select or clear a oneof case.
-            | Option.none => pure $state:ident)
-        else
-          `(do
-            let Option.some v ← ($d:ident $recMsg:ident $(x.field_num):num)
-              | throw (Protobuf.Encoding.ProtoError.userError "")
-            let _ ← $validatePending:ident $state:ident
-            pure (((Option.some ($(x.field_proj) v), Option.none) : $stateTy)))
-      else
-        let nestedMessages := mkIdent `nestedMessages
-        let nested := mkIdent `nested
-        let combined := mkIdent `combined
-        let getNestedMessages ←
-          if x.options.wired_as_group?.isEqSome true then
-            `(Protobuf.Encoding.Message.getExpandedGroup
-              $recMsg:ident $(x.field_num):num)
-          else
-            `(Protobuf.Encoding.Message.getExpandedMessage
-              $recMsg:ident $(x.field_num):num $recursionBudget:ident)
-        `(do
-          let $nestedMessages:ident ←
-            $getNestedMessages:term
-          let Option.some $nested:ident := $nestedMessages:ident[0]?
-            | throw (Protobuf.Encoding.ProtoError.userError
-                "internal error: a oneof message record decoded to no payload")
-          let $combined:ident ←
-            match ($state:ident).2 with
-            | Option.some (previousField, previous) =>
-                if previousField == $(x.field_num):num then
-                  pure <|
-                    Protobuf.Encoding.Message.combine previous $nested:ident
-                else do
-                  let _ ← $validatePending:ident $state:ident
-                  pure $nested:ident
-            | Option.none => pure $nested:ident
-          pure (((Option.none,
-            Option.some ($(x.field_num):num, $combined:ident)) : $stateTy)))
-    pure (x.field_num.getNat, decode)
-  let pendingState ← mkIdent <$> mkFreshUserName `pendingState
   let rec mkValidatePending
       (fields : List ProtoFieldMData) : CommandElabM Term := do
     match fields with
@@ -286,14 +252,71 @@ public def elabOneofDecCore
         else
           $fallback:term)
   let validatePendingBody ← mkValidatePending messageFields.toList
-  let validatePendingInit ← `(Parser.Term.doSeqItem|
-    let $validatePending:ident :
-        $stateTy → Except Protobuf.Encoding.ProtoError Unit :=
-      fun $pendingState:ident =>
-        match ($pendingState:ident).2 with
-        | Option.none => pure ()
-        | Option.some ($pendingField:ident, $pendingMessage:ident) =>
-            $validatePendingBody:term)
+  let validatePending ← `(
+    /--
+    Decode a displaced message-valued oneof member far enough to observe wire
+    errors. Required-field initialization is deliberately deferred to the
+    final selected member.
+    -/
+    partial def $validatePendingId:ident
+        ($pending :
+          Option (Nat × Protobuf.Encoding.Message))
+        ($recursionBudget : Nat) :
+      Except Protobuf.Encoding.ProtoError Unit :=
+      match $pending:ident with
+      | Option.none => pure ()
+      | Option.some ($pendingField:ident, $pendingMessage:ident) =>
+          $validatePendingBody:term)
+  let ds ← mdata.mapM fun x => do
+    let decode ←
+      if let some internalType := x.internal_type? then
+        let recordDecoder := internalType.recordDecoder
+        `(do
+          let value ← $recordDecoder:ident $recVar:ident
+          let _ ←
+            $validatePendingId:ident
+              ($state:ident).2 $recursionBudget:ident
+          pure (((Option.some ($(x.field_proj) value), Option.none) :
+            $stateTy)))
+      else if x.enum_type?.isSome then
+        let enumFromInt32 := helperIdent x.proto_type "fromInt32"
+        `(do
+          let .VARINT raw := ($recVar:ident).value
+            | throw (.invalidWireType "expected VARINT for oneof enum field")
+          let value :=
+            $enumFromInt32:ident
+              (Int32.ofBitVec (UInt32.ofNat raw).toBitVec)
+          let _ ←
+            $validatePendingId:ident
+              ($state:ident).2 $recursionBudget:ident
+          pure (((Option.some ($(x.field_proj) value), Option.none) :
+            $stateTy)))
+      else
+        let nested := mkIdent `nested
+        let combined := mkIdent `combined
+        let getNested ←
+          if x.options.wired_as_group?.isEqSome true then
+            `(Protobuf.Encoding.Record.getGroup $recVar:ident)
+          else
+            `(Protobuf.Encoding.Record.getMessage
+              $recVar:ident $recursionBudget:ident)
+        `(do
+          let $nested:ident ← $getNested:term
+          let $combined:ident ←
+            match ($state:ident).2 with
+            | Option.some (previousField, previous) =>
+                if previousField == $(x.field_num):num then
+                  pure <|
+                    Protobuf.Encoding.Message.combine previous $nested:ident
+                else do
+                  let _ ←
+                    $validatePendingId:ident
+                      ($state:ident).2 $recursionBudget:ident
+                  pure $nested:ident
+            | Option.none => pure $nested:ident
+          pure (((Option.none,
+            Option.some ($(x.field_num):num, $combined:ident)) : $stateTy)))
+    pure (x.field_num.getNat, decode)
   let rec mkDispatch (cases : List (Nat × Term)) : CommandElabM Term := do
     match cases with
     | [] => `(pure $state:ident)
@@ -304,6 +327,23 @@ public def elabOneofDecCore
         else
           $restTerm:term)
   let dispatch ← mkDispatch ds.toList
+  let decodeRecordId := push_name "decodeRecord"
+  let decodeRecord ← `(
+    /--
+    Apply one wire record to a oneof accumulator.
+
+    Incompatible wire types and undeclared values of closed enums are ignored
+    here so the containing message decoder can retain them as unknown fields.
+    -/
+    partial def $decodeRecordId:ident
+        ($state : $stateTy)
+        ($recVar : Protobuf.Encoding.Record)
+        ($recursionBudget : Nat) :
+      Except Protobuf.Encoding.ProtoError $stateTy := do
+      if $acceptsRecordId:ident $recVar:ident then
+        $dispatch:term
+      else
+        pure $state:ident)
   let rec mkFinalize (fields : List ProtoFieldMData) : CommandElabM Term := do
     match fields with
     | [] =>
@@ -324,7 +364,18 @@ public def elabOneofDecCore
             pure (Option.some ($(x.field_proj) value))
         else
           $fallback:term)
-  let finalize ← mkFinalize messageFields.toList
+  let finalizeBody ← mkFinalize messageFields.toList
+  let finalizePendingId := push_name "finalizePendingMessage"
+  let finalizePending ← `(
+    /-- Decode the final pending message-valued member of a oneof, if any. -/
+    partial def $finalizePendingId:ident
+        ($state : $stateTy)
+        ($recursionBudget : Nat) :
+      Except Protobuf.Encoding.ProtoError (Option $name) :=
+      match ($state:ident).2 with
+      | Option.none => pure ($state:ident).1
+      | Option.some ($pendingField:ident, $pendingMessage:ident) =>
+          $finalizeBody:term)
   let fromMessage?Id := push_name "fromMessage?"
   let requiredValidatorId := push_name "validateRequired"
   let fromMessage? ← `(
@@ -343,25 +394,15 @@ public def elabOneofDecCore
           Protobuf.Encoding.defaultMessageRecursionLimit)
         ($validateRequired : Bool := true) :
       Except Protobuf.Encoding.ProtoError (Option $name) := do
-      $validatePendingInit
       let $state':ident ←
         ($msg).records.foldlM
           (init := (((Option.none, Option.none) : $stateTy)))
-          (fun ($state:ident : $stateTy) $recVar:ident => do
-        let $recMsg:ident := Protobuf.Encoding.Message.mk #[$recVar:ident]
-        match ($dispatch:term :
-            Except Protobuf.Encoding.ProtoError $stateTy) with
-          | .ok next => pure next
-          -- A known field number with an incompatible wire type is an unknown
-          -- field, not a malformed oneof.  Ignore it here so the containing
-          -- message can retain the original record in Unknown.Fields.
-          | .error (.invalidWireType _) => pure $state:ident
-          | .error err => throw err)
+          (fun ($state:ident : $stateTy) $recVar:ident =>
+            $decodeRecordId:ident
+              $state:ident $recVar:ident $recursionBudget:ident)
       let $result:ident ←
-        match ($state':ident).2 with
-        | Option.none => pure ($state':ident).1
-        | Option.some ($pendingField:ident, $pendingMessage:ident) =>
-            $finalize:term
+        $finalizePendingId:ident
+          $state':ident $recursionBudget:ident
       if $validateRequired:ident then
         match $result:ident with
         | Option.none => pure Option.none
@@ -375,7 +416,13 @@ public def elabOneofDecCore
     encodingFunctions := #[toMessage, toMessagePartial],
     mergeFunctions := #[merge],
     validationFunctions := #[requiredValidator],
-    decodingFunctions := #[acceptsRecord, fromMessage?]
+    decodingFunctions := #[
+      acceptsRecord,
+      validatePending,
+      decodeRecord,
+      finalizePending,
+      fromMessage?
+    ]
   }
 
 @[scoped command_elab oneofDec]
