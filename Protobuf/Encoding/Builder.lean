@@ -166,6 +166,91 @@ def ProtoVal.of_packed (xs : Array ProtoVal) : Except ProtoError ProtoVal := do
   ProtoVal.ofLengthDelimited data
 
 @[noinline]
+private def ProtoVal.ofPackedWith
+    (xs : Array α) (write : α → Put) : Except ProtoError ProtoVal :=
+  ProtoVal.ofLengthDelimited <| Binary.Put.run do
+    for value in xs do
+      write value
+
+@[noinline]
+def ProtoVal.ofPackedBool (xs : Array Bool) : Except ProtoError ProtoVal :=
+  ProtoVal.ofPackedWith xs fun value =>
+    put_varint (if value then 1 else 0)
+
+@[noinline]
+def ProtoVal.ofPackedVarint_int32
+    (xs : Array Int32) : Except ProtoError ProtoVal :=
+  ProtoVal.ofPackedWith xs fun value =>
+    put_varint value.toInt64.toUInt64.toNat
+
+@[noinline]
+def ProtoVal.ofPackedVarint_uint32
+    (xs : Array UInt32) : Except ProtoError ProtoVal :=
+  ProtoVal.ofPackedWith xs fun value => put_varint value.toNat
+
+@[noinline]
+def ProtoVal.ofPackedVarint_int64
+    (xs : Array Int64) : Except ProtoError ProtoVal :=
+  ProtoVal.ofPackedWith xs fun value => put_varint value.toUInt64.toNat
+
+@[noinline]
+def ProtoVal.ofPackedVarint_uint64
+    (xs : Array UInt64) : Except ProtoError ProtoVal :=
+  ProtoVal.ofPackedWith xs fun value => put_varint value.toNat
+
+@[noinline]
+def ProtoVal.ofPackedVarint_sint32
+    (xs : Array Int32) : Except ProtoError ProtoVal :=
+  ProtoVal.ofPackedWith xs fun value =>
+    let y := value.toUInt32
+    let signMask : UInt32 := (0 : UInt32) - (y >>> 31)
+    put_varint ((y <<< 1) ^^^ signMask).toNat
+
+@[noinline]
+def ProtoVal.ofPackedVarint_sint64
+    (xs : Array Int64) : Except ProtoError ProtoVal :=
+  ProtoVal.ofPackedWith xs fun value =>
+    let y := value.toUInt64
+    let signMask : UInt64 := (0 : UInt64) - (y >>> 63)
+    put_varint ((y <<< 1) ^^^ signMask).toNat
+
+open Binary.Primitive.LE in
+@[noinline]
+def ProtoVal.ofPackedI64_double
+    (xs : Array Float) : Except ProtoError ProtoVal :=
+  ProtoVal.ofPackedWith xs put
+
+open Binary.Primitive.LE in
+@[noinline]
+def ProtoVal.ofPackedI64_fixed64
+    (xs : Array UInt64) : Except ProtoError ProtoVal :=
+  ProtoVal.ofPackedWith xs put
+
+open Binary.Primitive.LE in
+@[noinline]
+def ProtoVal.ofPackedI64_sfixed64
+    (xs : Array Int64) : Except ProtoError ProtoVal :=
+  ProtoVal.ofPackedWith xs put
+
+open Binary.Primitive.LE in
+@[noinline]
+def ProtoVal.ofPackedI32_float
+    (xs : Array Float32) : Except ProtoError ProtoVal :=
+  ProtoVal.ofPackedWith xs put
+
+open Binary.Primitive.LE in
+@[noinline]
+def ProtoVal.ofPackedI32_fixed32
+    (xs : Array UInt32) : Except ProtoError ProtoVal :=
+  ProtoVal.ofPackedWith xs put
+
+open Binary.Primitive.LE in
+@[noinline]
+def ProtoVal.ofPackedI32_sfixed32
+    (xs : Array Int32) : Except ProtoError ProtoVal :=
+  ProtoVal.ofPackedWith xs put
+
+@[noinline]
 def Message.wire_map
     (msg : Message) (fields : Std.HashMap Nat (Array ProtoVal)) : Message :=
   fields.fold (init := msg) fun msg fieldNum values =>

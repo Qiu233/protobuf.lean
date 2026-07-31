@@ -19,6 +19,24 @@ private def siblingHelper (id : Ident) (component : String) : Ident :=
   | .str scope _ => mkIdentFrom id (scope.str component)
   | _ => id
 
+private def InternalType.packedBuilder? : InternalType → Option Ident
+  | .bool => some <| mkIdent ``Encoding.ProtoVal.ofPackedBool
+  | .int32 => some <| mkIdent ``Encoding.ProtoVal.ofPackedVarint_int32
+  | .uint32 => some <| mkIdent ``Encoding.ProtoVal.ofPackedVarint_uint32
+  | .int64 => some <| mkIdent ``Encoding.ProtoVal.ofPackedVarint_int64
+  | .uint64 => some <| mkIdent ``Encoding.ProtoVal.ofPackedVarint_uint64
+  | .sint32 => some <| mkIdent ``Encoding.ProtoVal.ofPackedVarint_sint32
+  | .sint64 => some <| mkIdent ``Encoding.ProtoVal.ofPackedVarint_sint64
+  | .double => some <| mkIdent ``Encoding.ProtoVal.ofPackedI64_double
+  | .fixed64 => some <| mkIdent ``Encoding.ProtoVal.ofPackedI64_fixed64
+  | .sfixed64 => some <| mkIdent ``Encoding.ProtoVal.ofPackedI64_sfixed64
+  | .float => some <| mkIdent ``Encoding.ProtoVal.ofPackedI32_float
+  | .fixed32 => some <| mkIdent ``Encoding.ProtoVal.ofPackedI32_fixed32
+  | .sfixed32 => some <| mkIdent ``Encoding.ProtoVal.ofPackedI32_sfixed32
+  | .string
+  | .raw_string
+  | .bytes => none
+
 private def construct_toMessageBody
     (val msg validateRequired : Ident)
     (fields : Array ProtoFieldMData) :
@@ -119,12 +137,23 @@ private def construct_toMessageBody
         `(Parser.Term.doSeqItem| let $msg ← $field_num:num <~? (Option.mapM $fieldBuilder:term ($field_proj $val)) # $msg)
       | .repeated =>
         if options.packed?.isEqSome true then
-          `(Parser.Term.doSeqItem|
-            let $msg ← do
-              if $test_unset ($field_proj $val) then
-                pure $msg
-              else
-                $field_num:num <~p (Array.mapM $fieldBuilder:term ($field_proj $val)) # $msg)
+          match internal_type?.bind InternalType.packedBuilder? with
+          | some packedBuilder =>
+            `(Parser.Term.doSeqItem|
+              let $msg ← do
+                if $test_unset ($field_proj $val) then
+                  pure $msg
+                else
+                  $field_num:num <~
+                    ($packedBuilder:ident ($field_proj $val)) # $msg)
+          | none =>
+            `(Parser.Term.doSeqItem|
+              let $msg ← do
+                if $test_unset ($field_proj $val) then
+                  pure $msg
+                else
+                  $field_num:num <~p
+                    (Array.mapM $fieldBuilder:term ($field_proj $val)) # $msg)
         else
           `(Parser.Term.doSeqItem|
             let $msg ← do

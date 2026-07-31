@@ -31,6 +31,12 @@ abbrev packedPayload (result : Except ProtoError ProtoVal) : Except String ByteA
   | .LEN payload => pure payload
   | _ => throw "packed builder produced a non-length-delimited value"
 
+abbrev genericPackedPayload
+    (values : Array α) (builder : α → Except ProtoError ProtoVal) :
+    Except String ByteArray := do
+  let values ← ofProtoExcept (values.mapM builder)
+  packedPayload (ProtoVal.of_packed values)
+
 abbrev testPackedBuilderVectors : Except String Unit := do
   assertEq (← packedPayload (ProtoVal.of_packed #[])) ByteArray.empty
     "an empty packed sequence must produce a valid empty payload"
@@ -98,6 +104,52 @@ abbrev testRawEncodingValidation : Except String Unit := do
 
   discard <| ofProtoExcept <|
     (Message.set Message.empty 1 (.VARINT 0xffffffffffffffff)).validateForEncoding
+
+abbrev testTypedPackedBuilders : Except String Unit := do
+  let check {α : Type}
+      (values : Array α) (typed : Array α → Except ProtoError ProtoVal)
+      (scalar : α → Except ProtoError ProtoVal) (description : String) := do
+    assertEq (← packedPayload (typed values))
+      (← genericPackedPayload values scalar) description
+
+  check #[false, true, true] ProtoVal.ofPackedBool ProtoVal.ofBool
+    "typed packed bool encoding differs from scalar encoding"
+  check #[(-1), 0, 150, Int32.maxValue]
+    ProtoVal.ofPackedVarint_int32 ProtoVal.ofVarint_int32
+    "typed packed int32 encoding differs from scalar encoding"
+  check #[0, 150, (0xffffffff : UInt32)]
+    ProtoVal.ofPackedVarint_uint32 ProtoVal.ofVarint_uint32
+    "typed packed uint32 encoding differs from scalar encoding"
+  check #[Int64.minValue, (-1), 0, Int64.maxValue]
+    ProtoVal.ofPackedVarint_int64 ProtoVal.ofVarint_int64
+    "typed packed int64 encoding differs from scalar encoding"
+  check #[0, 150, (0xffffffffffffffff : UInt64)]
+    ProtoVal.ofPackedVarint_uint64 ProtoVal.ofVarint_uint64
+    "typed packed uint64 encoding differs from scalar encoding"
+  check #[Int32.minValue, (-1), 0, 1, Int32.maxValue]
+    ProtoVal.ofPackedVarint_sint32 ProtoVal.ofVarint_sint32
+    "typed packed sint32 encoding differs from scalar encoding"
+  check #[Int64.minValue, (-1), 0, 1, Int64.maxValue]
+    ProtoVal.ofPackedVarint_sint64 ProtoVal.ofVarint_sint64
+    "typed packed sint64 encoding differs from scalar encoding"
+  check #[0.0, -1.5, 3.25]
+    ProtoVal.ofPackedI64_double ProtoVal.ofI64_double
+    "typed packed double encoding differs from scalar encoding"
+  check #[0, 1, (0xffffffffffffffff : UInt64)]
+    ProtoVal.ofPackedI64_fixed64 ProtoVal.ofI64_fixed64
+    "typed packed fixed64 encoding differs from scalar encoding"
+  check #[Int64.minValue, (-1), 0, Int64.maxValue]
+    ProtoVal.ofPackedI64_sfixed64 ProtoVal.ofI64_sfixed64
+    "typed packed sfixed64 encoding differs from scalar encoding"
+  check #[(0.0 : Float32), -1.5, 3.25]
+    ProtoVal.ofPackedI32_float ProtoVal.ofI32_float
+    "typed packed float encoding differs from scalar encoding"
+  check #[0, 1, (0xffffffff : UInt32)]
+    ProtoVal.ofPackedI32_fixed32 ProtoVal.ofI32_fixed32
+    "typed packed fixed32 encoding differs from scalar encoding"
+  check #[Int32.minValue, (-1), 0, Int32.maxValue]
+    ProtoVal.ofPackedI32_sfixed32 ProtoVal.ofI32_sfixed32
+    "typed packed sfixed32 encoding differs from scalar encoding"
 
 abbrev testZigZagVectors : Except String Unit := do
   assertEq (← builtVarint (ProtoVal.ofVarint_sint32 0)) 0
@@ -222,6 +274,10 @@ abbrev testPackedFixed64 : Except String Unit := do
 /-- info: true -/
 #guard_msgs (info) in
 #eval (match testPackedBuilderVectors with | .ok () => true | .error _ => false)
+
+/-- info: true -/
+#guard_msgs (info) in
+#eval (match testTypedPackedBuilders with | .ok () => true | .error _ => false)
 
 /-- info: true -/
 #guard_msgs (info) in
