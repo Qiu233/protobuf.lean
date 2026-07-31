@@ -53,12 +53,15 @@ private structure MessageData where
   fileName : String
   fullName : String
   proto : DescriptorProto
+  fieldsByNumber : Std.HashMap Int32 Nat
 
 private structure EnumData where
   fileName : String
   fullName : String
   proto : EnumDescriptorProto
   isClosed : Bool
+  valuesByName : Std.HashMap String Nat
+  valuesByNumber : Std.HashMap Int32 Nat
 
 private structure EnumValueData where
   fileName : String
@@ -338,12 +341,24 @@ private def fieldEffectiveType
 private def enumSymbols
     (fileName enumFullName valueScope : String) (enum : EnumDescriptorProto)
     (closed : Bool) : Except PoolError (Array (String × SymbolData)) := do
+  let mut valuesByName : Std.HashMap String Nat := {}
+  let mut valuesByNumber : Std.HashMap Int32 Nat := {}
+  for index in [:enum.value.size] do
+    let value := enum.value[index]!
+    if let some name := value.name then
+      if valuesByName[name]?.isNone then
+        valuesByName := valuesByName.insert name index
+    if let some number := value.number then
+      if valuesByNumber[number]?.isNone then
+        valuesByNumber := valuesByNumber.insert number index
   let mut out : Array (String × SymbolData) :=
     #[(enumFullName, .enum {
       fileName
       fullName := enumFullName
       proto := enum
       isClosed := closed
+      valuesByName
+      valuesByNumber
     })]
   for index in [:enum.value.size] do
     let value := enum.value[index]!
@@ -381,7 +396,17 @@ private partial def collectMessage
   let enumType :=
     (message.options.bind (·.features) |>.bind (·.enum_type)).orElse
       (fun _ => inheritedEnumType)
-  let mut out := #[(fullName, .message { fileName, fullName, proto := message })]
+  let mut fieldsByNumber : Std.HashMap Int32 Nat := {}
+  for index in [:message.field.size] do
+    if let some number := message.field[index]!.number then
+      if fieldsByNumber[number]?.isNone then
+        fieldsByNumber := fieldsByNumber.insert number index
+  let mut out := #[(fullName, .message {
+    fileName
+    fullName
+    proto := message
+    fieldsByNumber
+  })]
   for field in message.field do
     let fieldName ← requiredName s!"field in `{fullName}`" field.name
     let fieldFullName := qualify fullName fieldName
@@ -790,8 +815,8 @@ def MessageDescriptor.findFieldByNumber
     (descriptor : MessageDescriptor) (number : Int32) :
     IO (Option FieldDescriptor) := do
   let some data ← getMessageData descriptor | return none
-  let some field := data.proto.field.find? fun field => field.number == some number
-    | return none
+  let some index := data.fieldsByNumber[number]? | return none
+  let some field := data.proto.field[index]? | return none
   return field.name.map fun name =>
     { pool := descriptor.pool, fullName := qualify descriptor.fullName name }
 
@@ -828,16 +853,14 @@ def EnumDescriptor.findValueByName
     (descriptor : EnumDescriptor) (name : String) :
     IO (Option EnumValueDescriptor) := do
   let some data ← getEnumData descriptor | return none
-  let some index := data.proto.value.findIdx? fun value => value.name == some name
-    | return none
+  let some index := data.valuesByName[name]? | return none
   return some { enum := descriptor, index }
 
 def EnumDescriptor.findValueByNumber
     (descriptor : EnumDescriptor) (number : Int32) :
     IO (Option EnumValueDescriptor) := do
   let some data ← getEnumData descriptor | return none
-  let some index := data.proto.value.findIdx? fun value => value.number == some number
-    | return none
+  let some index := data.valuesByNumber[number]? | return none
   return some { enum := descriptor, index }
 
 def EnumValueDescriptor.toProto (descriptor : EnumValueDescriptor) :

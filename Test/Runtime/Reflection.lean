@@ -47,6 +47,59 @@ private def testGeneratedPool : IO Unit := do
   assert (fields.size == 25)
     "message reflection returned the wrong number of fields"
 
+private def testDescriptorIndexes : IO Unit := do
+  let pool ← DescriptorPool.new
+  let file : FileDescriptorProto := {
+    name := some "indexed-lookups.proto"
+    «syntax» := some "proto3"
+    package := some "indexed"
+    message_type := #[{
+      name := some "Message"
+      field := #[
+        {
+          name := some "first"
+          number := some 1
+          label := some .LABEL_OPTIONAL
+          type := some .TYPE_INT32
+        },
+        {
+          name := some "second"
+          number := some 2
+          label := some .LABEL_OPTIONAL
+          type := some .TYPE_STRING
+        }
+      ]
+    }]
+    enum_type := #[{
+      name := some "Alias"
+      options := some { allow_alias := some true }
+      value := #[
+        { name := some "ALIAS_ZERO", number := some 0 },
+        { name := some "ALSO_ZERO", number := some 0 },
+        { name := some "ALIAS_ONE", number := some 1 }
+      ]
+    }]
+  }
+  let _ ← ofIOExcept (pool.registerFile file)
+  let some descriptor ← pool.findMessageByName "indexed.Message"
+    | throw (IO.userError "indexed message descriptor is absent")
+  let some second ← descriptor.findFieldByNumber 2
+    | throw (IO.userError "field-number index missed a declared field")
+  assert ((← second.name) == some "second")
+    "field-number index returned the wrong field"
+  assert ((← descriptor.findFieldByNumber 3).isNone)
+    "field-number index returned an undeclared field"
+  let some alias ← pool.findEnumByName "indexed.Alias"
+    | throw (IO.userError "indexed enum descriptor is absent")
+  let some alsoZero ← alias.findValueByName "ALSO_ZERO"
+    | throw (IO.userError "enum-name index missed an alias")
+  assert ((← alsoZero.number) == some 0)
+    "enum-name index returned the wrong value"
+  let some firstZero ← alias.findValueByNumber 0
+    | throw (IO.userError "enum-number index missed an alias")
+  assert ((← firstZero.name) == some "ALIAS_ZERO")
+    "enum-number index did not preserve first-declared alias lookup"
+
 private def testPoolIdentityAndLateDependencies : IO Unit := do
   let dependency : FileDescriptorProto := {
     name := some "dependency.proto"
@@ -335,6 +388,7 @@ private def testClosedEnumAndExtensions : IO Unit := do
 
 public def main : IO Unit := do
   testGeneratedPool
+  testDescriptorIndexes
   testPoolIdentityAndLateDependencies
   testEditionsFeatureInheritance
   testEditionsDelimitedDynamicField
