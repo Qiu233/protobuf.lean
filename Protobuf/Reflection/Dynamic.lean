@@ -278,6 +278,57 @@ private inductive OneofReadWindow where
   | inactive
   | active (start : Nat)
 
+private structure OneofFieldInfo where
+  field : FieldDescriptor
+  proto : FieldDescriptorProto
+  oneofIndex : Int32
+
+private structure ActiveOneofField where
+  field : FieldDescriptor
+  start : Nat
+
+private abbrev OneofReadIndex :=
+  Std.HashMap Int32 ActiveOneofField
+
+/--
+Determine every active oneof member in one pass over the wire.
+
+The field-number map avoids comparing each record against every member of
+every oneof. Repeated occurrences of the same member retain their first
+position so singular message members can merge all occurrences since the last
+case change.
+-/
+private def OneofReadIndex.build
+    (message : DynamicMessage) (fields : Array FieldDescriptor) :
+    RM OneofReadIndex := do
+  let mut fieldsByNumber : Std.HashMap Nat OneofFieldInfo := {}
+  for field in fields do
+    let proto ← fieldProto field
+    if let some oneofIndex := proto.oneof_index then
+      let number ← fieldNumber field proto
+      fieldsByNumber := fieldsByNumber.insert number {
+        field, proto, oneofIndex
+      }
+  let mut active : OneofReadIndex := {}
+  for index in [:message.wire.records.size] do
+    let record := message.wire.records[index]!
+    let some info := fieldsByNumber[record.fieldNum]? | continue
+    unless ← valueActivatesOneofField info.field info.proto record.value do
+      continue
+    match active[info.oneofIndex]? with
+    | some previous =>
+        if previous.field != info.field then
+          active := active.insert info.oneofIndex {
+            field := info.field
+            start := index
+          }
+    | none =>
+        active := active.insert info.oneofIndex {
+          field := info.field
+          start := index
+        }
+  return active
+
 /--
 Find the portion of the wire that contributes to one member of a oneof.
 
@@ -288,34 +339,20 @@ do not select a oneof case.
 -/
 private def oneofReadWindow
     (message : DynamicMessage) (field : FieldDescriptor)
-    (proto : FieldDescriptorProto) : RM OneofReadWindow := do
+    (proto : FieldDescriptorProto)
+    (readIndex? : Option OneofReadIndex := none) : RM OneofReadWindow := do
   let some oneofIndex := proto.oneof_index | return .ordinary
-  let some containing ← field.containingMessage
-    | throw (.invalidFieldDescriptor field.fullName
-        "oneof field has no containing message")
-  let fields ← containing.fields
-  let mut siblings : Array
-      (FieldDescriptor × FieldDescriptorProto × Nat) := #[]
-  for sibling in fields do
-    let siblingProto ← fieldProto sibling
-    if siblingProto.oneof_index == some oneofIndex then
-      siblings := siblings.push
-        (sibling, siblingProto, ← fieldNumber sibling siblingProto)
-  let mut targetActive := false
-  let mut targetStart := 0
-  for index in [:message.wire.records.size] do
-    let record := message.wire.records[index]!
-    for (sibling, siblingProto, siblingNumber) in siblings do
-      if record.fieldNum == siblingNumber &&
-          (← valueActivatesOneofField sibling siblingProto record.value) then
-        if sibling == field then
-          if !targetActive then
-            targetStart := index
-          targetActive := true
-        else
-          targetActive := false
-  if targetActive then
-    return .active targetStart
+  let readIndex ←
+    match readIndex? with
+    | some index => pure index
+    | none =>
+        let some containing ← field.containingMessage
+          | throw (.invalidFieldDescriptor field.fullName
+              "oneof field has no containing message")
+        OneofReadIndex.build message (← containing.fields)
+  let some active := readIndex[oneofIndex]? | return .inactive
+  if active.field == field then
+    return .active active.start
   return .inactive
 
 private def decodeEnumValues
@@ -341,10 +378,11 @@ private def decodeEnumValues
 private def decodeValues
     (message : DynamicMessage) (field : FieldDescriptor)
     (proto : FieldDescriptorProto)
-    (occurrenceIndex? : Option FieldOccurrenceIndex := none) :
+    (occurrenceIndex? : Option FieldOccurrenceIndex := none)
+    (oneofReadIndex? : Option OneofReadIndex := none) :
     RM (Array Value) := do
   let start? ←
-    match ← oneofReadWindow message field proto with
+    match ← oneofReadWindow message field proto oneofReadIndex? with
     | .ordinary => pure (some 0)
     | .inactive => pure none
     | .active start => pure (some start)
@@ -679,11 +717,14 @@ can call this operation after `decode`.
 -/
 private partial def validateKnownFieldsM
     (message : DynamicMessage) (remaining : Nat) : RM Unit := do
+  let fields ← message.descriptor.fields
   let occurrenceIndex :=
     FieldOccurrenceIndex.build message.wire
-  for field in ← message.descriptor.fields do
+  let oneofReadIndex ← OneofReadIndex.build message fields
+  for field in fields do
     let proto ← fieldProto field
-    let values ← decodeValues message field proto (some occurrenceIndex)
+    let values ← decodeValues message field proto
+      (some occurrenceIndex) (some oneofReadIndex)
     for value in values do
       if let .message descriptor wire := value then
         let next ← liftWire (descendMessageRecursion remaining)
