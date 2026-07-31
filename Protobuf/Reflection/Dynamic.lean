@@ -65,6 +65,70 @@ structure DynamicMessage where
 deriving Inhabited
 
 /--
+Occurrence metadata for one field number in an immutable wire message.
+
+`first`/`last` address the original globally ordered `records` array; records
+of the same field are linked through `FieldOccurrenceIndex.nextSameField`.
+-/
+private structure FieldOccurrenceBucket where
+  first : Nat
+  last : Nat
+  count : Nat
+
+/--
+Sparse field-occurrence index for dynamic reflection.
+
+The original records remain authoritative and retain cross-field wire order.
+This index only provides same-field traversal, so building it does not alter
+unknown-field or oneof semantics.
+-/
+private structure FieldOccurrenceIndex where
+  fields : Std.HashMap Nat FieldOccurrenceBucket
+  nextSameField : Array (Option Nat)
+
+private def FieldOccurrenceIndex.build
+    (wire : Encoding.Message) : FieldOccurrenceIndex :=
+  Id.run do
+    let mut fields : Std.HashMap Nat FieldOccurrenceBucket := {}
+    let mut nextSameField :=
+      Array.replicate wire.records.size Option.none
+    for index in [:wire.records.size] do
+      let number := wire.records[index]!.fieldNum
+      match fields[number]? with
+      | none =>
+          fields := fields.insert number {
+            first := index
+            last := index
+            count := 1
+          }
+      | some bucket =>
+          nextSameField :=
+            nextSameField.set! bucket.last (some index)
+          fields := fields.insert number {
+            bucket with
+            last := index
+            count := bucket.count + 1
+          }
+    return { fields, nextSameField }
+
+private def FieldOccurrenceIndex.recordsFrom
+    (index : FieldOccurrenceIndex) (wire : Encoding.Message)
+    (number start : Nat) : Array Encoding.Record :=
+  match index.fields[number]? with
+  | none => #[]
+  | some bucket =>
+      Id.run do
+        let mut out :=
+          Array.emptyWithCapacity bucket.count
+        let mut current? := some bucket.first
+        while current?.isSome do
+          let current := current?.get!
+          if current >= start then
+            out := out.push wire.records[current]!
+          current? := index.nextSameField[current]!
+        return out
+
+/--
 An explicit source of extensions. No process-global extension registration is
 consulted unless the caller chooses the generated pool's resolver.
 -/
@@ -276,25 +340,29 @@ private def decodeEnumValues
 
 private def decodeValues
     (message : DynamicMessage) (field : FieldDescriptor)
-    (proto : FieldDescriptorProto) : RM (Array Value) := do
-  let message ←
+    (proto : FieldDescriptorProto)
+    (occurrenceIndex? : Option FieldOccurrenceIndex := none) :
+    RM (Array Value) := do
+  let start? ←
     match ← oneofReadWindow message field proto with
-    | .ordinary => pure message
-    | .inactive => pure { message with wire := .empty }
-    | .active start =>
-        pure { message with
-          wire := {
-            records := message.wire.records.extract
-              start message.wire.records.size
-          }
-        }
+    | .ordinary => pure (some 0)
+    | .inactive => pure none
+    | .active start => pure (some start)
   let number ← fieldNumber field proto
   let type ← fieldType field
   let repeated := isRepeated proto
+  let targetRecords :=
+    match start? with
+    | none => #[]
+    | some start =>
+        let occurrenceIndex :=
+          match occurrenceIndex? with
+          | some index => index
+          | none => FieldOccurrenceIndex.build message.wire
+        occurrenceIndex.recordsFrom message.wire number start
   let compatibleWire : Encoding.Message := {
-    records := message.wire.records.filter fun record =>
-      record.fieldNum == number &&
-        wireValueCompatible type repeated record.value
+    records := targetRecords.filter fun record =>
+      wireValueCompatible type repeated record.value
   }
   let message := { message with wire := compatibleWire }
   match type with
@@ -611,9 +679,11 @@ can call this operation after `decode`.
 -/
 private partial def validateKnownFieldsM
     (message : DynamicMessage) (remaining : Nat) : RM Unit := do
+  let occurrenceIndex :=
+    FieldOccurrenceIndex.build message.wire
   for field in ← message.descriptor.fields do
     let proto ← fieldProto field
-    let values ← decodeValues message field proto
+    let values ← decodeValues message field proto (some occurrenceIndex)
     for value in values do
       if let .message descriptor wire := value then
         let next ← liftWire (descendMessageRecursion remaining)
