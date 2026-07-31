@@ -12,4 +12,6 @@
 - `Integration/` tests the standalone `protoc-gen-lean4` process.
 - `Fixtures/` contains schemas and request/data files consumed by the suites
   above.
-- `Bench/` contains performance workloads and its runner.
+- `Bench/` contains the reproducible engineering benchmark comparing generated
+  binary codecs with official C++ protobuf, Lean JSON, and this package's
+  ProtoJSON implementation. See `Bench/README.md`.

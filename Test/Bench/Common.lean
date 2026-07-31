@@ -140,17 +140,76 @@ def encodeProto (batch : Batch) : IO ByteArray :=
 def decodeProto (bytes : ByteArray) : IO Batch :=
   ofProtoExcept <| Protobuf.decodeThe _root_.bench.perf.Batch bytes
 
-def encodeJson (batch : Batch) : String :=
+def encodeLeanJson (batch : Batch) : String :=
   (toJson batch).compress
 
-def decodeJson (text : String) : IO Batch :=
+def decodeLeanJson (text : String) : IO Batch :=
   ofJsonExcept <| do
     let json ← Json.parse text
     fromJson? json
 
-def batchChecksum (batch : Batch) : Nat :=
-  batch.items.foldl (init := batch.label.length) fun acc item =>
-    acc + item.id.toNat + item.name.length + item.note.length + item.payload.size + item.tags.size
+def encodeProtoJson (batch : Batch) : IO String := do
+  IO.ofExcept (← Protobuf.Json.toJsonString batch)
+
+def decodeProtoJson (text : String) : IO Batch := do
+  IO.ofExcept (← Protobuf.Json.fromJsonString text Batch)
+
+private abbrev fnvOffset : UInt64 := 14695981039346656037
+private abbrev fnvPrime : UInt64 := 1099511628211
+
+@[inline]
+private def hashByte (hash : UInt64) (byte : UInt8) : UInt64 :=
+  (hash ^^^ byte.toUInt64) * fnvPrime
+
+private def hashUInt64 (hash value : UInt64) : UInt64 := Id.run do
+  let mut hash := hash
+  let mut value := value
+  for _ in [0:8] do
+    hash := hashByte hash value.toUInt8
+    value := value >>> 8
+  return hash
+
+private def hashByteArray (hash : UInt64) (bytes : ByteArray) : UInt64 :=
+  bytes.data.foldl hashByte (hashUInt64 hash (UInt64.ofNat bytes.size))
+
+private def hashString (hash : UInt64) (text : String) : UInt64 :=
+  hashByteArray hash text.toUTF8
+
+/--
+A stable, allocation-light content fingerprint used to verify every benchmark
+implementation operates on the same logical message. It covers every known
+field in `Perf.proto`; unknown fields are intentionally absent from this
+workload.
+-/
+def batchContentHash (batch : Batch) : UInt64 := Id.run do
+  let mut hash := hashString fnvOffset batch.label
+  hash := hashUInt64 hash (UInt64.ofNat batch.items.size)
+  for item in batch.items do
+    hash := hashUInt64 hash item.id.toUInt64
+    hash := hashString hash item.name
+    hash := hashUInt64 hash (UInt64.ofNat item.scores.size)
+    for score in item.scores do
+      hash := hashUInt64 hash score.toUInt32.toUInt64
+    hash := hashByteArray hash item.payload
+    match item.«meta» with
+    | none =>
+        hash := hashByte hash 0
+    | some metadata =>
+        hash := hashByte hash 1
+        hash := hashString hash metadata.source
+        hash := hashUInt64 hash metadata.created_at
+        hash := hashByte hash (if metadata.active then 1 else 0)
+    hash := hashUInt64 hash (UInt64.ofNat item.tags.size)
+    for tag in item.tags do
+      hash := hashString hash tag
+    hash := hashString hash item.note
+  return hash
+
+def byteArrayHash (bytes : ByteArray) : UInt64 :=
+  bytes.data.foldl hashByte fnvOffset
+
+def stringHash (text : String) : UInt64 :=
+  byteArrayHash text.toUTF8
 
 /-- O(1) consumer for the timed decode loop. -/
 @[noinline]
@@ -162,5 +221,10 @@ def consumeBatch (batch : Batch) : Nat :=
       batch.items[0]!.id.toNat +
       batch.items[batch.items.size - 1]!.id.toNat +
       batch.label.length
+
+/-- O(1) consumer for timed JSON encoding loops. -/
+@[noinline]
+def consumeString (text : String) : Nat :=
+  text.utf8ByteSize
 
 end Test.Bench

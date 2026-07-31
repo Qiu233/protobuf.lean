@@ -180,6 +180,15 @@ def parseA (bytes : ByteArray) : Except Encoding.ProtoError A :=
 `decodeThe` is an always-inlined positional wrapper around `decode`; it is
 useful when the result type cannot be inferred from context.
 
+## Performance measurement
+
+`Test/Bench/run.sh` provides a reproducible engineering benchmark against
+official C++ protobuf 35.0, hand-written `Lean.Data.Json`, and this package's
+ProtoJSON implementation. It reports time and peak RSS while keeping process
+startup, workload/input setup, first-call cost, and repeated steady-state cost
+separate. See [the benchmark protocol](Test/Bench/README.md); machine-specific
+result files are generated below the ignored `.lake` build tree.
+
 ### Migration from generated helper names
 
 Earlier versions generated binary and wire helpers directly below every

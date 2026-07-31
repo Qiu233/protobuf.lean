@@ -16,20 +16,11 @@ lean_exe Plugin where
 lean_lib Bench where
   roots := #[`Test.Bench]
 
-lean_exe benchProtoEncode where
-  root := `Test.Bench.ProtoEncode
-
-lean_exe benchProtoDecode where
-  root := `Test.Bench.ProtoDecode
-
 lean_exe benchWire where
   root := `Test.Bench.Wire
 
-lean_exe benchJsonEncode where
-  root := `Test.Bench.JsonEncode
-
-lean_exe benchJsonDecode where
-  root := `Test.Bench.JsonDecode
+lean_exe benchCodec where
+  root := `Test.Bench.Codec
 
 lean_exe testVersionsSemantics where
   root := `Test.Runtime.VersionsSemantics
