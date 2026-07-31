@@ -122,7 +122,9 @@ open Protobuf Encoding Notation
 
 ## As a protoc plugin
 
-**Warning: Currently (v4.26.0) Lean 4 compiler does not prune the `meta` imports, causing executables to be exceedingly huge (180 MiB).**
+**Warning: On the pinned Lean 4.27.0 toolchain, the compiler does not prune
+the `meta` imports; even minimal downstream executables are currently around
+190 MiB.**
 
 First prepare a folder to contain the plugin, say `<plugin_folder>`.
 
