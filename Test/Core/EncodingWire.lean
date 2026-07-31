@@ -432,8 +432,17 @@ abbrev testPackedFixed64 : Except String Unit := do
     combined.records[0]!.value.isVARINT &&
     combined.records[1]!.fieldNum == 1 &&
     combined.records[1]!.value.isI32 &&
-    combined.records[2]!.fieldNum == 2 &&
+  combined.records[2]!.fieldNum == 2 &&
     combined.records[2]!.value.isLEN &&
-    (Message.combineMany #[]).records.isEmpty
+    (Message.combineMany #[]).records.isEmpty &&
+    MessageChunks.empty.toMessage?.isNone &&
+    (match (MessageChunks.empty.push first).toMessage? with
+      | some message => message.records.size == 2
+      | none => false) &&
+    (match (MessageChunks.empty.push first |>.push second).toMessage? with
+      | some message =>
+          message.records.size == 3 &&
+            message.records[2]!.fieldNum == 2
+      | none => false)
 
 end Test.Core.EncodingWire

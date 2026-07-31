@@ -49,6 +49,32 @@ def Message.combineMany (messages : Array Message) : Message :=
         message.records.foldl (init := records) Array.push
   Message.mk records
 
+/--
+Amortized-constant accumulator for repeated wire occurrences of one singular
+message field.
+
+The overwhelmingly common zero/one-occurrence cases do not allocate a chunk
+array. A second occurrence promotes the accumulator to `many`; final
+concatenation remains linear via `Message.combineMany`.
+-/
+inductive MessageChunks where
+  | empty
+  | single (message : Message)
+  | many (messages : Array Message)
+deriving Inhabited
+
+def MessageChunks.push
+    (chunks : MessageChunks) (message : Message) : MessageChunks :=
+  match chunks with
+  | .empty => .single message
+  | .single first => .many #[first, message]
+  | .many messages => .many (messages.push message)
+
+def MessageChunks.toMessage? : MessageChunks → Option Message
+  | .empty => none
+  | .single message => some message
+  | .many messages => some (Message.combineMany messages)
+
 @[always_inline]
 def ProtoVal.isVARINT : ProtoVal → Bool
   | .VARINT .. => true

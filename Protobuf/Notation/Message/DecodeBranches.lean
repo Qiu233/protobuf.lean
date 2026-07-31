@@ -467,7 +467,7 @@ private def constructSingularMessageBranch
     | throwErrorAt fieldMData.field_name
         "{decl_name%}: internal error: singular message field has no pending slot"
   let nested := mkIdent `nested
-  let combined := mkIdent `combined
+  let chunks := mkIdent `chunks
   let updatedState ← ctx.mkState state seen' pending'
   let getNestedMessage ←
     if fieldMData.options.wired_as_group?.isEqSome true then
@@ -477,13 +477,10 @@ private def constructSingularMessageBranch
         $recVar:ident $recursionBudget:ident)
   `(do
     let $nested:ident ← $getNestedMessage:term
-    let $combined:ident :=
-      match ($pending:ident)[$(quote pendingIndex)]! with
-      | Option.some previous =>
-          Protobuf.Encoding.Message.combine previous $nested:ident
-      | Option.none => $nested:ident
+    let $chunks:ident :=
+      (($pending:ident)[$(quote pendingIndex)]!).push $nested:ident
     let $pending':ident :=
-      ($pending:ident).set! $(quote pendingIndex) (some $combined:ident)
+      ($pending:ident).set! $(quote pendingIndex) $chunks:ident
     let $seen':ident := $seenUpdate:term
     pure $updatedState:term)
 

@@ -103,17 +103,19 @@ private def constructPendingMessageDecodes
       let value? ← mkIdent <$> mkFreshUserName `value?
       let nextState ← mkIdent <$> mkFreshUserName `st
       let decodeItem ← `(Parser.Term.doSeqItem|
-        let $value?:ident ←
-          match ($pendingAfterFold:ident)[$(quote i)]! with
+        let $value?:ident ← do
+          match
+            (($pendingAfterFold:ident)[$(quote i)]!).toMessage?
+          with
           | Option.none => pure Option.none
           | Option.some $childMessage:ident => do
-              let $childBudget:ident ←
-                Protobuf.Encoding.descendMessageRecursion
-                  $recursionBudget:ident
-              let $childValue:ident ←
-                $childFromMessage:ident $childMessage:ident
-                  $childBudget:ident false
-              pure (Option.some $childValue:ident))
+            let $childBudget:ident ←
+              Protobuf.Encoding.descendMessageRecursion
+                $recursionBudget:ident
+            let $childValue:ident ←
+              $childFromMessage:ident $childMessage:ident
+                $childBudget:ident false
+            pure (Option.some $childValue:ident))
       let updateItem ← `(Parser.Term.doSeqItem|
         let $nextState:ident : $name := {
           $currentState:ident with
@@ -175,11 +177,11 @@ def construct_fromMessage
   let stateTy ←
     if hasOneofs then
       `(($name × Array Bool ×
-        Array (Option Protobuf.Encoding.Message) ×
+        Array Protobuf.Encoding.MessageChunks ×
         Array (Option (Nat × Protobuf.Encoding.Message))))
     else
       `(($name × Array Bool ×
-        Array (Option Protobuf.Encoding.Message)))
+        Array Protobuf.Encoding.MessageChunks))
   let mkState : Term → Term → Term → CommandElabM Term :=
     fun st sn pd => do
       if hasOneofs then
@@ -241,8 +243,8 @@ def construct_fromMessage
   let stateInit ← `(Parser.Term.doSeqItem| let $state:ident : $name := default)
   let seenInit ← `(Parser.Term.doSeqItem| let $seen:ident : Array Bool := Array.replicate $(quote requiredStrictFields.size) false)
   let pendingInit ← `(Parser.Term.doSeqItem|
-    let $pending:ident : Array (Option Protobuf.Encoding.Message) :=
-      Array.replicate $(quote regularMessageFields.size) Option.none)
+    let $pending:ident : Array Protobuf.Encoding.MessageChunks :=
+      Array.replicate $(quote regularMessageFields.size) .empty)
   let oneofPendingInits : Array DoSeqItem ←
     if hasOneofs then
       let init ← `(Parser.Term.doSeqItem|
@@ -370,7 +372,7 @@ def construct_fromMessage
     else
       `(($foldAcc:ident).2.2)
   let foldPendingBind ← `(Parser.Term.doSeqItem|
-    let $pendingAfterFold:ident : Array (Option Protobuf.Encoding.Message) :=
+    let $pendingAfterFold:ident : Array Protobuf.Encoding.MessageChunks :=
       $pendingAfterFoldProjection:term)
   let foldOneofPendingBinds : Array DoSeqItem ←
     if hasOneofs then
