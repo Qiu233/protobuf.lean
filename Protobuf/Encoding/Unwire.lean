@@ -43,16 +43,6 @@ private def getVarint : Get ProtoVal := do
   let v ← get_varint
   return ProtoVal.VARINT v
 
-@[always_inline]
-private def getI32 : Get ProtoVal := do
-  let v ← getThe UInt32
-  return ProtoVal.I32 v.toBitVec
-
-@[always_inline]
-private def getI64 : Get ProtoVal := do
-  let v ← getThe UInt64
-  return ProtoVal.I64 v.toBitVec
-
 @[noinline]
 private partial def getPackedValues (getValue : Get ProtoVal) : Get (Array ProtoVal) := do
   let mut result := #[]
@@ -76,6 +66,23 @@ def protoDecodeParseResultExcept : Except Binary.DecodeError α → Except Proto
 @[noinline]
 private def decodePackedWith (getValue : Get ProtoVal) (data : ByteArray) : Except ProtoError (Array ProtoVal) := do
   protoDecodeParseResultExcept (Binary.Get.run (getPackedValues getValue) data).toExcept
+
+@[noinline]
+private partial def getPackedValuesInto
+    (getValue : Get α) (initial : Array α) : Get (Array α) := do
+  let mut out := initial
+  repeat
+    let r ← remaining
+    if r == 0 then break
+    out := out.push (← getValue)
+  return out
+
+@[noinline]
+private def decodePackedInto
+    (getValue : Get α) (data : ByteArray) (initial : Array α) :
+    Except ProtoError (Array α) :=
+  protoDecodeParseResultExcept <|
+    Binary.Get.run (getPackedValuesInto getValue initial) data |>.toExcept
 
 @[noinline]
 private def Message.concatPackedWith
@@ -305,90 +312,109 @@ def Message.getI32_sfixed32? (msg : Message) (fieldNum : Nat) : Except ProtoErro
   return r.map Int32.ofBitVec
 
 @[noinline]
-private def Message.getPackedVarint (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Nat) := do
-  let xs ← msg.concatPackedWith fieldNum getVarint
-  xs.mapM fun x => do
-    let some v := x.isVARINT? | throwWireType! "expected packed VARINT"
-    return v
+private def Message.getPackedAs
+    (msg : Message) (fieldNum : Nat) (getValue : Get α) :
+    Except ProtoError (Array α) := do
+  -- Decode directly into the final typed array. The schema-neutral
+  -- `concatPacked` API remains available above, but generated code need not
+  -- allocate ProtoVal arrays merely to map them immediately afterwards.
+  let mut out := #[]
+  for record in msg.records do
+    if record.fieldNum == fieldNum then
+      match record.value with
+      | .LEN data =>
+          out ← decodePackedInto getValue data out
+      | _ =>
+          throwWireType! "packed data must be LEN"
+  return out
 
 @[noinline]
-private def Message.getPackedI64 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array (BitVec 64)) := do
-  let xs ← msg.concatPackedWith fieldNum getI64
-  xs.mapM fun x => do
-    let some v := x.isI64? | throwWireType! "expected packed I64"
-    return v
+private def Message.getPackedVarintAs
+    (msg : Message) (fieldNum : Nat) (convert : Nat → α) :
+    Except ProtoError (Array α) :=
+  msg.getPackedAs fieldNum do
+    return convert (← get_varint)
 
 @[noinline]
-private def Message.getPackedI32 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array (BitVec 32)) := do
-  let xs ← msg.concatPackedWith fieldNum getI32
-  xs.mapM fun x => do
-    let some v := x.isI32? | throwWireType! "expected packed I32"
-    return v
+private def Message.getPackedI64As
+    (msg : Message) (fieldNum : Nat) (convert : UInt64 → α) :
+    Except ProtoError (Array α) :=
+  msg.getPackedAs fieldNum do
+    return convert (← getThe UInt64)
 
 @[noinline]
-def Message.getPackedBool (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Bool) := do
-  let xs ← msg.getPackedVarint fieldNum
-  return xs.map (fun v => v != 0)
+private def Message.getPackedI32As
+    (msg : Message) (fieldNum : Nat) (convert : UInt32 → α) :
+    Except ProtoError (Array α) :=
+  msg.getPackedAs fieldNum do
+    return convert (← getThe UInt32)
 
 @[noinline]
-def Message.getPackedVarint_int32 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int32) := do
-  let xs ← msg.getPackedVarint fieldNum
-  return xs.map fun n => Int32.ofBitVec (UInt32.ofNat n).toBitVec
+def Message.getPackedBool
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Bool) :=
+  msg.getPackedVarintAs fieldNum (· != 0)
 
 @[noinline]
-def Message.getPackedVarint_uint32 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array UInt32) := do
-  let xs ← msg.getPackedVarint fieldNum
-  return xs.map UInt32.ofNat
+def Message.getPackedVarint_int32
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int32) :=
+  msg.getPackedVarintAs fieldNum fun n =>
+    Int32.ofBitVec (UInt32.ofNat n).toBitVec
 
 @[noinline]
-def Message.getPackedVarint_int64 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int64) := do
-  let xs ← msg.getPackedVarint fieldNum
-  return xs.map fun n => Int64.ofBitVec (UInt64.ofNat n).toBitVec
+def Message.getPackedVarint_uint32
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array UInt32) :=
+  msg.getPackedVarintAs fieldNum UInt32.ofNat
 
 @[noinline]
-def Message.getPackedVarint_uint64 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array UInt64) := do
-  let xs ← msg.getPackedVarint fieldNum
-  return xs.map UInt64.ofNat
+def Message.getPackedVarint_int64
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int64) :=
+  msg.getPackedVarintAs fieldNum fun n =>
+    Int64.ofBitVec (UInt64.ofNat n).toBitVec
 
 @[noinline]
-def Message.getPackedVarint_sint32 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int32) := do
-  let xs ← msg.getPackedVarint fieldNum
-  return xs.map zigzagDecode32
+def Message.getPackedVarint_uint64
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array UInt64) :=
+  msg.getPackedVarintAs fieldNum UInt64.ofNat
 
 @[noinline]
-def Message.getPackedVarint_sint64 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int64) := do
-  let xs ← msg.getPackedVarint fieldNum
-  return xs.map zigzagDecode64
+def Message.getPackedVarint_sint32
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int32) :=
+  msg.getPackedVarintAs fieldNum zigzagDecode32
 
 @[noinline]
-def Message.getPackedI64_double (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Float) := do
-  let xs ← msg.getPackedI64 fieldNum
-  return xs.map fun n => Float.ofBits (UInt64.ofBitVec n)
+def Message.getPackedVarint_sint64
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int64) :=
+  msg.getPackedVarintAs fieldNum zigzagDecode64
 
 @[noinline]
-def Message.getPackedI64_fixed64 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array UInt64) := do
-  let xs ← msg.getPackedI64 fieldNum
-  return xs.map UInt64.ofBitVec
+def Message.getPackedI64_double
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Float) :=
+  msg.getPackedI64As fieldNum Float.ofBits
 
 @[noinline]
-def Message.getPackedI64_sfixed64 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int64) := do
-  let xs ← msg.getPackedI64 fieldNum
-  return xs.map Int64.ofBitVec
+def Message.getPackedI64_fixed64
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array UInt64) :=
+  msg.getPackedI64As fieldNum id
 
 @[noinline]
-def Message.getPackedI32_float (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Float32) := do
-  let xs ← msg.getPackedI32 fieldNum
-  return xs.map fun n => Float32.ofBits (UInt32.ofBitVec n)
+def Message.getPackedI64_sfixed64
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int64) :=
+  msg.getPackedI64As fieldNum fun n => Int64.ofBitVec n.toBitVec
 
 @[noinline]
-def Message.getPackedI32_fixed32 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array UInt32) := do
-  let xs ← msg.getPackedI32 fieldNum
-  return xs.map UInt32.ofBitVec
+def Message.getPackedI32_float
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Float32) :=
+  msg.getPackedI32As fieldNum Float32.ofBits
 
 @[noinline]
-def Message.getPackedI32_sfixed32 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int32) := do
-  let xs ← msg.getPackedI32 fieldNum
-  return xs.map Int32.ofBitVec
+def Message.getPackedI32_fixed32
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array UInt32) :=
+  msg.getPackedI32As fieldNum id
+
+@[noinline]
+def Message.getPackedI32_sfixed32
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int32) :=
+  msg.getPackedI32As fieldNum fun n => Int32.ofBitVec n.toBitVec
 
 @[noinline]
 private def Message.getExpandedVarint (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Nat) := do
@@ -519,105 +545,117 @@ def Message.getExpandedI32_sfixed32 (msg : Message) (fieldNum : Nat) : Except Pr
   return xs.map Int32.ofBitVec
 
 @[noinline]
-private def Message.getRepeatedScalar
-    (msg : Message) (fieldNum : Nat) (getPackedValue : Get ProtoVal)
-    (isExpandedValue : ProtoVal → Bool) : Except ProtoError (Array ProtoVal) := do
-  let rs := msg.getRecordsOf fieldNum
+private def Message.getRepeatedAs
+    (msg : Message) (fieldNum : Nat) (getPackedValue : Get α)
+    (getExpandedValue : ProtoVal → Option α) :
+    Except ProtoError (Array α) := do
+  -- Preserve the interleaving of packed and expanded occurrences while
+  -- growing one final typed accumulator.
   let mut out := #[]
-  for r in rs do
-    match r.value with
-    | .LEN data =>
-      let xs ← decodePackedWith getPackedValue data
-      out := out ++ xs
-    | value =>
-      if isExpandedValue value then
-        out := out.push value
-      else
-        throwWireType! "value of repeated field has the wrong wire type"
+  for record in msg.records do
+    if record.fieldNum == fieldNum then
+      match record.value with
+      | .LEN data =>
+          out ← decodePackedInto getPackedValue data out
+      | value =>
+          let some value := getExpandedValue value
+            | throwWireType! "value of repeated field has the wrong wire type"
+          out := out.push value
   return out
 
 @[noinline]
-private def Message.getRepeatedVarint (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Nat) := do
-  let xs ← msg.getRepeatedScalar fieldNum getVarint (· matches .VARINT _)
-  xs.mapM fun x => do
-    let some v := x.isVARINT? | throwWireType! "expected VARINT"
-    return v
+private def Message.getRepeatedVarintAs
+    (msg : Message) (fieldNum : Nat) (convert : Nat → α) :
+    Except ProtoError (Array α) :=
+  msg.getRepeatedAs fieldNum
+    (do return convert (← get_varint))
+    (fun
+      | .VARINT value => some (convert value)
+      | _ => none)
 
 @[noinline]
-private def Message.getRepeatedI64 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array (BitVec 64)) := do
-  let xs ← msg.getRepeatedScalar fieldNum getI64 (· matches .I64 _)
-  xs.mapM fun x => do
-    let some v := x.isI64? | throwWireType! "expected I64"
-    return v
+private def Message.getRepeatedI64As
+    (msg : Message) (fieldNum : Nat) (convert : UInt64 → α) :
+    Except ProtoError (Array α) :=
+  msg.getRepeatedAs fieldNum
+    (do return convert (← getThe UInt64))
+    (fun
+      | .I64 value => some (convert (UInt64.ofBitVec value))
+      | _ => none)
 
 @[noinline]
-private def Message.getRepeatedI32 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array (BitVec 32)) := do
-  let xs ← msg.getRepeatedScalar fieldNum getI32 (· matches .I32 _)
-  xs.mapM fun x => do
-    let some v := x.isI32? | throwWireType! "expected I32"
-    return v
+private def Message.getRepeatedI32As
+    (msg : Message) (fieldNum : Nat) (convert : UInt32 → α) :
+    Except ProtoError (Array α) :=
+  msg.getRepeatedAs fieldNum
+    (do return convert (← getThe UInt32))
+    (fun
+      | .I32 value => some (convert (UInt32.ofBitVec value))
+      | _ => none)
 
 @[noinline]
-def Message.getRepeatedBool (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Bool) := do
-  let xs ← msg.getRepeatedVarint fieldNum
-  return xs.map (fun v => v != 0)
+def Message.getRepeatedBool
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Bool) :=
+  msg.getRepeatedVarintAs fieldNum (· != 0)
 
 @[noinline]
-def Message.getRepeatedVarint_int32 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int32) := do
-  let xs ← msg.getRepeatedVarint fieldNum
-  return xs.map fun n => Int32.ofBitVec (UInt32.ofNat n).toBitVec
+def Message.getRepeatedVarint_int32
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int32) :=
+  msg.getRepeatedVarintAs fieldNum fun n =>
+    Int32.ofBitVec (UInt32.ofNat n).toBitVec
 
 @[noinline]
-def Message.getRepeatedVarint_uint32 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array UInt32) := do
-  let xs ← msg.getRepeatedVarint fieldNum
-  return xs.map UInt32.ofNat
+def Message.getRepeatedVarint_uint32
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array UInt32) :=
+  msg.getRepeatedVarintAs fieldNum UInt32.ofNat
 
 @[noinline]
-def Message.getRepeatedVarint_int64 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int64) := do
-  let xs ← msg.getRepeatedVarint fieldNum
-  return xs.map fun n => Int64.ofBitVec (UInt64.ofNat n).toBitVec
+def Message.getRepeatedVarint_int64
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int64) :=
+  msg.getRepeatedVarintAs fieldNum fun n =>
+    Int64.ofBitVec (UInt64.ofNat n).toBitVec
 
 @[noinline]
-def Message.getRepeatedVarint_uint64 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array UInt64) := do
-  let xs ← msg.getRepeatedVarint fieldNum
-  return xs.map UInt64.ofNat
+def Message.getRepeatedVarint_uint64
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array UInt64) :=
+  msg.getRepeatedVarintAs fieldNum UInt64.ofNat
 
 @[noinline]
-def Message.getRepeatedVarint_sint32 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int32) := do
-  let xs ← msg.getRepeatedVarint fieldNum
-  return xs.map zigzagDecode32
+def Message.getRepeatedVarint_sint32
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int32) :=
+  msg.getRepeatedVarintAs fieldNum zigzagDecode32
 
 @[noinline]
-def Message.getRepeatedVarint_sint64 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int64) := do
-  let xs ← msg.getRepeatedVarint fieldNum
-  return xs.map zigzagDecode64
+def Message.getRepeatedVarint_sint64
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int64) :=
+  msg.getRepeatedVarintAs fieldNum zigzagDecode64
 
 @[noinline]
-def Message.getRepeatedI64_double (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Float) := do
-  let xs ← msg.getRepeatedI64 fieldNum
-  return xs.map fun n => Float.ofBits (UInt64.ofBitVec n)
+def Message.getRepeatedI64_double
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Float) :=
+  msg.getRepeatedI64As fieldNum Float.ofBits
 
 @[noinline]
-def Message.getRepeatedI64_fixed64 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array UInt64) := do
-  let xs ← msg.getRepeatedI64 fieldNum
-  return xs.map UInt64.ofBitVec
+def Message.getRepeatedI64_fixed64
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array UInt64) :=
+  msg.getRepeatedI64As fieldNum id
 
 @[noinline]
-def Message.getRepeatedI64_sfixed64 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int64) := do
-  let xs ← msg.getRepeatedI64 fieldNum
-  return xs.map Int64.ofBitVec
+def Message.getRepeatedI64_sfixed64
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int64) :=
+  msg.getRepeatedI64As fieldNum fun n => Int64.ofBitVec n.toBitVec
 
 @[noinline]
-def Message.getRepeatedI32_float (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Float32) := do
-  let xs ← msg.getRepeatedI32 fieldNum
-  return xs.map fun n => Float32.ofBits (UInt32.ofBitVec n)
+def Message.getRepeatedI32_float
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Float32) :=
+  msg.getRepeatedI32As fieldNum Float32.ofBits
 
 @[noinline]
-def Message.getRepeatedI32_fixed32 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array UInt32) := do
-  let xs ← msg.getRepeatedI32 fieldNum
-  return xs.map UInt32.ofBitVec
+def Message.getRepeatedI32_fixed32
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array UInt32) :=
+  msg.getRepeatedI32As fieldNum id
 
 @[noinline]
-def Message.getRepeatedI32_sfixed32 (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int32) := do
-  let xs ← msg.getRepeatedI32 fieldNum
-  return xs.map Int32.ofBitVec
+def Message.getRepeatedI32_sfixed32
+    (msg : Message) (fieldNum : Nat) : Except ProtoError (Array Int32) :=
+  msg.getRepeatedI32As fieldNum fun n => Int32.ofBitVec n.toBitVec

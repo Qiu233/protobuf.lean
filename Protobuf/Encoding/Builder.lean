@@ -140,31 +140,37 @@ def ProtoVal.canBePacked : ProtoVal → Bool
   | .LEN .. => false
 
 open Binary.Primitive.LE in
-@[always_inline]
-private def packedWriter : ProtoVal → Except ProtoError Put
-  | .VARINT x =>
-      if x > (1 <<< 64) - 1 then
-        throw .invalidVarint
-      else
-        pure (put_varint x)
-  | .I64 x => pure (put (UInt64.ofBitVec x))
-  | .I32 x => pure (put (UInt32.ofBitVec x))
-  | _ =>
-      throw (.invalidWireType
-        "only VARINT, I64, and I32 protobuf values can be packed")
-
 @[noinline]
 def ProtoVal.of_packed (xs : Array ProtoVal) : Except ProtoError ProtoVal := do
-  let writers ← xs.mapM packedWriter
+  -- Validate before entering `Put`, whose error type cannot carry ProtoError.
+  -- The second pass writes directly from the source array instead of first
+  -- allocating an array of writer closures.
+  for value in xs do
+    match value with
+    | .VARINT x =>
+        if x > (1 <<< 64) - 1 then
+          throw .invalidVarint
+    | .I64 _
+    | .I32 _ =>
+        pure ()
+    | _ =>
+        throw (.invalidWireType
+          "only VARINT, I64, and I32 protobuf values can be packed")
   let data := Binary.Put.run do
-    for writer in writers do
-      writer
+    for value in xs do
+      match value with
+      | .VARINT x => put_varint x
+      | .I64 x => put (UInt64.ofBitVec x)
+      | .I32 x => put (UInt32.ofBitVec x)
+      | _ => pure ()
   ProtoVal.ofLengthDelimited data
 
 @[noinline]
-def Message.wire_map (msg : Message) : Std.HashMap Nat (Array ProtoVal) → Message := fun m =>
-  let xs := m.toArray.map fun (n, xs) => xs.map fun x => Record.mk n x
-  {msg with records := msg.records.append xs.flatten}
+def Message.wire_map
+    (msg : Message) (fields : Std.HashMap Nat (Array ProtoVal)) : Message :=
+  fields.fold (init := msg) fun msg fieldNum values =>
+    values.foldl (init := msg) fun msg value =>
+      msg.push { fieldNum, value }
 
 def merge_map (a b : Std.HashMap Nat (Array ProtoVal)) : Std.HashMap Nat (Array ProtoVal) :=
   b.fold (init := a) (fun a n v => a.alter n (fun | .none => some v | .some arr => some (arr ++ v)))
