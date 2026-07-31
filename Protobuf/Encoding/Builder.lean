@@ -40,6 +40,22 @@ private def varintSize (value : UInt64) : Nat :=
   else if value < 0x8000000000000000 then 9
   else 10
 
+@[inline]
+def varintUInt64EncodedSize (value : UInt64) : Nat :=
+  varintSize value
+
+@[inline]
+def zigZagInt32ToUInt64 (value : Int32) : UInt64 :=
+  let bits := value.toUInt32
+  let signMask : UInt32 := (0 : UInt32) - (bits >>> 31)
+  UInt64.ofNat (((bits <<< 1) ^^^ signMask).toNat)
+
+@[inline]
+def zigZagInt64ToUInt64 (value : Int64) : UInt64 :=
+  let bits := value.toUInt64
+  let signMask : UInt64 := (0 : UInt64) - (bits >>> 63)
+  (bits <<< 1) ^^^ signMask
+
 mutual
   partial def ProtoVal.validateAndEncodedSize :
       ProtoVal → Except ProtoError Nat
@@ -110,6 +126,24 @@ private def validateFieldNumber
     throw (.invalidWireType
       s!"protobuf field number {fieldNum} is outside 1..536870911")
 
+def varintFieldEncodedSize
+    (fieldNum : Nat) (value : UInt64) : Except ProtoError Nat := do
+  validateFieldNumber fieldNum
+  let key := UInt64.ofNat fieldNum <<< 3
+  pure (varintSize key + varintSize value)
+
+def fixed32FieldEncodedSize
+    (fieldNum : Nat) : Except ProtoError Nat := do
+  validateFieldNumber fieldNum
+  let key := (UInt64.ofNat fieldNum <<< 3) ||| (5 : UInt64)
+  pure (varintSize key + 4)
+
+def fixed64FieldEncodedSize
+    (fieldNum : Nat) : Except ProtoError Nat := do
+  validateFieldNumber fieldNum
+  let key := (UInt64.ofNat fieldNum <<< 3) ||| (1 : UInt64)
+  pure (varintSize key + 8)
+
 /--
 Encoded size of a length-delimited field with an already measured payload.
 
@@ -167,6 +201,12 @@ def writeKeyTo
     (UInt64.ofNat fieldNum <<< 3) ||| wireType
 
 @[inline]
+def writeVarintFieldTo
+    (output : ByteArray) (fieldNum : Nat)
+    (value : UInt64) : ByteArray :=
+  writeVarintUInt64To (writeKeyTo output fieldNum 0) value
+
+@[inline]
 def writeUInt32LETo
     (output : ByteArray) (value : UInt32) : ByteArray := Id.run do
   let mut output := output
@@ -185,6 +225,26 @@ def writeUInt64LETo
     output := output.push value.toUInt8
     value := value >>> 8
   return output
+
+@[inline]
+def writeFixed32FieldTo
+    (output : ByteArray) (fieldNum : Nat)
+    (value : UInt32) : ByteArray :=
+  writeUInt32LETo (writeKeyTo output fieldNum 5) value
+
+@[inline]
+def writeFixed64FieldTo
+    (output : ByteArray) (fieldNum : Nat)
+    (value : UInt64) : ByteArray :=
+  writeUInt64LETo (writeKeyTo output fieldNum 1) value
+
+@[inline]
+def writeLengthDelimitedFieldTo
+    (output : ByteArray) (fieldNum : Nat)
+    (data : ByteArray) : ByteArray :=
+  let output := writeKeyTo output fieldNum 2
+  let output := writeVarintUInt64To output (UInt64.ofNat data.size)
+  output ++ data
 
 mutual
 
@@ -302,18 +362,10 @@ def ProtoVal.ofVarint_int64 : Int64 → Except Protobuf.Encoding.ProtoError Prot
 def ProtoVal.ofVarint_uint64 : UInt64 → Except Protobuf.Encoding.ProtoError ProtoVal := fun x => return ProtoVal.VARINT x.toNat
 @[always_inline]
 def ProtoVal.ofVarint_sint32 : Int32 → Except Protobuf.Encoding.ProtoError ProtoVal := fun x =>
-  let y := x.toUInt32
-  -- `y >>> 31` is only 0 or 1 because `y` is unsigned.  ZigZag needs the
-  -- arithmetic right-shift of the signed input, i.e. an all-zero/all-one mask.
-  let signMask : UInt32 := (0 : UInt32) - (y >>> 31)
-  let n := (y <<< 1) ^^^ signMask
-  return ProtoVal.VARINT n.toNat
+  return ProtoVal.VARINT (zigZagInt32ToUInt64 x).toNat
 @[always_inline]
 def ProtoVal.ofVarint_sint64 : Int64 → Except Protobuf.Encoding.ProtoError ProtoVal := fun x =>
-  let y := x.toUInt64
-  let signMask : UInt64 := (0 : UInt64) - (y >>> 63)
-  let n := (y <<< 1) ^^^ signMask
-  return ProtoVal.VARINT n.toNat
+  return ProtoVal.VARINT (zigZagInt64ToUInt64 x).toNat
 
 @[always_inline]
 def ProtoVal.ofI64_double : Float → Except Protobuf.Encoding.ProtoError ProtoVal := fun x => return ProtoVal.I64 (x.toBits.toBitVec)

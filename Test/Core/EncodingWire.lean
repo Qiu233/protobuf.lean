@@ -127,6 +127,35 @@ abbrev testRawEncodingValidation : Except String Unit := do
   assertEq direct bytes
     "direct compatibility writer differs from Binary.Put"
 
+  let directKnown :=
+    Internal.writeLengthDelimitedFieldTo
+      (Internal.writeFixed32FieldTo
+        (Internal.writeFixed64FieldTo
+          (Internal.writeVarintFieldTo ByteArray.empty 1 150)
+          16 0x0123456789abcdef)
+        4 0x12345678)
+      2 ⟨#[1, 2, 3]⟩
+  let knownSize :=
+    (← ofProtoExcept (varintFieldEncodedSize 1 150)) +
+    (← ofProtoExcept (fixed64FieldEncodedSize 16)) +
+    (← ofProtoExcept (fixed32FieldEncodedSize 4)) +
+    (← ofProtoExcept (lengthDelimitedFieldEncodedSize 2 3))
+  let knownMessage : Message := {
+    records := #[
+      ⟨1, .VARINT 150⟩,
+      ⟨16, .I64 (0x0123456789abcdef : UInt64).toBitVec⟩,
+      ⟨4, .I32 (0x12345678 : UInt32).toBitVec⟩,
+      ⟨2, .LEN ⟨#[1, 2, 3]⟩⟩
+    ]
+  }
+  assertEq directKnown
+    (Binary.Put.run (Binary.put knownMessage) knownSize)
+    "typed direct field writers differ from Binary.Put"
+  assertEq directKnown.size knownSize
+    "typed direct field sizes differ from their writers"
+  assertProtoFails (varintFieldEncodedSize 0 1)
+    "typed direct size accepted field number zero"
+
   let lenFieldSize ← ofProtoExcept <|
     lengthDelimitedFieldEncodedSize 2 128
   assertEq lenFieldSize 131

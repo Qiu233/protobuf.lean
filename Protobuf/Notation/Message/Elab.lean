@@ -3,6 +3,7 @@ module
 public import Protobuf.ProtoMessage
 public meta import Protobuf.Notation.Message.Metadata
 public meta import Protobuf.Notation.Message.Encode
+public meta import Protobuf.Notation.Message.DirectEncode
 public meta import Protobuf.Notation.Message.Validate
 public meta import Protobuf.Notation.Message.Decode
 public meta import Protobuf.Notation.Message.Accessors
@@ -46,6 +47,8 @@ public def elabMessageDecCore
   let (default', default) ← construct_default name push_name mdata
   let inhInst ← `(instance : Inhabited $name := ⟨$default'⟩)
   let (toMessage', toMessage) ← construct_toMessage name push_name mdata
+  let directEncoding ←
+    constructDirectEncoding name push_name mdata
   let (_, builder) ← construct_builder name push_name toMessage'
   let (_, builderPartial) ←
     construct_builder name push_name (push_name "toMessagePartial") "builderPartial"
@@ -58,7 +61,11 @@ public def elabMessageDecCore
   let (_, decoder_rep) ← construct_decoder_rep name push_name fromMessage'
   let defaultAccessors ←
     constructExplicitDefaultAccessors name mdata
-  let (encodeId, encode) ← construct_encode name push_name toMessage'
+  let (encodeId, encode) ←
+    if directEncoding.useAtTopLevel then
+      constructDirectEncode name push_name directEncoding
+    else
+      construct_encode name push_name toMessage'
   let (decodeId, decode) ←
     construct_decode name push_name fromSpannedChunks'
   let protoMessageInst ←
@@ -72,7 +79,8 @@ public def elabMessageDecCore
       decls := #[struct],
       inhabitedFunctions := #[default],
       inhabitedInsts := #[inhInst],
-      encodingFunctions := toMessage.push builder |>.push builderPartial,
+      encodingFunctions :=
+        toMessage ++ directEncoding.commands |>.push builder |>.push builderPartial,
       mergeFunctions := #[merge],
       validationFunctions := requiredValidators,
       decodingFunctions := fromMessage ++ #[decoder?, decoder_rep],
