@@ -62,10 +62,7 @@ public def elabMessageDecCore
   let defaultAccessors ←
     constructExplicitDefaultAccessors name mdata
   let (encodeId, encode) ←
-    if directEncoding.useAtTopLevel then
-      constructDirectEncode name push_name directEncoding
-    else
-      construct_encode name push_name toMessage'
+    constructDirectEncode name push_name directEncoding
   let (decodeId, decode) ←
     construct_decode name push_name fromSpannedChunks'
   let protoMessageInst ←

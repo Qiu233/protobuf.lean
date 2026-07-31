@@ -11,6 +11,11 @@ open Encoding
 
 open Lean Meta Elab Term Command
 
+private def siblingHelper (id : Ident) (component : String) : Ident :=
+  match id.getId with
+  | .str scope _ => mkIdentFrom id (scope.str component)
+  | _ => id
+
 private def InternalType.packedBuilder? : InternalType → Option Ident
   | .bool => some <| mkIdent ``Encoding.ProtoVal.ofPackedBool
   | .int32 => some <| mkIdent ``Encoding.ProtoVal.ofPackedVarint_int32
@@ -332,11 +337,120 @@ private def constructPackedAction
     throwErrorAt field.field_name
       "{decl_name%}: internal error: unsupported direct packed primitive"
 
+private def constructMapFieldBody
+    (pass : DirectPass)
+    (val accumulator validateRequired : Ident)
+    (field : ProtoFieldMData)
+    (mapInfo : MapFieldMData) :
+    CommandElabM (TSyntax ``Parser.Term.doSeqItem) := do
+  let projected ← `($(field.field_proj) $val)
+  let entryKey ← mkIdent <$> mkFreshUserName `entryKey
+  let entryValue ← mkIdent <$> mkFreshUserName `entryValue
+  let innerAccumulator ← mkIdent <$> mkFreshUserName `innerAccumulator
+  let valueBuilder : Term ←
+    if mapInfo.value_is_message then
+      let partialBuilder :=
+        siblingHelper mapInfo.value_builder "builderPartial"
+      `(if $validateRequired:ident then
+          $(mapInfo.value_builder):ident
+        else
+          $partialBuilder:ident)
+    else
+      pure mapInfo.value_builder
+  let foldBody ←
+    match pass with
+    | .size =>
+        `(do
+          let keyWire ←
+            $(mapInfo.key_builder):ident $entryKey:ident
+          let valueWire ←
+            $valueBuilder:term $entryValue:ident
+          let entryWire ← Protobuf.Encoding.ProtoVal.ofMessage {
+            records := #[
+              Protobuf.Encoding.Record.mk 1 keyWire,
+              Protobuf.Encoding.Record.mk 2 valueWire
+            ]
+          }
+          let recordSize ←
+            (Protobuf.Encoding.Record.mk
+              $(field.field_num) entryWire).validateAndEncodedSize
+          pure ($innerAccumulator + recordSize))
+    | .write =>
+        `(do
+          let keyWire ←
+            $(mapInfo.key_builder):ident $entryKey:ident
+          let valueWire ←
+            $valueBuilder:term $entryValue:ident
+          let entryWire ← Protobuf.Encoding.ProtoVal.ofMessage {
+            records := #[
+              Protobuf.Encoding.Record.mk 1 keyWire,
+              Protobuf.Encoding.Record.mk 2 valueWire
+            ]
+          }
+          pure <| Protobuf.Encoding.Internal.writeRecordTo
+            $innerAccumulator
+            (Protobuf.Encoding.Record.mk
+              $(field.field_num) entryWire))
+  `(Parser.Term.doSeqItem|
+    let $accumulator:ident ← do
+      if $(field.test_unset) $projected:term then
+        pure $accumulator
+      else
+        ($projected:term).toArray.foldlM
+          (init := $accumulator)
+          fun $innerAccumulator:ident
+              ($entryKey:ident, $entryValue:ident) =>
+            $foldBody:term)
+
+private def constructOneofFieldBody
+    (pass : DirectPass)
+    (val accumulator validateRequired : Ident)
+    (field : ProtoFieldMData) :
+    CommandElabM (TSyntax ``Parser.Term.doSeqItem) := do
+  let projected ← `($(field.field_proj) $val)
+  let selected ← mkIdent <$> mkFreshUserName `selected
+  let toMessage ← field.toMessage?.getDM <|
+    throwErrorAt field.field_name
+      "{decl_name%}: internal error: oneof field has no generated toMessage function"
+  let partialToMessage := siblingHelper toMessage "toMessagePartial"
+  let selectedToMessage ←
+    `(if $validateRequired:ident then
+        $toMessage:ident
+      else
+        $partialToMessage:ident)
+  let selectedBody ←
+    match pass with
+    | .size =>
+        `(do
+          let wireMessage ←
+            $selectedToMessage:term $selected:ident
+          let fieldSize ← wireMessage.validateAndEncodedSize
+          pure ($accumulator + fieldSize))
+    | .write =>
+        `(do
+          let wireMessage ←
+            $selectedToMessage:term $selected:ident
+          pure <| Protobuf.Encoding.Internal.writeMessageTo
+            $accumulator wireMessage)
+  `(Parser.Term.doSeqItem|
+    let $accumulator:ident ← do
+      match $projected:term with
+      | Option.none => pure $accumulator
+      | Option.some $selected:ident => $selectedBody:term)
+
 private def constructFieldBody
     (pass : DirectPass)
     (val accumulator validateRequired : Ident)
     (field : ProtoFieldMData) :
     CommandElabM (TSyntax ``Parser.Term.doSeqItem) := do
+  if let some mapInfo := field.map_info? then
+    return ←
+      constructMapFieldBody
+        pass val accumulator validateRequired field mapInfo
+  if field.oneof_type?.isSome then
+    return ←
+      constructOneofFieldBody
+        pass val accumulator validateRequired field
   let occurrence
       (value : Ident) :
       CommandElabM (TSyntax ``Parser.Term.doSeqItem) :=
@@ -439,14 +553,13 @@ structure DirectEncodingResult where
   sizeId : Ident
   writeId : Ident
   commands : Array Command
-  useAtTopLevel : Bool
 
 /--
 Generate an exact typed size pass and a direct writer.
 
-Map and oneof field lowering is kept on the compatibility path for now.  Such
-messages still receive these helpers so ordinary parents can call them
-uniformly, but their top-level `encode` wrapper remains unchanged.
+Primitive and ordinary message fields write directly. Map entries and selected
+oneof alternatives retain their small compatibility wire values so their
+existing ordering and required-field semantics remain shared with reflection.
 -/
 def constructDirectEncoding
     (name : Ident)
@@ -455,30 +568,6 @@ def constructDirectEncoding
     CommandElabM DirectEncodingResult := do
   let sizeId := pushName "encodedSizeWithRequiredValidation"
   let writeId := pushName "writeToWithRequiredValidation"
-  let useAtTopLevel :=
-    fields.all fun field =>
-      field.map_info?.isNone && field.oneof_type?.isNone
-  if !useAtTopLevel then
-    let toMessageCore := pushName "toMessageWithRequiredValidation"
-    let sizeCommand ← `(partial def $sizeId:ident :
-        $name → Bool →
-          Except Protobuf.Encoding.ProtoError Nat :=
-      fun value validateRequired => do
-        let wireMessage ← $toMessageCore:ident value validateRequired
-        wireMessage.validateAndEncodedSize)
-    let writeCommand ← `(partial def $writeId:ident :
-        $name → ByteArray → Bool →
-          Except Protobuf.Encoding.ProtoError ByteArray :=
-      fun value output validateRequired => do
-        let wireMessage ← $toMessageCore:ident value validateRequired
-        pure <| Protobuf.Encoding.Internal.writeMessageTo output wireMessage)
-    return {
-      sizeId
-      writeId
-      commands := #[sizeCommand, writeCommand]
-      useAtTopLevel
-    }
-
   let chunkCount :=
     max 1 ((fields.size + directChunkSize - 1) / directChunkSize)
   let sizeChunks ← (List.range chunkCount).toArray.mapM fun i => do
@@ -560,7 +649,6 @@ def constructDirectEncoding
       sizeChunks.map Prod.snd ++
         writeChunks.map Prod.snd ++
         #[sizeCommand, writeCommand]
-    useAtTopLevel
   }
 
 def constructDirectEncode
