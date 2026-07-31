@@ -28,12 +28,30 @@ message WideCodegen {
   int32 f16 = 16;
   int32 toMessage_chunk_0 = 17;
   int32 fromMessage_chunk_0 = 18;
+  int32 f19 = 19;
+  int32 f20 = 20;
+  int32 f21 = 21;
+  int32 f22 = 22;
+  int32 f23 = 23;
+  int32 f24 = 24;
+  int32 f25 = 25;
+  int32 f26 = 26;
+  int32 f27 = 27;
+  int32 f28 = 28;
+  int32 f29 = 29;
+  int32 f30 = 30;
+  int32 f31 = 31;
+  int32 f32 = 32;
+  int32 f33 = 33;
+  int32 f34 = 34;
 }
 
 #check WideCodegen.«protobuf.internal».toMessage._chunk_0
 #check WideCodegen.«protobuf.internal».toMessage._chunk_1
+#check WideCodegen.«protobuf.internal».toMessage._chunk_2
 #check WideCodegen.«protobuf.internal».fromMessage._chunk_0
 #check WideCodegen.«protobuf.internal».fromMessage._chunk_1
+#check WideCodegen.«protobuf.internal».fromMessage._chunk_2
 #synth SizeOf WideCodegen
 
 #eval! (do
@@ -42,13 +60,15 @@ message WideCodegen {
     f16 := 16
     toMessage_chunk_0 := 17
     fromMessage_chunk_0 := 18
+    f34 := 34
   }
   let wire ← IO.ofExcept (Protobuf.encode expected)
   let actual ← IO.ofExcept (Protobuf.decodeThe WideCodegen wire)
   unless actual.f01 == -1 &&
       actual.f16 == 16 &&
       actual.toMessage_chunk_0 == 17 &&
-      actual.fromMessage_chunk_0 == 18 do
+      actual.fromMessage_chunk_0 == 18 &&
+      actual.f34 == 34 do
     throw (IO.userError "wide generated helper roundtrip failed")
 
   let hasUnknownLen
@@ -89,4 +109,19 @@ message WideCodegen {
       hasUnknownLen highWrongLast.«Unknown.Fields» 18 do
     throw (IO.userError
       "chunked generated dispatch did not preserve wrong-wire scalar data")
+
+  let upperWrongFirst ← decodeRecords #[
+    { fieldNum := 34, value := .LEN ByteArray.empty },
+    { fieldNum := 34, value := .VARINT 11 }
+  ]
+  let upperWrongLast ← decodeRecords #[
+    { fieldNum := 34, value := .VARINT 11 },
+    { fieldNum := 34, value := .LEN ByteArray.empty }
+  ]
+  unless upperWrongFirst.f34 == 11 &&
+      upperWrongLast.f34 == 11 &&
+      hasUnknownLen upperWrongFirst.«Unknown.Fields» 34 &&
+      hasUnknownLen upperWrongLast.«Unknown.Fields» 34 do
+    throw (IO.userError
+      "balanced chunk dispatch did not preserve upper-chunk wrong-wire data")
   : IO Unit)

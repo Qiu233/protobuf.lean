@@ -53,6 +53,30 @@ private partial def constructBalancedDispatch
       else
         $right:term)
 
+private partial def constructBalancedChunkDispatch
+    (recVar fallback acc recursionBudget : Ident)
+    (chunks : Array (Nat × Ident × Command))
+    (start stop : Nat) : CommandElabM Term := do
+  if start >= stop then
+    `($fallback:ident ())
+  else if stop - start == 1 then
+    let (_, chunkId, _) := chunks[start]!
+    `($chunkId:ident $fallback:ident $acc:ident $recVar:ident
+        $recursionBudget:ident)
+  else
+    let mid := start + (stop - start) / 2
+    let (leftMaxFieldNum, _, _) := chunks[mid - 1]!
+    let left ←
+      constructBalancedChunkDispatch recVar fallback acc recursionBudget
+        chunks start mid
+    let right ←
+      constructBalancedChunkDispatch recVar fallback acc recursionBudget
+        chunks mid stop
+    `(if ($recVar:ident).fieldNum ≤ $(quote leftMaxFieldNum) then
+        $left:term
+      else
+        $right:term)
+
 private def decodingChunkSize : Nat := 16
 
 /--
@@ -245,19 +269,9 @@ def construct_fromMessage
                 Protobuf.Encoding.Message.mk #[$recVar:ident]
               $chunkDispatch:term)
           pure (maxFieldNum, chunkId, chunkCommand)
-      let rec constructChunkDispatch
-          (chunks : List (Nat × Ident × Command)) :
-          CommandElabM Term := do
-        match chunks with
-        | [] => `($fallback:ident ())
-        | (maxFieldNum, chunkId, _) :: rest =>
-            let restDispatch ← constructChunkDispatch rest
-            `(if ($recVar:ident).fieldNum ≤ $(quote maxFieldNum) then
-                $chunkId:ident $fallback:ident $acc:ident $recVar:ident
-                  $recursionBudget:ident
-              else
-                $restDispatch:term)
-      let dispatch ← constructChunkDispatch chunks.toList
+      let dispatch ←
+        constructBalancedChunkDispatch
+          recVar fallback acc recursionBudget chunks 0 chunks.size
       pure (dispatch, chunks.map (fun (_, _, command) => command))
   /-
   A known field with an incompatible wire type is retained as unknown. Wrap
