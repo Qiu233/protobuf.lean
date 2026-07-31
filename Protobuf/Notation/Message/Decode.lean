@@ -178,7 +178,7 @@ def construct_fromMessage
     if hasOneofs then
       `(($name × Array Bool ×
         Array Protobuf.Encoding.MessageChunks ×
-        Array (Option (Nat × Protobuf.Encoding.Message))))
+        Array (Option (Nat × Protobuf.Encoding.MessageChunks))))
     else
       `(($name × Array Bool ×
         Array Protobuf.Encoding.MessageChunks))
@@ -248,8 +248,8 @@ def construct_fromMessage
   let oneofPendingInits : Array DoSeqItem ←
     if hasOneofs then
       let init ← `(Parser.Term.doSeqItem|
-        let $oneofPending:ident :
-            Array (Option (Nat × Protobuf.Encoding.Message)) :=
+    let $oneofPending:ident :
+        Array (Option (Nat × Protobuf.Encoding.MessageChunks)) :=
           Array.replicate $(quote oneofFields.size) Option.none)
       pure #[init]
     else
@@ -378,7 +378,7 @@ def construct_fromMessage
     if hasOneofs then
       let bind ← `(Parser.Term.doSeqItem|
         let $oneofPendingAfterFold:ident :
-            Array (Option (Nat × Protobuf.Encoding.Message)) :=
+            Array (Option (Nat × Protobuf.Encoding.MessageChunks)) :=
           ($foldAcc:ident).2.2.2)
       pure #[bind]
     else

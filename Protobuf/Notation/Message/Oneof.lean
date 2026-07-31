@@ -178,7 +178,8 @@ public def elabOneofDecCore
   let state := mkIdent `st
   let state' := mkIdent `st'
   let result := mkIdent `result
-  let stateTy ← `((Option $name × Option (Nat × Protobuf.Encoding.Message)))
+  let stateTy ← `((Option $name ×
+    Option (Nat × Protobuf.Encoding.MessageChunks)))
   let acceptsRecordId := helperIdent name "acceptsRecord"
   let acceptsRecordArg ← mkIdent <$> mkFreshUserName `record
   let acceptsCases ← mdata.mapM fun x => do
@@ -249,6 +250,7 @@ public def elabOneofDecCore
   let validatePendingId := push_name "validatePendingMessage"
   let pending := mkIdent `pending
   let pendingField := mkIdent `pendingField
+  let pendingChunks := mkIdent `pendingChunks
   let pendingMessage := mkIdent `pendingMessage
   let rec mkValidatePending
       (fields : List ProtoFieldMData) : CommandElabM Term := do
@@ -280,13 +282,18 @@ public def elabOneofDecCore
     -/
     partial def $validatePendingId:ident
         ($pending :
-          Option (Nat × Protobuf.Encoding.Message))
+          Option (Nat × Protobuf.Encoding.MessageChunks))
         ($recursionBudget : Nat) :
       Except Protobuf.Encoding.ProtoError Unit :=
       match $pending:ident with
       | Option.none => pure ()
-      | Option.some ($pendingField:ident, $pendingMessage:ident) =>
-          $validatePendingBody:term)
+      | Option.some ($pendingField:ident, $pendingChunks:ident) =>
+          match ($pendingChunks:ident).toMessage? with
+          | Option.none =>
+              throw (Protobuf.Encoding.ProtoError.userError
+                "internal error: pending oneof message has no wire chunks")
+          | Option.some $pendingMessage:ident =>
+              $validatePendingBody:term)
   let ds ← mdata.mapM fun x => do
     let decode ←
       if let some internalType := x.internal_type? then
@@ -313,7 +320,7 @@ public def elabOneofDecCore
             $stateTy)))
       else
         let nested := mkIdent `nested
-        let combined := mkIdent `combined
+        let chunks := mkIdent `chunks
         let getNested ←
           if x.options.wired_as_group?.isEqSome true then
             `(Protobuf.Encoding.Record.getGroup $recVar:ident)
@@ -322,20 +329,19 @@ public def elabOneofDecCore
               $recVar:ident $recursionBudget:ident)
         `(do
           let $nested:ident ← $getNested:term
-          let $combined:ident ←
+          let $chunks:ident ←
             match ($state:ident).2 with
             | Option.some (previousField, previous) =>
                 if previousField == $(x.field_num):num then
-                  pure <|
-                    Protobuf.Encoding.Message.combine previous $nested:ident
+                  pure (previous.push $nested:ident)
                 else do
                   let _ ←
                     $validatePendingId:ident
                       ($state:ident).2 $recursionBudget:ident
-                  pure $nested:ident
-            | Option.none => pure $nested:ident
+                  pure (.single $nested:ident)
+            | Option.none => pure (.single $nested:ident)
           pure (((Option.none,
-            Option.some ($(x.field_num):num, $combined:ident)) : $stateTy)))
+            Option.some ($(x.field_num):num, $chunks:ident)) : $stateTy)))
     pure (x.field_num.getNat, decode)
   let ds := ds.qsort (fun a b => a.1 < b.1)
   let dispatchFallback ← `(pure $state:ident)
@@ -389,8 +395,13 @@ public def elabOneofDecCore
       Except Protobuf.Encoding.ProtoError (Option $name) :=
       match ($state:ident).2 with
       | Option.none => pure ($state:ident).1
-      | Option.some ($pendingField:ident, $pendingMessage:ident) =>
-          $finalizeBody:term)
+      | Option.some ($pendingField:ident, $pendingChunks:ident) =>
+          match ($pendingChunks:ident).toMessage? with
+          | Option.none =>
+              throw (Protobuf.Encoding.ProtoError.userError
+                "internal error: pending oneof message has no wire chunks")
+          | Option.some $pendingMessage:ident =>
+              $finalizeBody:term)
   let fromMessage?Id := push_name "fromMessage?"
   let requiredValidatorId := push_name "validateRequired"
   let fromMessage? ← `(
