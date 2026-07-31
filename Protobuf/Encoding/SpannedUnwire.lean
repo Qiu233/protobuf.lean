@@ -97,8 +97,9 @@ private def zigzagDecode64 (value : UInt64) : Int64 :=
 @[noinline]
 def SpannedRecord.getString
     (record : SpannedRecord) : Except ProtoError String := do
-  let .len span := record.value | throwWireType! "expected LEN"
-  let some value := String.fromUTF8? span.toByteArray
+  let .len source start stop := record.value
+    | throwWireType! "expected LEN"
+  let some value := String.fromUTF8? (source.extract start stop)
     | throwInvalidBuffer! "invalid UTF-8 data"
   return value
 
@@ -106,23 +107,26 @@ def SpannedRecord.getString
 def SpannedRecord.getUnvalidatedString
     (record : SpannedRecord) :
     Except ProtoError Protobuf.UnvalidatedString := do
-  let .len span := record.value | throwWireType! "expected LEN"
-  return .ofBytes span.toByteArray
+  let .len source start stop := record.value
+    | throwWireType! "expected LEN"
+  return .ofBytes (source.extract start stop)
 
 @[noinline]
 def SpannedRecord.getBytes
     (record : SpannedRecord) : Except ProtoError ByteArray := do
-  let .len span := record.value | throwWireType! "expected LEN"
-  return span.toByteArray
+  let .len source start stop := record.value
+    | throwWireType! "expected LEN"
+  return source.extract start stop
 
 @[noinline]
 def SpannedRecord.getMessage
     (record : SpannedRecord)
     (recursionBudget : Nat := defaultMessageRecursionLimit) :
     Except ProtoError SpannedMessage := do
-  let .len span := record.value | throwWireType! "expected LEN"
+  let .len source start stop := record.value
+    | throwWireType! "expected LEN"
   let childBudget ← descendMessageRecursion recursionBudget
-  span.decodeMessage childBudget
+  ByteSpan.decodeMessage { source, start, stop } childBudget
 
 @[noinline]
 def SpannedRecord.getGroup
@@ -214,7 +218,8 @@ private def SpannedRecord.appendRepeatedVarintAs
     (record : SpannedRecord) (out : Array α) (convert : UInt64 → α) :
     Except ProtoError (Array α) := do
   match record.value with
-  | .len span => span.appendVarints out convert
+  | .len source start stop =>
+      ByteSpan.appendVarints { source, start, stop } out convert
   | .varint value => return out.push (convert value)
   | _ => throwWireType! "value of repeated field has the wrong wire type"
 
@@ -223,7 +228,8 @@ private def SpannedRecord.appendRepeatedI64As
     (record : SpannedRecord) (out : Array α) (convert : UInt64 → α) :
     Except ProtoError (Array α) := do
   match record.value with
-  | .len span => span.appendFixed out 8 convert
+  | .len source start stop =>
+      ByteSpan.appendFixed { source, start, stop } out 8 convert
   | .i64 value => return out.push (convert value)
   | _ => throwWireType! "value of repeated field has the wrong wire type"
 
@@ -232,8 +238,9 @@ private def SpannedRecord.appendRepeatedI32As
     (record : SpannedRecord) (out : Array α) (convert : UInt32 → α) :
     Except ProtoError (Array α) := do
   match record.value with
-  | .len span =>
-      span.appendFixed out 4 fun value => convert value.toUInt32
+  | .len source start stop =>
+      ByteSpan.appendFixed { source, start, stop } out 4 fun value =>
+        convert value.toUInt32
   | .i32 value => return out.push (convert value)
   | _ => throwWireType! "value of repeated field has the wrong wire type"
 

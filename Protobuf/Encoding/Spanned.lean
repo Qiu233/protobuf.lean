@@ -32,7 +32,7 @@ mutual
 inductive SpannedValue where
   | varint (value : UInt64)
   | i64 (value : UInt64)
-  | len (value : ByteSpan)
+  | len (source : ByteArray) (start stop : Nat)
   | grouped (value : SpannedMessage)
   | i32 (value : UInt32)
 deriving Inhabited
@@ -52,52 +52,56 @@ private structure WireCursor where
   source : ByteArray
   offset : Nat
   stop : Nat
+  validStop : stop ≤ source.size
 
-private def WireCursor.readByte
-    (cursor : WireCursor) : Except ProtoError (UInt8 × WireCursor) := do
-  if cursor.offset < cursor.stop then
-    if h : cursor.offset < cursor.source.size then
-      let byte := cursor.source[cursor.offset]
-      return (byte, { cursor with offset := cursor.offset + 1 })
-  throw .truncated
-
+@[always_inline]
 private partial def WireCursor.readVarint
     (cursor : WireCursor) :
     Except ProtoError (UInt64 × Nat × WireCursor) := do
   let rec go
-      (cursor : WireCursor) (value shift : UInt64) (index : Nat) :
+      (offset : Nat) (value shift : UInt64) (index : Nat) :
       Except ProtoError (UInt64 × Nat × WireCursor) := do
-    let (byte, cursor) ← cursor.readByte
-    if index == 9 then
-      if byte > 1 then
-        throw .invalidVarint
-      return (value ||| (UInt64.ofNat byte.toNat <<< shift), 10, cursor)
-    let value :=
-      value |||
-        (UInt64.ofNat (byte &&& (0x7f : UInt8)).toNat <<< shift)
-    if byte &&& (0x80 : UInt8) == 0 then
-      return (value, index + 1, cursor)
-    go cursor value (shift + 7) (index + 1)
-  go cursor 0 0 0
+    if hStop : offset < cursor.stop then
+      have hSource : offset < cursor.source.size :=
+        Nat.lt_of_lt_of_le hStop cursor.validStop
+      let byte := cursor.source[offset]
+      let next := offset + 1
+      if index == 9 then
+        if byte > 1 then
+          throw .invalidVarint
+        return (
+          value ||| (UInt64.ofNat byte.toNat <<< shift),
+          10,
+          { cursor with offset := next }
+        )
+      let value :=
+        value |||
+          (UInt64.ofNat (byte &&& (0x7f : UInt8)).toNat <<< shift)
+      if byte &&& (0x80 : UInt8) == 0 then
+        return (value, index + 1, { cursor with offset := next })
+      return ← go next value (shift + 7) (index + 1)
+    throw .truncated
+  go cursor.offset 0 0 0
 
+@[always_inline]
 private def WireCursor.readFixed
     (cursor : WireCursor) (width : Nat) :
     Except ProtoError (UInt64 × WireCursor) := do
-  let mut cursor := cursor
+  if width > cursor.stop - cursor.offset then
+    throw .truncated
   let mut value : UInt64 := 0
   for index in [:width] do
-    let (byte, next) ← cursor.readByte
+    let byte := cursor.source[cursor.offset + index]!
     value := value |||
       (UInt64.ofNat byte.toNat <<< UInt64.ofNat (8 * index))
-    cursor := next
-  return (value, cursor)
+  return (value, { cursor with offset := cursor.offset + width })
 
 private partial def parseSpannedRecords
     (cursor : WireCursor) (expectedEnd? : Option Nat)
     (groupBudget : Nat) :
     Except ProtoError (Array SpannedRecord × WireCursor) := do
   let mut cursor := cursor
-  let mut records := Array.emptyWithCapacity 32
+  let mut records := Array.emptyWithCapacity 8
   repeat
     if cursor.offset == cursor.stop then
       if expectedEnd?.isSome then
@@ -130,11 +134,9 @@ private partial def parseSpannedRecords
         if length > afterLength.stop - afterLength.offset then
           throw .truncated
         let stop := afterLength.offset + length
-        records := records.push ⟨fieldNum, .len {
-          source := afterLength.source
-          start := afterLength.offset
-          stop
-        }⟩
+        records := records.push
+          ⟨fieldNum,
+            .len afterLength.source afterLength.offset stop⟩
         cursor := { afterLength with offset := stop }
     | 3 =>
         if groupBudget == 0 then
@@ -171,6 +173,7 @@ def SpannedMessage.decode
     source := bytes
     offset := 0
     stop := bytes.size
+    validStop := Nat.le_refl bytes.size
   }
   let (records, finalCursor) ←
     parseSpannedRecords cursor none groupBudget
@@ -183,20 +186,23 @@ def ByteSpan.decodeMessage
     (span : ByteSpan)
     (groupBudget : Nat := defaultMessageRecursionLimit) :
     Except ProtoError SpannedMessage := do
-  if span.start > span.stop || span.stop > span.source.size then
+  if span.start > span.stop then
     throw (.invalidBuffer "protobuf byte span is outside its source buffer")
-  if span.size > 0x7fffffff then
-    throw (.invalidBuffer "protobuf messages must be smaller than 2 GiB")
-  let cursor : WireCursor := {
-    source := span.source
-    offset := span.start
-    stop := span.stop
-  }
-  let (records, finalCursor) ←
-    parseSpannedRecords cursor none groupBudget
-  if finalCursor.offset != finalCursor.stop then
-    throw (.userError "protobuf: parser did not consume the complete span")
-  return { records }
+  if validStop : span.stop ≤ span.source.size then
+    if span.size > 0x7fffffff then
+      throw (.invalidBuffer "protobuf messages must be smaller than 2 GiB")
+    let cursor : WireCursor := {
+      source := span.source
+      offset := span.start
+      stop := span.stop
+      validStop
+    }
+    let (records, finalCursor) ←
+      parseSpannedRecords cursor none groupBudget
+    if finalCursor.offset != finalCursor.stop then
+      throw (.userError "protobuf: parser did not consume the complete span")
+    return { records }
+  throw (.invalidBuffer "protobuf byte span is outside its source buffer")
 
 mutual
 
@@ -204,7 +210,7 @@ mutual
 partial def SpannedValue.toProtoVal : SpannedValue → ProtoVal
   | .varint value => .VARINT value.toNat
   | .i64 value => .I64 value.toBitVec
-  | .len span => .LEN span.toByteArray
+  | .len source start stop => .LEN (source.extract start stop)
   | .grouped message => .GROUPED message.toMessage
   | .i32 value => .I32 value.toBitVec
 
@@ -224,11 +230,7 @@ mutual
 partial def ProtoVal.toSpannedValue : ProtoVal → SpannedValue
   | .VARINT value => .varint (UInt64.ofNat value)
   | .I64 value => .i64 (UInt64.ofBitVec value)
-  | .LEN data => .len {
-      source := data
-      start := 0
-      stop := data.size
-    }
+  | .LEN data => .len data 0 data.size
   | .GROUPED message => .grouped message.toSpannedMessage
   | .I32 value => .i32 (UInt32.ofBitVec value)
 

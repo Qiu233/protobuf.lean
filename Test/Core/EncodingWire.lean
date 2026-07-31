@@ -138,7 +138,8 @@ abbrev testSpannedWireParser : Except String Unit := do
   assertEq spanned.records.size 3
     "spanned parser returned the wrong record count"
   match spanned.records[0]!.value with
-  | .len span =>
+  | .len source start stop =>
+      let span : ByteSpan := { source, start, stop }
       assertEq span.toByteArray (⟨#[0xaa, 0xbb, 0xcc]⟩ : ByteArray)
         "root LEN span selected the wrong source interval"
       assertTrue (span.source.size == bytes.size && span.size == 3)
@@ -147,7 +148,8 @@ abbrev testSpannedWireParser : Except String Unit := do
   match spanned.records[2]!.value with
   | .grouped group =>
       match group.records[0]!.value with
-      | .len span =>
+      | .len source start stop =>
+          let span : ByteSpan := { source, start, stop }
           assertEq span.toByteArray (⟨#[0x11, 0x22]⟩ : ByteArray)
             "group LEN span selected the wrong source interval"
           assertTrue (span.source.size == bytes.size)
@@ -175,25 +177,20 @@ abbrev testSpannedTypedReaders : Except String Unit := do
     0xff, 0xff, 0xff, 0xff, 0x01,
     0xdd
   ]⟩
-  let varints : SpannedRecord := ⟨1, .len {
-    source := varintSource
-    start := 1
-    stop := varintSource.size - 1
-  }⟩
+  let varints : SpannedRecord :=
+    ⟨1, .len varintSource 1 (varintSource.size - 1)⟩
   assertEq
     (← ofProtoExcept
       (varints.appendRepeatedVarint_uint64 #[42]))
     #[42, 0, 1, 150, 0xffffffffffffffff]
     "spanned packed varint reader returned the wrong typed values"
 
-  let fixed32s : SpannedRecord := ⟨2, .len {
-    source := ⟨#[
+  let fixed32Source : ByteArray := ⟨#[
       0x78, 0x56, 0x34, 0x12,
       0xef, 0xcd, 0xab, 0x89
     ]⟩
-    start := 0
-    stop := 8
-  }⟩
+  let fixed32s : SpannedRecord :=
+    ⟨2, .len fixed32Source 0 fixed32Source.size⟩
   assertEq
     (← ofProtoExcept
       (fixed32s.appendRepeatedI32_fixed32 #[]))
@@ -206,31 +203,23 @@ abbrev testSpannedTypedReaders : Except String Unit := do
     "spanned scalar int64 reader lost two's-complement semantics"
 
   let utf8 := "borrowed UTF-8".toUTF8
-  let stringRecord : SpannedRecord := ⟨4, .len {
-    source := utf8
-    start := 0
-    stop := utf8.size
-  }⟩
+  let stringRecord : SpannedRecord :=
+    ⟨4, .len utf8 0 utf8.size⟩
   assertEq (← ofProtoExcept stringRecord.getString) "borrowed UTF-8"
     "spanned string reader decoded the wrong payload"
 
   let nestedBytes : ByteArray := ⟨#[0x08, 0x96, 0x01]⟩
-  let nestedRecord : SpannedRecord := ⟨5, .len {
-    source := nestedBytes
-    start := 0
-    stop := nestedBytes.size
-  }⟩
+  let nestedRecord : SpannedRecord :=
+    ⟨5, .len nestedBytes 0 nestedBytes.size⟩
   let nested ← ofProtoExcept (nestedRecord.getMessage)
   assertTrue
     (nested.records.size == 1 &&
       nested.records[0]!.fieldNum == 1)
     "spanned embedded-message reader parsed the wrong records"
 
-  let malformedFixed : SpannedRecord := ⟨6, .len {
-    source := ⟨#[1, 2, 3]⟩
-    start := 0
-    stop := 3
-  }⟩
+  let malformedSource : ByteArray := ⟨#[1, 2, 3]⟩
+  let malformedFixed : SpannedRecord :=
+    ⟨6, .len malformedSource 0 malformedSource.size⟩
   assertProtoFails
     (malformedFixed.appendRepeatedI32_fixed32 #[])
     "spanned packed fixed32 reader accepted a partial element"
