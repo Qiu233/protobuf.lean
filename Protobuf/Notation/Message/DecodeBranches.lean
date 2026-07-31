@@ -91,7 +91,7 @@ private def constructMapBranch
     CommandElabM Term := do
   let {
     name,
-    recMsg,
+    recVar,
     state,
     seen := _,
     pending,
@@ -116,7 +116,6 @@ private def constructMapBranch
   let entry := mkIdent `entry
   let entryBudget := mkIdent `entryBudget
   let map := mkIdent `map
-  let fieldNum := fieldMData.field_num
   let field := fieldMData.field_name
   let decodeValue ←
     if mapInfo.value_is_message then
@@ -137,23 +136,19 @@ private def constructMapBranch
     else
       `(pure $valueDefault)
   let normalBody ← `(do
-    let entries ←
-      Encoding.Message.getExpandedMessage
-        $recMsg:ident $fieldNum:num $recursionBudget:ident
+    let $entry:ident ←
+      Encoding.Record.getMessage $recVar:ident $recursionBudget:ident
     let $entryBudget:ident ←
       Protobuf.Encoding.descendMessageRecursion $recursionBudget:ident
-    let $map:ident ←
-      entries.foldlM
-        (init := $(fieldMData.field_proj) $state:ident)
-        (fun $map:ident $entry:ident => do
-          let key? ← $keyDecoder?:ident $entry 1
-          let value? ← $decodeValue:term
-          let key := Option.getD key? $keyDefault
-          let value ←
-            match value? with
-            | some value => pure value
-            | none => $decodeMissingValue:term
-          pure ($mapInsert:term $map key value))
+    let key? ← $keyDecoder?:ident $entry:ident 1
+    let value? ← $decodeValue:term
+    let key := Option.getD key? $keyDefault
+    let value ←
+      match value? with
+      | some value => pure value
+      | none => $decodeMissingValue:term
+    let $map:ident :=
+      $mapInsert:term ($(fieldMData.field_proj) $state:ident) key value
     let $state':ident : $name := {
       $state:ident with
       $field:ident := $map:ident
@@ -167,14 +162,13 @@ private def constructMapBranch
     let enumIsKnown := helperIdent mapInfo.value_proto_type "isKnown"
     let enumIsClosed := helperIdent mapInfo.value_proto_type "isClosed"
     `(do
-      let entries ←
-        Encoding.Message.getExpandedMessage
-          $recMsg:ident $fieldNum:num $recursionBudget:ident
+      let $entry:ident ←
+        Encoding.Record.getMessage $recVar:ident $recursionBudget:ident
       let _ ←
         Protobuf.Encoding.descendMessageRecursion $recursionBudget:ident
       let hasUnknownClosedValue :=
-        $enumIsClosed:ident && entries.any (fun entry =>
-          entry.records.any (fun record =>
+        $enumIsClosed:ident &&
+          ($entry:ident).records.any (fun record =>
             if record.fieldNum != 2 then
               false
             else
@@ -183,7 +177,7 @@ private def constructMapBranch
                   !($enumIsKnown:ident
                     ($enumFromInt32:ident
                       (Int32.ofBitVec (UInt32.ofNat raw).toBitVec)))
-              | _ => false))
+              | _ => false)
       if hasUnknownClosedValue then
         $unknownBody:term
       else
@@ -238,23 +232,37 @@ private def constructRepeatedBranch
           let groupMessage ← mkIdent <$> mkFreshUserName `groupMessage
           let childBudget ← mkIdent <$> mkFreshUserName `childBudget
           `(do
-            let groupMessages ←
-              Encoding.Message.getExpandedGroup
-                $recMsg:ident $fieldNum:num
-            groupMessages.mapM fun $groupMessage:ident => do
+            let $groupMessage:ident ←
+              Encoding.Record.getGroup $recVar:ident
+            let $childBudget:ident ←
+              Protobuf.Encoding.descendMessageRecursion
+                $recursionBudget:ident
+            let value ←
+              $fromMessage:ident
+                $groupMessage:ident $childBudget:ident false
+            pure #[value])
+        else
+          if fieldMData.enum_type?.isSome then
+            let decoderRep ← fieldMData.decoder_rep?.getDM <|
+              throwErrorAt fieldMData.field_name
+                "{decl_name%}: internal error: repeated enum field has no generated decoder"
+            `($decoderRep:ident $recMsg:ident $fieldNum:num)
+          else
+            let fromMessage ← fieldMData.fromMessage?.getDM <|
+              throwErrorAt fieldMData.field_name
+                "{decl_name%}: internal error: repeated message field has no generated fromMessage function"
+            let nested ← mkIdent <$> mkFreshUserName `nested
+            let childBudget ← mkIdent <$> mkFreshUserName `childBudget
+            `(do
+              let $nested:ident ←
+                Encoding.Record.getMessage
+                  $recVar:ident $recursionBudget:ident
               let $childBudget:ident ←
                 Protobuf.Encoding.descendMessageRecursion
                   $recursionBudget:ident
-              $fromMessage:ident $groupMessage:ident $childBudget:ident false)
-        else
-          let decoderRep ← fieldMData.decoder_rep?.getDM <|
-            throwErrorAt fieldMData.field_name
-              "{decl_name%}: internal error: repeated field has no generated decoder"
-          if fieldMData.enum_type?.isNone then
-            `($decoderRep:ident
-              $recMsg:ident $fieldNum:num $recursionBudget:ident false)
-          else
-            `($decoderRep:ident $recMsg:ident $fieldNum:num)
+              let value ←
+                $fromMessage:ident $nested:ident $childBudget:ident false
+              pure #[value])
       `(do
         let $xs:ident ← $decodeRepeated:term
         let values :=
@@ -427,7 +435,7 @@ private def constructSingularMessageBranch
     (ctx : DecodeFoldContext) (fieldMData : ProtoFieldMData)
     (seenUpdate : Term) : CommandElabM Term := do
   let {
-    recMsg,
+    recVar,
     state,
     seen',
     pending,
@@ -435,27 +443,21 @@ private def constructSingularMessageBranch
     recursionBudget,
     ..
   } := ctx
-  let fieldNum := fieldMData.field_num
   let some pendingIndex := ctx.regularMessageMeta.findSome? (fun (fieldName, i) =>
     if fieldName == fieldMData.field_name.getId then some i else none)
     | throwErrorAt fieldMData.field_name
         "{decl_name%}: internal error: singular message field has no pending slot"
-  let nestedMessages := mkIdent `nestedMessages
   let nested := mkIdent `nested
   let combined := mkIdent `combined
   let updatedState ← ctx.mkState state seen' pending'
-  let getNestedMessages ←
+  let getNestedMessage ←
     if fieldMData.options.wired_as_group?.isEqSome true then
-      `(Encoding.Message.getExpandedGroup
-        $recMsg:ident $fieldNum:num)
+      `(Encoding.Record.getGroup $recVar:ident)
     else
-      `(Encoding.Message.getExpandedMessage
-        $recMsg:ident $fieldNum:num $recursionBudget:ident)
+      `(Encoding.Record.getMessage
+        $recVar:ident $recursionBudget:ident)
   `(do
-    let $nestedMessages:ident ← $getNestedMessages:term
-    let Option.some $nested:ident := $nestedMessages:ident[0]?
-      | throw (Protobuf.Encoding.ProtoError.userError
-          "internal error: a message wire record decoded to no payload")
+    let $nested:ident ← $getNestedMessage:term
     let $combined:ident :=
       match ($pending:ident)[$(quote pendingIndex)]! with
       | Option.some previous =>

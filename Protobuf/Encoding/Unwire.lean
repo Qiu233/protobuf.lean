@@ -336,6 +336,19 @@ def Record.getBytes (record : Record) : Except ProtoError ByteArray := do
   return data
 
 @[noinline]
+def Record.getMessage
+    (record : Record)
+    (recursionBudget : Nat := defaultMessageRecursionLimit) :
+    Except ProtoError Message := do
+  let .LEN data := record.value | throwWireType! "expected LEN"
+  decodeEmbeddedMessage data recursionBudget
+
+@[noinline]
+def Record.getGroup (record : Record) : Except ProtoError Message := do
+  let .GROUPED message := record.value | throwWireType! "expected GROUPED"
+  return message
+
+@[noinline]
 def Record.getBool (record : Record) : Except ProtoError Bool := do
   let .VARINT value := record.value | throwWireType! "expected VARINT"
   return value != 0
