@@ -128,7 +128,6 @@ def construct_fromMessage
     CommandElabM (Ident × Array Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let recVar := mkIdent `r
-  let recMsg := mkIdent `recordMsg
   let acc := mkIdent `acc
   let state := mkIdent `st
   let seen := mkIdent `seen
@@ -182,7 +181,6 @@ def construct_fromMessage
   let branchContext : DecodeFoldContext := {
     name,
     recVar,
-    recMsg,
     state,
     seen,
     pending,
@@ -265,8 +263,6 @@ def construct_fromMessage
               let $state:ident := ($chunkAcc:ident).1
               let $seen:ident := ($chunkAcc:ident).2.1
               let $pending:ident := ($chunkAcc:ident).2.2
-              let $recMsg:ident :=
-                Protobuf.Encoding.Message.mk #[$recVar:ident]
               $chunkDispatch:term)
           pure (maxFieldNum, chunkId, chunkCommand)
       let dispatch ←
@@ -287,7 +283,6 @@ def construct_fromMessage
         let $state:ident := ($acc:ident).1
         let $seen:ident := ($acc:ident).2.1
         let $pending:ident := ($acc:ident).2.2
-        let $recMsg:ident := Protobuf.Encoding.Message.mk #[$recVar:ident]
         $fallbackInit
         $dispatchBody:term))
   let foldBody ← `(Parser.Term.doSeqItem| let $foldAcc:ident : $stateTy ← $foldExpr:term)

@@ -57,7 +57,6 @@ budget.
 structure DecodeFoldContext where
   name : Ident
   recVar : Ident
-  recMsg : Ident
   state : Ident
   seen : Ident
   pending : Ident
@@ -189,7 +188,6 @@ private def constructRepeatedBranch
   let {
     name,
     recVar,
-    recMsg,
     state,
     seen := _,
     pending,
@@ -210,7 +208,9 @@ private def constructRepeatedBranch
   -/
   let xs := mkIdent `xs
   let normalBody ←
-    match fieldMData.internal_type? with
+    if fieldMData.enum_type?.isSome then
+      pure unknownBody
+    else match fieldMData.internal_type? with
     | some type =>
       let appender := type.recordAppender
       `(do
@@ -242,27 +242,21 @@ private def constructRepeatedBranch
                 $groupMessage:ident $childBudget:ident false
             pure #[value])
         else
-          if fieldMData.enum_type?.isSome then
-            let decoderRep ← fieldMData.decoder_rep?.getDM <|
-              throwErrorAt fieldMData.field_name
-                "{decl_name%}: internal error: repeated enum field has no generated decoder"
-            `($decoderRep:ident $recMsg:ident $fieldNum:num)
-          else
-            let fromMessage ← fieldMData.fromMessage?.getDM <|
-              throwErrorAt fieldMData.field_name
-                "{decl_name%}: internal error: repeated message field has no generated fromMessage function"
-            let nested ← mkIdent <$> mkFreshUserName `nested
-            let childBudget ← mkIdent <$> mkFreshUserName `childBudget
-            `(do
-              let $nested:ident ←
-                Encoding.Record.getMessage
-                  $recVar:ident $recursionBudget:ident
-              let $childBudget:ident ←
-                Protobuf.Encoding.descendMessageRecursion
-                  $recursionBudget:ident
-              let value ←
-                $fromMessage:ident $nested:ident $childBudget:ident false
-              pure #[value])
+          let fromMessage ← fieldMData.fromMessage?.getDM <|
+            throwErrorAt fieldMData.field_name
+              "{decl_name%}: internal error: repeated message field has no generated fromMessage function"
+          let nested ← mkIdent <$> mkFreshUserName `nested
+          let childBudget ← mkIdent <$> mkFreshUserName `childBudget
+          `(do
+            let $nested:ident ←
+              Encoding.Record.getMessage
+                $recVar:ident $recursionBudget:ident
+            let $childBudget:ident ←
+              Protobuf.Encoding.descendMessageRecursion
+                $recursionBudget:ident
+            let value ←
+              $fromMessage:ident $nested:ident $childBudget:ident false
+            pure #[value])
       `(do
         let $xs:ident ← $decodeRepeated:term
         let values :=
@@ -281,61 +275,61 @@ private def constructRepeatedBranch
     let enumFromInt32 := helperIdent fieldMData.proto_type "fromInt32"
     let enumIsKnown := helperIdent fieldMData.proto_type "isKnown"
     let enumIsClosed := helperIdent fieldMData.proto_type "isClosed"
-    `(if !$enumIsClosed:ident then
-        $normalBody:term
-      else
-        match ($recVar:ident).value with
-        | .VARINT raw =>
-            let value :=
-              $enumFromInt32:ident
-                (Int32.ofBitVec (UInt32.ofNat raw).toBitVec)
-            if $enumIsKnown:ident value then
-              let $state':ident : $name := {
-                $state:ident with
-                $field:ident :=
-                  ($(fieldMData.field_proj) $state:ident).push value
-              }
-              let $seen':ident := $seenUpdate:term
-              pure (($state':ident, $seen':ident, $pending:ident) : $stateTy)
-            else
-              $unknownBody:term
-        | .LEN _ => do
-            let raws ←
-              Encoding.Message.getPackedVarint_uint64
-                $recMsg:ident $fieldNum:num
-            let mut known := #[]
-            let mut unknown := #[]
-            for raw in raws do
-              let truncated : UInt32 := UInt32.ofNat raw.toNat
-              let value :=
-                $enumFromInt32:ident
-                  (Int32.ofBitVec truncated.toBitVec)
-              if $enumIsKnown:ident value then
-                known := known.push value
-              else
-                -- Packed closed-enum unknowns re-emit as expanded uint32
-                -- varints, matching official runtimes.
-                unknown := unknown.push
-                  (Protobuf.Encoding.ProtoVal.VARINT truncated.toNat)
-            let unknownFields :=
-              if unknown.isEmpty then
-                $unknownProj:ident $state:ident
-              else
-                ($unknownProj:ident $state:ident).alter
-                  $fieldNum:num (fun
-                    | Option.none => Option.some unknown
-                    | Option.some vals => Option.some (vals ++ unknown))
+    `(match ($recVar:ident).value with
+      | .VARINT raw =>
+          let value :=
+            $enumFromInt32:ident
+              (Int32.ofBitVec (UInt32.ofNat raw).toBitVec)
+          if !$enumIsClosed:ident || $enumIsKnown:ident value then
             let $state':ident : $name := {
               $state:ident with
               $field:ident :=
-                $(fieldMData.field_proj) $state:ident ++ known
-              $unknownField:ident := unknownFields
+                ($(fieldMData.field_proj) $state:ident).push value
             }
             let $seen':ident := $seenUpdate:term
             pure (($state':ident, $seen':ident, $pending:ident) : $stateTy)
-        | _ =>
-            throw (.invalidWireType
-              s!"expected VARINT or LEN for repeated enum field"))
+          else
+            $unknownBody:term
+      | .LEN _ => do
+          let raws ←
+            Encoding.Record.appendRepeatedVarint_uint64
+              $recVar:ident #[]
+          let mut known := #[]
+          let mut unknown := #[]
+          for raw in raws do
+            let truncated : UInt32 := UInt32.ofNat raw.toNat
+            let value :=
+              $enumFromInt32:ident
+                (Int32.ofBitVec truncated.toBitVec)
+            if !$enumIsClosed:ident || $enumIsKnown:ident value then
+              known := known.push value
+            else
+              -- Packed closed-enum unknowns re-emit as expanded uint32
+              -- varints, matching official runtimes.
+              unknown := unknown.push
+                (Protobuf.Encoding.ProtoVal.VARINT truncated.toNat)
+          let unknownFields :=
+            if unknown.isEmpty then
+              $unknownProj:ident $state:ident
+            else
+              ($unknownProj:ident $state:ident).alter
+                $fieldNum:num (fun
+                  | Option.none => Option.some unknown
+                  | Option.some vals => Option.some (vals ++ unknown))
+          let values :=
+            known.foldl
+              (init := $(fieldMData.field_proj) $state:ident)
+              fun values value => values.push value
+          let $state':ident : $name := {
+            $state:ident with
+            $field:ident := values
+            $unknownField:ident := unknownFields
+          }
+          let $seen':ident := $seenUpdate:term
+          pure (($state':ident, $seen':ident, $pending:ident) : $stateTy)
+      | _ =>
+          throw (.invalidWireType
+            s!"expected VARINT or LEN for repeated enum field"))
 
 private def constructSingularScalarBranch
     (ctx : DecodeFoldContext) (fieldMData : ProtoFieldMData)
@@ -343,7 +337,6 @@ private def constructSingularScalarBranch
   let {
     name,
     recVar,
-    recMsg,
     state,
     seen,
     pending,
@@ -353,9 +346,7 @@ private def constructSingularScalarBranch
     unknownBody,
     ..
   } := ctx
-  let fieldNum := fieldMData.field_num
   let field := fieldMData.field_name
-  let decoder? := fieldMData.decoder??.get!
   let decodeValue? ←
     match fieldMData.internal_type? with
     | some type =>
@@ -364,7 +355,20 @@ private def constructSingularScalarBranch
           let value ← $decoder:ident $recVar:ident
           pure (some value))
     | none =>
-        `($decoder?:ident $recMsg:ident $fieldNum:num)
+        let enumFromInt32 := helperIdent fieldMData.proto_type "fromInt32"
+        let enumIsKnown := helperIdent fieldMData.proto_type "isKnown"
+        let enumIsClosed := helperIdent fieldMData.proto_type "isClosed"
+        `(match ($recVar:ident).value with
+          | .VARINT raw =>
+              let value :=
+                $enumFromInt32:ident
+                  (Int32.ofBitVec (UInt32.ofNat raw).toBitVec)
+              if !$enumIsClosed:ident || $enumIsKnown:ident value then
+                pure (some value)
+              else
+                pure none
+          | _ =>
+              throw (.invalidWireType "expected VARINT for enum field"))
   let value? := mkIdent `value?
   let value := mkIdent `value
   match fieldMData.mod with
