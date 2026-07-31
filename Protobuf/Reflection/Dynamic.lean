@@ -293,7 +293,7 @@ private def decodeValues
   let repeated := isRepeated proto
   let compatibleWire : Encoding.Message := {
     records := message.wire.records.filter fun record =>
-      record.fieldNum != number ||
+      record.fieldNum == number &&
         wireValueCompatible type repeated record.value
   }
   let message := { message with wire := compatibleWire }
@@ -363,7 +363,7 @@ private def decodeValues
         if occurrences.isEmpty then
           return #[]
         return #[.message child
-          (occurrences.foldl (init := .empty) Encoding.Message.combine)]
+          (Encoding.Message.combineMany occurrences)]
   | .TYPE_MESSAGE =>
       let child ← resolveMessage field proto
       let occurrences ← liftWire (message.wire.getExpandedMessage number)
@@ -373,7 +373,7 @@ private def decodeValues
         return #[]
       else
         return #[.message child
-          (occurrences.foldl (init := .empty) Encoding.Message.combine)]
+          (Encoding.Message.combineMany occurrences)]
   | .TYPE_BYTES =>
       if repeated then
         return (← liftWire (message.wire.getExpandedBytes number)).map .bytes
