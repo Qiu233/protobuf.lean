@@ -29,6 +29,26 @@ end
 @[always_inline]
 def Message.combine : Message → Message → Message := fun a b => Message.mk (a.records ++ b.records)
 
+/--
+Concatenate wire-message chunks in one allocation while preserving record
+order.
+
+Repeatedly applying `Message.combine` to a growing accumulator copies the
+entire prefix at every step. Generated decoders use this helper when a singular
+message field has multiple wire occurrences, making the total work linear in
+the number of records.
+-/
+@[noinline]
+def Message.combineMany (messages : Array Message) : Message :=
+  let capacity :=
+    messages.foldl (init := 0) fun size message =>
+      size + message.records.size
+  let records :=
+    messages.foldl (init := Array.emptyWithCapacity capacity)
+      fun records message =>
+        message.records.foldl (init := records) Array.push
+  Message.mk records
+
 @[always_inline]
 def ProtoVal.isVARINT : ProtoVal → Bool
   | .VARINT .. => true

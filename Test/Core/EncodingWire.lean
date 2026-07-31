@@ -411,4 +411,29 @@ abbrev testPackedFixed64 : Except String Unit := do
     (message.getLastRecordOf? 3).isNone &&
     (message.getLastValueOf? 3).isNone
 
+/-- info: true -/
+#guard_msgs (info) in
+#eval
+  let first : Message := {
+    records := #[
+      { fieldNum := 3, value := .VARINT 10 },
+      { fieldNum := 1, value := .I32 (20 : UInt32).toBitVec }
+    ]
+  }
+  let second : Message := {
+    records := #[
+      { fieldNum := 2, value := .LEN ⟨#[30]⟩ }
+    ]
+  }
+  let combined :=
+    Message.combineMany #[Message.empty, first, Message.empty, second]
+  combined.records.size == 3 &&
+    combined.records[0]!.fieldNum == 3 &&
+    combined.records[0]!.value.isVARINT &&
+    combined.records[1]!.fieldNum == 1 &&
+    combined.records[1]!.value.isI32 &&
+    combined.records[2]!.fieldNum == 2 &&
+    combined.records[2]!.value.isLEN &&
+    (Message.combineMany #[]).records.isEmpty
+
 end Test.Core.EncodingWire
