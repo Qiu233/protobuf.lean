@@ -1,9 +1,0 @@
-edition = "2024";
-
-package visibility_export_all_use;
-
-import "Test/VisibilityExportAllTypes.proto";
-
-message Use {
-  visibility_export_all.Outer.Nested nested = 1;
-}

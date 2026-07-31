@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  PROTOBUF_VERSION: "34.2"
+  PROTOBUF_VERSION: "35.0"
 
 jobs:
   build:

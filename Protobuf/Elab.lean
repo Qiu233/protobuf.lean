@@ -23,10 +23,17 @@ Use this for reflection-only programs that do not need generated Lean types.
 syntax (name := loadProtoDescriptorsCommand) "#load_proto_descriptors " str (inClause)? : command
 syntax (name := loadProtoDirCommand) "#load_proto_dir " str : command
 
+private meta def protocExecutable : IO String := do
+  match ← IO.getEnv "PROTOC" with
+  | some executable =>
+      if executable.isEmpty then pure "protoc" else pure executable
+  | none => pure "protoc"
+
 meta def read_proto (srcFile : FilePath) (protoPath : FilePath) : ExceptT String IO google.protobuf.FileDescriptorSet := do
+  let protoc ← protocExecutable
   let bin ← IO.FS.withTempFile fun _h tmp => do
     _ ← IO.Process.run {
-      cmd := "protoc"
+      cmd := protoc
       args := #[
         srcFile.toString,
         "--include_imports",
@@ -55,6 +62,7 @@ meta def read_proto_files (srcFiles : Array FilePath) (protoPath : FilePath) :
     ExceptT String IO google.protobuf.FileDescriptorSet := do
   if srcFiles.isEmpty then
     throw "no .proto files found in directory"
+  let protoc ← protocExecutable
   let bin ← IO.FS.withTempFile fun _h tmp => do
     let mut args := #[
       s!"--proto_path={protoPath.toString}",
@@ -63,7 +71,7 @@ meta def read_proto_files (srcFiles : Array FilePath) (protoPath : FilePath) :
       s!"--descriptor_set_out={tmp.toString}"
     ]
     args := args ++ srcFiles.map (·.toString)
-    _ ← IO.Process.run { cmd := "protoc", args := args }
+    _ ← IO.Process.run { cmd := protoc, args := args }
     IO.FS.readBinFile tmp -- TODO: may be too large, make it incremental
   let data ← liftExcept <|
     (Binary.Get.run (Binary.getThe Encoding.Message) bin |>.toExcept).mapError fun e =>

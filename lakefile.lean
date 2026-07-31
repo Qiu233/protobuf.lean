@@ -32,64 +32,64 @@ lean_exe benchJsonDecode where
   root := `Test.Bench.JsonDecode
 
 lean_exe testVersionsSemantics where
-  root := `Test.VersionsSemantics
+  root := `Test.Runtime.VersionsSemantics
 
 lean_exe testVersionsValidation where
-  root := `Test.VersionsValidation
+  root := `Test.Core.VersionsValidation
 
 lean_exe testExtensions where
-  root := `Test.Extensions
+  root := `Test.Runtime.Extensions
 
 lean_exe testClosedEnum where
-  root := `Test.ClosedEnum
+  root := `Test.Runtime.ClosedEnum
 
 lean_exe testUtf8Validation where
-  root := `Test.Utf8Validation
+  root := `Test.Runtime.Utf8Validation
 
 lean_exe testReflection where
-  root := `Test.Reflection
+  root := `Test.Runtime.Reflection
 
 lean_exe testProtoJson where
-  root := `Test.ProtoJson
+  root := `Test.Runtime.ProtoJson
 
 lean_exe testProtoJsonWellKnown where
-  root := `Test.ProtoJsonWellKnown
+  root := `Test.Runtime.ProtoJsonWellKnown
 
 lean_exe testProtoJsonConformance where
-  root := `Test.ProtoJsonConformance
+  root := `Test.Conformance.ProtoJsonConformance
 
 lean_lib Tests where
   roots := #[
-    `Test.Utils,
-    `Test.EncodingWire,
-    `Test.ExtensionTagBase,
-    `Test.ExtensionKnownTagCollisionsBase,
-    `Test.ExtensionKnownTagCollisions,
-    `Test.NotationSyntax,
-    `Test.Proto3,
-    `Test.Folder,
-    `Test.Desc,
-    `Test.VersionsSemantics,
-    `Test.VersionsValidation,
-    `Test.Extensions,
-    `Test.ClosedEnum,
-    `Test.Utf8Validation,
-    `Test.Reflection,
-    `Test.ProtoJson,
-    `Test.ProtoJsonWellKnown,
-    `Test.RecursionDepth,
-    `Test.RequiredMerge,
-    `Test.Groups,
-    `Test.NamingCollisions,
-    `Test.WideCodegen,
-    `Test.OneofParentCollisionBase,
-    `Test.OneofParentCollisions,
-    `Test.RootName,
-    `Test.ElabStandaloneImport,
-    `Test.VisibilityRetainedOptions,
-    `Test.OfficialSmokeUnittestProto3,
-    `Test.OfficialStruct,
-    `Test.OfficialConformanceProto3
+    `Test.Core.Utils,
+    `Test.Core.EncodingWire,
+    `Test.Core.Desc,
+    `Test.Core.VersionsValidation,
+    `Test.Codegen.ExtensionTagBase,
+    `Test.Codegen.ExtensionKnownTagCollisionsBase,
+    `Test.Codegen.ExtensionKnownTagCollisions,
+    `Test.Codegen.NotationSyntax,
+    `Test.Codegen.Folder,
+    `Test.Codegen.NamingCollisions,
+    `Test.Codegen.WideCodegen,
+    `Test.Codegen.OneofParentCollisionBase,
+    `Test.Codegen.OneofParentCollisions,
+    `Test.Codegen.RootName,
+    `Test.Codegen.VisibilityRetainedOptions,
+    `Test.Runtime.Proto3,
+    `Test.Runtime.VersionsSemantics,
+    `Test.Runtime.Extensions,
+    `Test.Runtime.ClosedEnum,
+    `Test.Runtime.Utf8Validation,
+    `Test.Runtime.Reflection,
+    `Test.Runtime.ProtoJson,
+    `Test.Runtime.ProtoJsonWellKnown,
+    `Test.Runtime.RecursionDepth,
+    `Test.Runtime.RequiredMerge,
+    `Test.Runtime.Groups,
+    `Test.Integration.ElabStandaloneImport,
+    `Test.Official.OfficialSmokeUnittestProto3,
+    `Test.Official.OfficialStruct,
+    `Test.Official.OfficialConformanceProto3
   ]
 
 @[test_driver]
@@ -106,25 +106,25 @@ script test (_args) do
 
   let buildExit ← runLake #[
     "build",
-    "+Test.Utils",
-    "+Test.EncodingWire",
-    "+Test.ExtensionTagBase",
-    "+Test.ExtensionKnownTagCollisions",
-    "+Test.NotationSyntax",
-    "+Test.Proto3",
-    "+Test.Folder",
-    "+Test.Desc",
-    "+Test.RecursionDepth",
-    "+Test.RequiredMerge",
-    "+Test.Groups",
-    "+Test.NamingCollisions",
-    "+Test.WideCodegen",
-    "+Test.OneofParentCollisions",
-    "+Test.RootName",
-    "+Test.ElabStandaloneImport",
-    "+Test.VisibilityRetainedOptions",
-    "+Test.OfficialSmokeUnittestProto3",
-    "+Test.OfficialStruct",
+    "+Test.Core.Utils",
+    "+Test.Core.EncodingWire",
+    "+Test.Codegen.ExtensionTagBase",
+    "+Test.Codegen.ExtensionKnownTagCollisions",
+    "+Test.Codegen.NotationSyntax",
+    "+Test.Codegen.Folder",
+    "+Test.Core.Desc",
+    "+Test.Runtime.Proto3",
+    "+Test.Runtime.RecursionDepth",
+    "+Test.Runtime.RequiredMerge",
+    "+Test.Runtime.Groups",
+    "+Test.Codegen.NamingCollisions",
+    "+Test.Codegen.WideCodegen",
+    "+Test.Codegen.OneofParentCollisions",
+    "+Test.Codegen.RootName",
+    "+Test.Integration.ElabStandaloneImport",
+    "+Test.Codegen.VisibilityRetainedOptions",
+    "+Test.Official.OfficialSmokeUnittestProto3",
+    "+Test.Official.OfficialStruct",
     "Plugin",
     "testVersionsSemantics",
     "testVersionsValidation",
@@ -141,7 +141,7 @@ script test (_args) do
   -- Keep the largest upstream schema in a separate Lake invocation so it
   -- cannot overlap other generated-code jobs and multiply peak memory usage.
   let conformanceExit ←
-    runLake #["build", "+Test.OfficialConformanceProto3"]
+    runLake #["build", "+Test.Official.OfficialConformanceProto3"]
   if conformanceExit != 0 then
     return conformanceExit
 
@@ -161,7 +161,7 @@ script test (_args) do
 
   let pluginTest ← IO.Process.spawn {
     cmd := "bash"
-    args := #["Test/PluginIntegration.sh"]
+    args := #["Test/Integration/Plugin.sh"]
     stdin := .inherit
     stdout := .inherit
     stderr := .inherit

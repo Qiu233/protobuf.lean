@@ -58,6 +58,13 @@ There are 5 methods to use this library:
 The last tested version is `libprotoc 35.0`; Edition 2024 inputs require
 `protoc` 32.0 or newer.**
 
+The `#load_proto_*` commands and repository test scripts honor `PROTOC`, so a
+specific compiler can be selected without changing the process-wide `PATH`:
+
+```bash
+PROTOC=/path/to/protoc lake build
+```
+
 Downstream users of this package can expect the first 3 methods to be always reliable and production ready. The first two methods are highly recommended for production use.
 
 ## Standalone .proto file
