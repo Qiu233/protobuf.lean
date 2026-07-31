@@ -207,9 +207,16 @@ private def constructRepeatedBranch
         `($decoderRep:ident $recMsg:ident $fieldNum:num)
   let normalBody ← `(do
     let $xs:ident ← $decodeRepeated:term
+    -- Repeated `Array.append` of one decoded record copied the accumulated
+    -- prefix and made a long unpacked/repeated field quadratic. Folding with
+    -- `push` lets the uniquely owned generated-state accumulator grow in place.
+    let values :=
+      ($xs:ident).foldl
+        (init := ($(fieldMData.field_proj) $state:ident))
+        fun values value => values.push value
     let $state':ident : $name := {
       $state:ident with
-      $field:ident := $(fieldMData.field_proj) $state:ident ++ $xs:ident
+      $field:ident := values
     }
     let $seen':ident := $seenUpdate:term
     pure (($state':ident, $seen':ident, $pending:ident) : $stateTy))

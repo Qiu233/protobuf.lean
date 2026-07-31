@@ -1347,12 +1347,16 @@ private partial def scanJsonValue (input : List Char) :
   | '"' :: rest =>
       let (_, rest) ← scanJsonString rest
       return rest
-  | input =>
+  | input@(first :: _) =>
+      -- Checking `rest.length == input.length` here is quadratic over a large
+      -- document: every primitive would traverse the complete remaining
+      -- suffix. The parser above has already established that the JSON is
+      -- valid, so a delimiter at the current position is the only empty token.
+      if first == ',' || first == ']' || first == '}' then
+        throw "missing JSON value"
       let rest := input.dropWhile fun c =>
         c != ',' && c != ']' && c != '}' &&
           c != ' ' && c != '\t' && c != '\r' && c != '\n'
-      if rest.length == input.length then
-        throw "missing JSON value"
       return rest
 
 private partial def scanJsonObject (input : List Char) :
