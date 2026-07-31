@@ -2,5 +2,6 @@ module
 
 public import Protobuf.Encoding.Basic
 public import Protobuf.Encoding.Binary
+public import Protobuf.Encoding.Spanned
 public import Protobuf.Encoding.Builder
 public import Protobuf.Encoding.Unwire

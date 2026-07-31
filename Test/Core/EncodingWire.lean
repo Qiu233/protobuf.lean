@@ -122,6 +122,51 @@ abbrev testRawEncodingValidation : Except String Unit := do
   assertEq encodedSize bytes.size
     "validated encoded size differs from the actual writer output"
 
+abbrev testSpannedWireParser : Except String Unit := do
+  let wire : Message := {
+    records := #[
+      ⟨1, .LEN ⟨#[0xaa, 0xbb, 0xcc]⟩⟩,
+      ⟨2, .VARINT 0xffffffffffffffff⟩,
+      ⟨3, .GROUPED {
+        records := #[⟨4, .LEN ⟨#[0x11, 0x22]⟩⟩]
+      }⟩
+    ]
+  }
+  let size ← ofProtoExcept wire.validateAndEncodedSize
+  let bytes := Binary.Put.run (Binary.put wire) size
+  let spanned ← ofProtoExcept (SpannedMessage.decode bytes)
+  assertEq spanned.records.size 3
+    "spanned parser returned the wrong record count"
+  match spanned.records[0]!.value with
+  | .len span =>
+      assertEq span.toByteArray (⟨#[0xaa, 0xbb, 0xcc]⟩ : ByteArray)
+        "root LEN span selected the wrong source interval"
+      assertTrue (span.source.size == bytes.size && span.size == 3)
+        "root LEN parser materialized or resized its source"
+  | _ => throw "root LEN record had the wrong spanned wire type"
+  match spanned.records[2]!.value with
+  | .grouped group =>
+      match group.records[0]!.value with
+      | .len span =>
+          assertEq span.toByteArray (⟨#[0x11, 0x22]⟩ : ByteArray)
+            "group LEN span selected the wrong source interval"
+          assertTrue (span.source.size == bytes.size)
+            "group LEN parser did not retain the root source"
+      | _ => throw "nested LEN record had the wrong spanned wire type"
+  | _ => throw "group record had the wrong spanned wire type"
+  let materialized := spanned.toMessage
+  let materializedSize ← ofProtoExcept materialized.validateAndEncodedSize
+  assertEq
+    (Binary.Put.run (Binary.put materialized) materializedSize)
+    bytes
+    "materializing a spanned message changed its wire encoding"
+  assertProtoFails
+    (SpannedMessage.decode (⟨#[0x0a, 0x02, 0x01]⟩ : ByteArray))
+    "spanned parser accepted a truncated LEN payload"
+  assertProtoFails
+    (SpannedMessage.decode (⟨#[0x0b, 0x14]⟩ : ByteArray))
+    "spanned parser accepted a mismatching end-group tag"
+
 abbrev testTypedPackedBuilders : Except String Unit := do
   let check {α : Type}
       (values : Array α) (typed : Array α → Except ProtoError ProtoVal)
@@ -299,6 +344,10 @@ abbrev testPackedFixed64 : Except String Unit := do
 /-- info: true -/
 #guard_msgs (info) in
 #eval (match testRawEncodingValidation with | .ok () => true | .error _ => false)
+
+/-- info: true -/
+#guard_msgs (info) in
+#eval (match testSpannedWireParser with | .ok () => true | .error _ => false)
 
 /-- info: true -/
 #guard_msgs (info) in
