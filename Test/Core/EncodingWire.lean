@@ -121,6 +121,42 @@ abbrev testRawEncodingValidation : Except String Unit := do
     "validated encoded size did not account for all wire forms"
   assertEq encodedSize bytes.size
     "validated encoded size differs from the actual writer output"
+  let direct :=
+    Internal.writeMessageTo
+      (ByteArray.emptyWithCapacity encodedSize) sized
+  assertEq direct bytes
+    "direct compatibility writer differs from Binary.Put"
+
+  let lenFieldSize ← ofProtoExcept <|
+    lengthDelimitedFieldEncodedSize 2 128
+  assertEq lenFieldSize 131
+    "length-delimited field size omitted its key or length prefix"
+  let groupSize ← ofProtoExcept <|
+    groupFieldEncodedSize 16 7
+  assertEq groupSize 11
+    "group field size omitted a start or end tag"
+
+  let unknowns : Std.HashMap Nat (Array ProtoVal) :=
+    ({} : Std.HashMap Nat (Array ProtoVal))
+      |>.insert 9 #[.VARINT 150, .LEN ⟨#[1, 2, 3]⟩]
+      |>.insert 17 #[.I32 (0x12345678 : UInt32).toBitVec]
+  let unknownMessage :=
+    Message.wire_map Message.empty unknowns
+  let unknownSize ← ofProtoExcept <|
+    unknownFieldsValidateAndEncodedSize unknowns
+  let unknownBytes :=
+    unknownFieldsWriteTo
+      (ByteArray.emptyWithCapacity unknownSize) unknowns
+  assertEq unknownSize unknownBytes.size
+    "unknown-field size differs from direct writer output"
+  assertEq unknownBytes
+    (Binary.Put.run (Binary.put unknownMessage) unknownSize)
+    "direct unknown-field writer changed HashMap wire order"
+  assertProtoFails
+    (unknownFieldsValidateAndEncodedSize <|
+      ({} : Std.HashMap Nat (Array ProtoVal))
+        |>.insert 0 #[.VARINT 1])
+    "unknown-field size accepted field number zero"
 
 abbrev testSpannedWireParser : Except String Unit := do
   let wire : Message := {

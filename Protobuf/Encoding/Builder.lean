@@ -104,6 +104,156 @@ partial def Message.validateForEncoding
   let _ ← message.validateAndEncodedSize
   pure ()
 
+private def validateFieldNumber
+    (fieldNum : Nat) : Except ProtoError Unit := do
+  if fieldNum == 0 || fieldNum > (1 <<< 29) - 1 then
+    throw (.invalidWireType
+      s!"protobuf field number {fieldNum} is outside 1..536870911")
+
+/--
+Encoded size of a length-delimited field with an already measured payload.
+
+Generated typed encoders use this for embedded messages, whose bytes are
+written directly into the parent output rather than first materialized as a
+`ProtoVal.LEN`.
+-/
+def lengthDelimitedFieldEncodedSize
+    (fieldNum payloadSize : Nat) : Except ProtoError Nat := do
+  validateFieldNumber fieldNum
+  if payloadSize > (1 <<< 31) - 1 then
+    throw (.userError
+      "length-delimited protobuf value exceeds the 2 GiB limit")
+  let key :=
+    (UInt64.ofNat fieldNum <<< 3) ||| (2 : UInt64)
+  return (
+    varintSize key +
+      varintSize (UInt64.ofNat payloadSize) +
+      payloadSize
+  )
+
+/--
+Encoded size of a group field with an already measured body.
+
+The start and end tags use the same field number and therefore have the same
+encoded size.
+-/
+def groupFieldEncodedSize
+    (fieldNum payloadSize : Nat) : Except ProtoError Nat := do
+  validateFieldNumber fieldNum
+  let key :=
+    (UInt64.ofNat fieldNum <<< 3) ||| (3 : UInt64)
+  return 2 * varintSize key + payloadSize
+
+namespace Internal
+
+@[inline]
+partial def writeVarintUInt64To
+    (output : ByteArray) (value : UInt64) : ByteArray :=
+  let rec go (output : ByteArray) (value : UInt64) : ByteArray :=
+    let byte :=
+      UInt8.ofNat ((value &&& (0x7f : UInt64)).toNat)
+    let next := value >>> 7
+    if next == 0 then
+      output.push byte
+    else
+      go (output.push (byte ||| (0x80 : UInt8))) next
+  go output value
+
+@[inline]
+def writeKeyTo
+    (output : ByteArray) (fieldNum : Nat)
+    (wireType : UInt64) : ByteArray :=
+  writeVarintUInt64To output <|
+    (UInt64.ofNat fieldNum <<< 3) ||| wireType
+
+@[inline]
+def writeUInt32LETo
+    (output : ByteArray) (value : UInt32) : ByteArray := Id.run do
+  let mut output := output
+  let mut value := value
+  for _ in [:4] do
+    output := output.push value.toUInt8
+    value := value >>> 8
+  return output
+
+@[inline]
+def writeUInt64LETo
+    (output : ByteArray) (value : UInt64) : ByteArray := Id.run do
+  let mut output := output
+  let mut value := value
+  for _ in [:8] do
+    output := output.push value.toUInt8
+    value := value >>> 8
+  return output
+
+mutual
+
+/--
+Append one already validated compatibility record to an existing output.
+
+This is the fallback used for unknown fields and compatibility-only paths.
+Generated known message fields call their typed child writer directly.
+-/
+partial def writeRecordTo
+    (output : ByteArray) (record : Record) : ByteArray :=
+  match record.value with
+  | .VARINT value =>
+      writeVarintUInt64To
+        (writeKeyTo output record.fieldNum 0)
+        (UInt64.ofNat value)
+  | .I64 value =>
+      writeUInt64LETo
+        (writeKeyTo output record.fieldNum 1)
+        (UInt64.ofBitVec value)
+  | .LEN data =>
+      let output := writeKeyTo output record.fieldNum 2
+      let output :=
+        writeVarintUInt64To output (UInt64.ofNat data.size)
+      output ++ data
+  | .GROUPED message =>
+      let output := writeKeyTo output record.fieldNum 3
+      let output := writeMessageTo output message
+      writeKeyTo output record.fieldNum 4
+  | .I32 value =>
+      writeUInt32LETo
+        (writeKeyTo output record.fieldNum 5)
+        (UInt32.ofBitVec value)
+
+partial def writeMessageTo
+    (output : ByteArray) (message : Message) : ByteArray :=
+  message.records.foldl (init := output) writeRecordTo
+
+end
+
+end Internal
+
+/--
+Validate and measure generated-message unknown fields in their existing
+`HashMap.fold` wire order.
+-/
+@[noinline]
+def unknownFieldsValidateAndEncodedSize
+    (fields : Std.HashMap Nat (Array ProtoVal)) :
+    Except ProtoError Nat :=
+  fields.fold (init := pure 0) fun result fieldNum values => do
+    let mut size ← result
+    for value in values do
+      size := size +
+        (← (Record.mk fieldNum value).validateAndEncodedSize)
+    pure size
+
+/--
+Append already validated generated-message unknown fields in the same order as
+`Message.wire_map`.
+-/
+@[noinline]
+def unknownFieldsWriteTo
+    (output : ByteArray)
+    (fields : Std.HashMap Nat (Array ProtoVal)) : ByteArray :=
+  fields.fold (init := output) fun output fieldNum values =>
+    values.foldl (init := output) fun output value =>
+      Internal.writeRecordTo output { fieldNum, value }
+
 @[always_inline]
 private def ProtoVal.ofLengthDelimited (data : ByteArray) :
     Except Protobuf.Encoding.ProtoError ProtoVal := do
