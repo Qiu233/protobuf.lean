@@ -13,40 +13,53 @@ open Encoding Notation
 open Lean Meta Elab Term Command
 
 private def InternalType.recordDecoder : InternalType → Ident
-  | .string => mkIdent ``Encoding.Record.getString
-  | .raw_string => mkIdent ``Encoding.Record.getUnvalidatedString
-  | .bytes => mkIdent ``Encoding.Record.getBytes
-  | .bool => mkIdent ``Encoding.Record.getBool
-  | .int32 => mkIdent ``Encoding.Record.getVarint_int32
-  | .uint32 => mkIdent ``Encoding.Record.getVarint_uint32
-  | .int64 => mkIdent ``Encoding.Record.getVarint_int64
-  | .uint64 => mkIdent ``Encoding.Record.getVarint_uint64
-  | .sint32 => mkIdent ``Encoding.Record.getVarint_sint32
-  | .sint64 => mkIdent ``Encoding.Record.getVarint_sint64
-  | .double => mkIdent ``Encoding.Record.getI64_double
-  | .fixed64 => mkIdent ``Encoding.Record.getI64_fixed64
-  | .sfixed64 => mkIdent ``Encoding.Record.getI64_sfixed64
-  | .float => mkIdent ``Encoding.Record.getI32_float
-  | .fixed32 => mkIdent ``Encoding.Record.getI32_fixed32
-  | .sfixed32 => mkIdent ``Encoding.Record.getI32_sfixed32
+  | .string => mkIdent ``Encoding.SpannedRecord.getString
+  | .raw_string => mkIdent ``Encoding.SpannedRecord.getUnvalidatedString
+  | .bytes => mkIdent ``Encoding.SpannedRecord.getBytes
+  | .bool => mkIdent ``Encoding.SpannedRecord.getBool
+  | .int32 => mkIdent ``Encoding.SpannedRecord.getVarint_int32
+  | .uint32 => mkIdent ``Encoding.SpannedRecord.getVarint_uint32
+  | .int64 => mkIdent ``Encoding.SpannedRecord.getVarint_int64
+  | .uint64 => mkIdent ``Encoding.SpannedRecord.getVarint_uint64
+  | .sint32 => mkIdent ``Encoding.SpannedRecord.getVarint_sint32
+  | .sint64 => mkIdent ``Encoding.SpannedRecord.getVarint_sint64
+  | .double => mkIdent ``Encoding.SpannedRecord.getI64_double
+  | .fixed64 => mkIdent ``Encoding.SpannedRecord.getI64_fixed64
+  | .sfixed64 => mkIdent ``Encoding.SpannedRecord.getI64_sfixed64
+  | .float => mkIdent ``Encoding.SpannedRecord.getI32_float
+  | .fixed32 => mkIdent ``Encoding.SpannedRecord.getI32_fixed32
+  | .sfixed32 => mkIdent ``Encoding.SpannedRecord.getI32_sfixed32
 
 private def InternalType.recordAppender : InternalType → Ident
-  | .string => mkIdent ``Encoding.Record.appendRepeatedString
-  | .raw_string => mkIdent ``Encoding.Record.appendRepeatedUnvalidatedString
-  | .bytes => mkIdent ``Encoding.Record.appendRepeatedBytes
-  | .bool => mkIdent ``Encoding.Record.appendRepeatedBool
-  | .int32 => mkIdent ``Encoding.Record.appendRepeatedVarint_int32
-  | .uint32 => mkIdent ``Encoding.Record.appendRepeatedVarint_uint32
-  | .int64 => mkIdent ``Encoding.Record.appendRepeatedVarint_int64
-  | .uint64 => mkIdent ``Encoding.Record.appendRepeatedVarint_uint64
-  | .sint32 => mkIdent ``Encoding.Record.appendRepeatedVarint_sint32
-  | .sint64 => mkIdent ``Encoding.Record.appendRepeatedVarint_sint64
-  | .double => mkIdent ``Encoding.Record.appendRepeatedI64_double
-  | .fixed64 => mkIdent ``Encoding.Record.appendRepeatedI64_fixed64
-  | .sfixed64 => mkIdent ``Encoding.Record.appendRepeatedI64_sfixed64
-  | .float => mkIdent ``Encoding.Record.appendRepeatedI32_float
-  | .fixed32 => mkIdent ``Encoding.Record.appendRepeatedI32_fixed32
-  | .sfixed32 => mkIdent ``Encoding.Record.appendRepeatedI32_sfixed32
+  | .string => mkIdent ``Encoding.SpannedRecord.appendRepeatedString
+  | .raw_string =>
+      mkIdent ``Encoding.SpannedRecord.appendRepeatedUnvalidatedString
+  | .bytes => mkIdent ``Encoding.SpannedRecord.appendRepeatedBytes
+  | .bool => mkIdent ``Encoding.SpannedRecord.appendRepeatedBool
+  | .int32 =>
+      mkIdent ``Encoding.SpannedRecord.appendRepeatedVarint_int32
+  | .uint32 =>
+      mkIdent ``Encoding.SpannedRecord.appendRepeatedVarint_uint32
+  | .int64 =>
+      mkIdent ``Encoding.SpannedRecord.appendRepeatedVarint_int64
+  | .uint64 =>
+      mkIdent ``Encoding.SpannedRecord.appendRepeatedVarint_uint64
+  | .sint32 =>
+      mkIdent ``Encoding.SpannedRecord.appendRepeatedVarint_sint32
+  | .sint64 =>
+      mkIdent ``Encoding.SpannedRecord.appendRepeatedVarint_sint64
+  | .double =>
+      mkIdent ``Encoding.SpannedRecord.appendRepeatedI64_double
+  | .fixed64 =>
+      mkIdent ``Encoding.SpannedRecord.appendRepeatedI64_fixed64
+  | .sfixed64 =>
+      mkIdent ``Encoding.SpannedRecord.appendRepeatedI64_sfixed64
+  | .float =>
+      mkIdent ``Encoding.SpannedRecord.appendRepeatedI32_float
+  | .fixed32 =>
+      mkIdent ``Encoding.SpannedRecord.appendRepeatedI32_fixed32
+  | .sfixed32 =>
+      mkIdent ``Encoding.SpannedRecord.appendRepeatedI32_sfixed32
 
 /--
 Identifiers and generated terms shared by the per-field decoder branch
@@ -127,6 +140,7 @@ private def constructMapBranch
   let keyDefault := mapInfo.key_default
   let valueDefault := mapInfo.value_default
   let entry := mkIdent `entry
+  let spannedEntry := mkIdent `spannedEntry
   let entryBudget := mkIdent `entryBudget
   let map := mkIdent `map
   let field := fieldMData.field_name
@@ -150,8 +164,10 @@ private def constructMapBranch
     else
       `(pure $valueDefault)
   let normalBody ← `(do
-    let $entry:ident ←
-      Encoding.Record.getMessage $recVar:ident $recursionBudget:ident
+    let $spannedEntry:ident ←
+      Encoding.SpannedRecord.getMessage
+        $recVar:ident $recursionBudget:ident
+    let $entry:ident := ($spannedEntry:ident).toMessage
     let $entryBudget:ident ←
       Protobuf.Encoding.descendMessageRecursion $recursionBudget:ident
     let key? ← $keyDecoder?:ident $entry:ident 1
@@ -176,8 +192,10 @@ private def constructMapBranch
     let enumIsKnown := helperIdent mapInfo.value_proto_type "isKnown"
     let enumIsClosed := helperIdent mapInfo.value_proto_type "isClosed"
     `(do
-      let $entry:ident ←
-        Encoding.Record.getMessage $recVar:ident $recursionBudget:ident
+      let $spannedEntry:ident ←
+        Encoding.SpannedRecord.getMessage
+          $recVar:ident $recursionBudget:ident
+      let $entry:ident := ($spannedEntry:ident).toMessage
       let _ ←
         Protobuf.Encoding.descendMessageRecursion $recursionBudget:ident
       let hasUnknownClosedValue :=
@@ -241,36 +259,40 @@ private def constructRepeatedBranch
     | none =>
       let decodeRepeated ←
         if fieldMData.options.wired_as_group?.isEqSome true then
-          let fromMessage ← fieldMData.fromMessage?.getDM <|
-            throwErrorAt fieldMData.field_name
-              "{decl_name%}: internal error: repeated group field has no generated fromMessage function"
+          let fromSpannedChunks :=
+            helperIdent fieldMData.proto_type "fromSpannedChunks"
           let groupMessage ← mkIdent <$> mkFreshUserName `groupMessage
           let childBudget ← mkIdent <$> mkFreshUserName `childBudget
           `(do
-            let $groupMessage:ident ←
-              Encoding.Record.getGroup $recVar:ident
+            let .grouped $groupMessage:ident := ($recVar:ident).value
+              | throw (.invalidWireType "expected GROUPED")
             let $childBudget:ident ←
               Protobuf.Encoding.descendMessageRecursion
                 $recursionBudget:ident
             let value ←
-              $fromMessage:ident
-                $groupMessage:ident $childBudget:ident false
+              $fromSpannedChunks:ident
+                (.single (.spanned $groupMessage:ident))
+                $childBudget:ident false
             pure #[value])
         else
-          let fromMessage ← fieldMData.fromMessage?.getDM <|
-            throwErrorAt fieldMData.field_name
-              "{decl_name%}: internal error: repeated message field has no generated fromMessage function"
-          let nested ← mkIdent <$> mkFreshUserName `nested
+          let fromSpannedChunks :=
+            helperIdent fieldMData.proto_type "fromSpannedChunks"
+          let source ← mkIdent <$> mkFreshUserName `source
+          let start ← mkIdent <$> mkFreshUserName `start
+          let stop ← mkIdent <$> mkFreshUserName `stop
           let childBudget ← mkIdent <$> mkFreshUserName `childBudget
           `(do
-            let $nested:ident ←
-              Encoding.Record.getMessage
-                $recVar:ident $recursionBudget:ident
+            let .len $source:ident $start:ident $stop:ident :=
+              ($recVar:ident).value
+              | throw (.invalidWireType "expected LEN")
             let $childBudget:ident ←
               Protobuf.Encoding.descendMessageRecursion
                 $recursionBudget:ident
             let value ←
-              $fromMessage:ident $nested:ident $childBudget:ident false
+              $fromSpannedChunks:ident
+                (.single
+                  (.span $source:ident $start:ident $stop:ident))
+                $childBudget:ident false
             pure #[value])
       `(do
         let $xs:ident ← $decodeRepeated:term
@@ -291,10 +313,10 @@ private def constructRepeatedBranch
     let enumIsKnown := helperIdent fieldMData.proto_type "isKnown"
     let enumIsClosed := helperIdent fieldMData.proto_type "isClosed"
     `(match ($recVar:ident).value with
-      | .VARINT raw =>
+      | .varint raw =>
           let value :=
             $enumFromInt32:ident
-              (Int32.ofBitVec (UInt32.ofNat raw).toBitVec)
+              (Int32.ofBitVec raw.toUInt32.toBitVec)
           if !$enumIsClosed:ident || $enumIsKnown:ident value then
             let $state':ident : $name := {
               $state:ident with
@@ -305,9 +327,9 @@ private def constructRepeatedBranch
             pure $successState:term
           else
             $unknownBody:term
-      | .LEN _ => do
+      | .len .. => do
           let raws ←
-            Encoding.Record.appendRepeatedVarint_uint64
+            Encoding.SpannedRecord.appendRepeatedVarint_uint64
               $recVar:ident #[]
           let mut known := #[]
           let mut unknown := #[]
@@ -373,10 +395,10 @@ private def constructSingularScalarBranch
         let enumIsKnown := helperIdent fieldMData.proto_type "isKnown"
         let enumIsClosed := helperIdent fieldMData.proto_type "isClosed"
         `(match ($recVar:ident).value with
-          | .VARINT raw =>
+          | .varint raw =>
               let value :=
                 $enumFromInt32:ident
-                  (Int32.ofBitVec (UInt32.ofNat raw).toBitVec)
+                  (Int32.ofBitVec raw.toUInt32.toBitVec)
               if !$enumIsClosed:ident || $enumIsKnown:ident value then
                 pure (some value)
               else
@@ -459,24 +481,35 @@ private def constructSingularMessageBranch
     seen',
     pending,
     pending',
-    recursionBudget,
     ..
   } := ctx
   let some pendingIndex := ctx.regularMessageMeta.findSome? (fun (fieldName, i) =>
     if fieldName == fieldMData.field_name.getId then some i else none)
     | throwErrorAt fieldMData.field_name
         "{decl_name%}: internal error: singular message field has no pending slot"
-  let nested := mkIdent `nested
+  let source ← mkIdent <$> mkFreshUserName `source
+  let start ← mkIdent <$> mkFreshUserName `start
+  let stop ← mkIdent <$> mkFreshUserName `stop
+  let nested ← mkIdent <$> mkFreshUserName `nested
   let chunks := mkIdent `chunks
   let updatedState ← ctx.mkState state seen' pending'
-  let getNestedMessage ←
+  let getNestedSource ←
     if fieldMData.options.wired_as_group?.isEqSome true then
-      `(Encoding.Record.getGroup $recVar:ident)
+      `(match ($recVar:ident).value with
+        | .grouped $nested:ident =>
+            pure
+              (Protobuf.Encoding.SpannedMessageSource.spanned
+                $nested:ident)
+        | _ => throw (.invalidWireType "expected GROUPED"))
     else
-      `(Encoding.Record.getMessage
-        $recVar:ident $recursionBudget:ident)
+      `(match ($recVar:ident).value with
+        | .len $source:ident $start:ident $stop:ident =>
+            pure
+              (Protobuf.Encoding.SpannedMessageSource.span
+                $source:ident $start:ident $stop:ident)
+        | _ => throw (.invalidWireType "expected LEN"))
   `(do
-    let $nested:ident ← $getNestedMessage:term
+    let $nested:ident ← $getNestedSource:term
     let $chunks:ident :=
       (($pending:ident)[$(quote pendingIndex)]!).push $nested:ident
     let $pending':ident :=

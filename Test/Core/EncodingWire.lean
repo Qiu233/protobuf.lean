@@ -267,6 +267,24 @@ abbrev testSpannedMessageChunkFold : Except String Unit := do
       (⟨#[0x0a, 0x02, 0x01]⟩ : ByteArray)).foldlM
       () fun _ _ => pure ())
     "spanned chunk fold accepted a truncated LEN payload"
+  let framed : ByteArray := ⟨#[0xff, 0x08, 0x96, 0x01, 0xee]⟩
+  let cursor ← ofProtoExcept <|
+    SpannedCursor.ofSpan framed 1 (framed.size - 1)
+  match ← ofProtoExcept (cursor.nextAt cursor.offset) with
+  | .next record offset =>
+      assertEq record.fieldNum 1
+        "streaming cursor decoded the wrong field number"
+      assertEq (← ofProtoExcept record.getVarint_uint64) 150
+        "streaming cursor decoded the wrong varint"
+      match ← ofProtoExcept (cursor.nextAt offset) with
+      | .done => pure ()
+      | .next .. =>
+          throw "streaming cursor did not stop at its span boundary"
+  | .done => throw "streaming cursor skipped a non-empty span"
+  assertProtoFails (cursor.nextAt 0)
+    "streaming cursor accepted an offset before its span"
+  assertProtoFails (cursor.nextAt framed.size)
+    "streaming cursor accepted an offset after its span"
 
 abbrev testTypedPackedBuilders : Except String Unit := do
   let check {α : Type}

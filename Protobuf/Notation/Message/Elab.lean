@@ -49,7 +49,7 @@ public def elabMessageDecCore
   let (_, builder) ← construct_builder name push_name toMessage'
   let (_, builderPartial) ←
     construct_builder name push_name (push_name "toMessagePartial") "builderPartial"
-  let (fromMessage', fromMessage) ←
+  let (fromMessage', fromSpannedChunks', fromMessage) ←
     construct_fromMessage name push_name localOneofs mdata
   let (_, merge) ← construct_merge name push_name mdata
   let requiredValidators ←
@@ -59,7 +59,8 @@ public def elabMessageDecCore
   let defaultAccessors ←
     constructExplicitDefaultAccessors name mdata
   let (encodeId, encode) ← construct_encode name push_name toMessage'
-  let (decodeId, decode) ← construct_decode name push_name fromMessage'
+  let (decodeId, decode) ←
+    construct_decode name push_name fromSpannedChunks'
   let protoMessageInst ←
     `(instance : Protobuf.ProtoMessage $name where
         encode := $encodeId:ident

@@ -48,19 +48,19 @@ deriving Inhabited
 
 end
 
-private structure WireCursor where
+structure SpannedCursor where
   source : ByteArray
   offset : Nat
   stop : Nat
   validStop : stop ≤ source.size
 
 @[always_inline]
-private partial def WireCursor.readVarint
-    (cursor : WireCursor) :
-    Except ProtoError (UInt64 × Nat × WireCursor) := do
+private partial def SpannedCursor.readVarintAt
+    (cursor : SpannedCursor) (initialOffset : Nat) :
+    Except ProtoError (UInt64 × Nat × Nat) := do
   let rec go
       (offset : Nat) (value shift : UInt64) (index : Nat) :
-      Except ProtoError (UInt64 × Nat × WireCursor) := do
+      Except ProtoError (UInt64 × Nat × Nat) := do
     if hStop : offset < cursor.stop then
       have hSource : offset < cursor.source.size :=
         Nat.lt_of_lt_of_le hStop cursor.validStop
@@ -72,36 +72,48 @@ private partial def WireCursor.readVarint
         return (
           value ||| (UInt64.ofNat byte.toNat <<< shift),
           10,
-          { cursor with offset := next }
+          next
         )
       let value :=
         value |||
           (UInt64.ofNat (byte &&& (0x7f : UInt8)).toNat <<< shift)
       if byte &&& (0x80 : UInt8) == 0 then
-        return (value, index + 1, { cursor with offset := next })
+        return (value, index + 1, next)
       return ← go next value (shift + 7) (index + 1)
     throw .truncated
-  go cursor.offset 0 0 0
+  go initialOffset 0 0 0
 
 @[always_inline]
-private def WireCursor.readFixed
-    (cursor : WireCursor) (width : Nat) :
-    Except ProtoError (UInt64 × WireCursor) := do
-  if width > cursor.stop - cursor.offset then
+private def SpannedCursor.readFixedAt
+    (cursor : SpannedCursor) (offset width : Nat) :
+    Except ProtoError (UInt64 × Nat) := do
+  if width > cursor.stop - offset then
     throw .truncated
   let mut value : UInt64 := 0
   for index in [:width] do
-    let byte := cursor.source[cursor.offset + index]!
+    let byte := cursor.source[offset + index]!
     value := value |||
       (UInt64.ofNat byte.toNat <<< UInt64.ofNat (8 * index))
-  return (value, { cursor with offset := cursor.offset + width })
+  return (value, offset + width)
+
+private def SpannedCursor.readVarint
+    (cursor : SpannedCursor) :
+    Except ProtoError (UInt64 × Nat × SpannedCursor) := do
+  let (value, width, offset) ← cursor.readVarintAt cursor.offset
+  return (value, width, { cursor with offset })
+
+private def SpannedCursor.readFixed
+    (cursor : SpannedCursor) (width : Nat) :
+    Except ProtoError (UInt64 × SpannedCursor) := do
+  let (value, offset) ← cursor.readFixedAt cursor.offset width
+  return (value, { cursor with offset })
 
 private partial def foldSpannedRecordsM
     {α : Type}
-    (cursor : WireCursor) (expectedEnd? : Option Nat)
+    (cursor : SpannedCursor) (expectedEnd? : Option Nat)
     (groupBudget : Nat) (init : α)
     (step : α → SpannedRecord → Except ProtoError α) :
-    Except ProtoError (α × WireCursor) := do
+    Except ProtoError (α × SpannedCursor) := do
   let mut cursor := cursor
   let mut acc := init
   repeat
@@ -167,12 +179,108 @@ private partial def foldSpannedRecordsM
   throw (.userError "protobuf: internal wire cursor loop terminated")
 
 private def parseSpannedRecords
-    (cursor : WireCursor) (expectedEnd? : Option Nat)
+    (cursor : SpannedCursor) (expectedEnd? : Option Nat)
     (groupBudget : Nat) :
-    Except ProtoError (Array SpannedRecord × WireCursor) :=
+    Except ProtoError (Array SpannedRecord × SpannedCursor) :=
   foldSpannedRecordsM cursor expectedEnd? groupBudget
     (Array.emptyWithCapacity 8)
     fun records record => pure (records.push record)
+
+/-- Validate a borrowed message interval and create a streaming cursor. -/
+def SpannedCursor.ofSpan
+    (source : ByteArray) (start stop : Nat) :
+    Except ProtoError SpannedCursor := do
+  if start > stop then
+    throw
+      (.invalidBuffer
+        "protobuf byte span is outside its source buffer")
+  if validStop : stop ≤ source.size then
+    if stop - start > 0x7fffffff then
+      throw
+        (.invalidBuffer
+          "protobuf messages must be smaller than 2 GiB")
+    return { source, offset := start, stop, validStop }
+  throw
+    (.invalidBuffer
+      "protobuf byte span is outside its source buffer")
+
+/--
+Result of advancing a borrowed wire cursor by one record.
+
+`next` stores only the new byte offset, so a streaming generated decoder keeps
+one shared cursor instead of allocating a replacement cursor and nested
+`Option`/pair objects for every field.
+-/
+inductive SpannedCursorStep where
+  | done
+  | next (record : SpannedRecord) (offset : Nat)
+deriving Inhabited
+
+/--
+Read one top-level wire record starting at `offset`.
+
+Length-delimited payloads remain intervals of `cursor.source`. A legacy group
+is materialized only through its matching end tag because groups have no
+length-delimited boundary.
+-/
+@[noinline]
+partial def SpannedCursor.nextAt
+    (cursor : SpannedCursor)
+    (offset : Nat)
+    (groupBudget : Nat := defaultMessageRecursionLimit) :
+    Except ProtoError SpannedCursorStep := do
+  if offset == cursor.stop then
+    return .done
+  if offset < cursor.offset || offset > cursor.stop then
+    throw
+      (.invalidBuffer
+        "protobuf cursor offset is outside its source interval")
+  let (key, keyBytes, afterKey) ← cursor.readVarintAt offset
+  if keyBytes > 5 then
+    throw (.userError "protobuf: field tag varint is longer than 5 bytes")
+  let wireType := key &&& 0b111
+  let fieldNum64 := key >>> 3
+  if fieldNum64 == 0 || fieldNum64 > (0x1fffffff : UInt64) then
+    throw (.userError "protobuf: invalid field number")
+  let fieldNum := fieldNum64.toNat
+  match wireType with
+  | 0 =>
+      let (value, _, next) ← cursor.readVarintAt afterKey
+      return .next ⟨fieldNum, .varint value⟩ next
+  | 1 =>
+      let (value, next) ← cursor.readFixedAt afterKey 8
+      return .next ⟨fieldNum, .i64 value⟩ next
+  | 2 =>
+      let (length64, _, afterLength) ←
+        cursor.readVarintAt afterKey
+      if length64 > 0x7fffffff then
+        throw (.userError
+          "protobuf: length-delimited field exceeds 2 GiB limit")
+      let length := length64.toNat
+      if length > cursor.stop - afterLength then
+        throw .truncated
+      let stop := afterLength + length
+      return .next
+        ⟨fieldNum,
+          .len cursor.source afterLength stop⟩
+        stop
+  | 3 =>
+      if groupBudget == 0 then
+        throw (.userError "protobuf: group recursion limit exceeded")
+      let afterKeyCursor := { cursor with offset := afterKey }
+      let (nested, next) ←
+        parseSpannedRecords afterKeyCursor
+          (some fieldNum) (groupBudget - 1)
+      return .next
+        ⟨fieldNum, .grouped { records := nested }⟩
+        next.offset
+  | 4 =>
+      throw (.userError "protobuf: unexpected EGROUP")
+  | 5 =>
+      let (value, next) ← cursor.readFixedAt afterKey 4
+      return .next ⟨fieldNum, .i32 value.toUInt32⟩ next
+  | _ =>
+      throw (.userError "protobuf: invalid wire type encountered")
 
 /-- Parse a complete input while borrowing all length-delimited payloads. -/
 def SpannedMessage.decode
@@ -181,7 +289,7 @@ def SpannedMessage.decode
     Except ProtoError SpannedMessage := do
   if bytes.size > 0x7fffffff then
     throw (.invalidBuffer "protobuf messages must be smaller than 2 GiB")
-  let cursor : WireCursor := {
+  let cursor : SpannedCursor := {
     source := bytes
     offset := 0
     stop := bytes.size
@@ -203,7 +311,7 @@ def ByteSpan.decodeMessage
   if validStop : span.stop ≤ span.source.size then
     if span.size > 0x7fffffff then
       throw (.invalidBuffer "protobuf messages must be smaller than 2 GiB")
-    let cursor : WireCursor := {
+    let cursor : SpannedCursor := {
       source := span.source
       offset := span.start
       stop := span.stop
@@ -310,7 +418,7 @@ private def SpannedMessageSource.foldlM
           throw
             (.invalidBuffer
               "protobuf messages must be smaller than 2 GiB")
-        let cursor : WireCursor := {
+        let cursor : SpannedCursor := {
           source := bytes
           offset := start
           stop

@@ -80,12 +80,12 @@ private partial def constructBalancedChunkDispatch
 private def decodingChunkSize : Nat := 16
 
 /--
-Decode the raw wire messages accumulated for singular message fields.
+Decode the wire sources accumulated for singular message fields.
 
-The outer fold has already parsed every LEN payload into an untyped wire
-message. Decoding the combined payload here visits each nested record once,
-preserves singular-message merge semantics, and performs required-field checks
-only after all occurrences have been combined.
+The outer fold keeps ordinary LEN occurrences as borrowed source intervals and
+only materializes legacy groups. Streaming all occurrences into one child
+accumulator preserves singular-message merge semantics and performs
+required-field checks only after the complete merged child is available.
 -/
 private def constructPendingMessageDecodes
     (name stateAfterFold pendingAfterFold recursionBudget : Ident)
@@ -96,24 +96,24 @@ private def constructPendingMessageDecodes
     (fun (accState : Array DoSeqItem × Ident) (fieldMData, i) => do
       let (items, currentState) := accState
       let field := fieldMData.field_name
-      let childFromMessage := fieldMData.fromMessage?.get!
-      let childMessage ← mkIdent <$> mkFreshUserName `childMessage
+      let childFromSpannedChunks :=
+        helperIdent fieldMData.proto_type "fromSpannedChunks"
       let childValue ← mkIdent <$> mkFreshUserName fieldMData.field_name.getId
       let childBudget ← mkIdent <$> mkFreshUserName `childBudget
       let value? ← mkIdent <$> mkFreshUserName `value?
       let nextState ← mkIdent <$> mkFreshUserName `st
       let decodeItem ← `(Parser.Term.doSeqItem|
         let $value?:ident ← do
-          match
-            (($pendingAfterFold:ident)[$(quote i)]!).toMessage?
-          with
-          | Option.none => pure Option.none
-          | Option.some $childMessage:ident => do
+          let chunks :=
+            ($pendingAfterFold:ident)[$(quote i)]!
+          if chunks.isEmpty then
+            pure Option.none
+          else
             let $childBudget:ident ←
               Protobuf.Encoding.descendMessageRecursion
                 $recursionBudget:ident
             let $childValue:ident ←
-              $childFromMessage:ident $childMessage:ident
+              $childFromSpannedChunks:ident chunks
                 $childBudget:ident false
             pure (Option.some $childValue:ident))
       let updateItem ← `(Parser.Term.doSeqItem|
@@ -128,7 +128,7 @@ def construct_fromMessage
     (push_name : String → Ident)
     (localOneofs : LocalOneofAlternatives)
     (fields : Array ProtoFieldMData) :
-    CommandElabM (Ident × Array Command) := do
+    CommandElabM (Ident × Ident × Array Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
   let recVar := mkIdent `r
   let acc := mkIdent `acc
@@ -166,9 +166,10 @@ def construct_fromMessage
 
   Singular message fields cannot be decoded occurrence-by-occurrence: protobuf
   first merges all occurrences and only then constructs the resulting child.
-  `pendingMessages` stores their already parsed wire messages until the fold is
-  complete. `pendingOneofMessages` stores the raw payload of a currently active
-  message-valued oneof member; scalar members live directly in `state`.
+  `pendingMessages` stores their borrowed source intervals (or parsed legacy
+  groups) until the fold is complete. `pendingOneofMessages` does the same for
+  a currently active message-valued oneof member; scalar members live directly
+  in `state`.
   Nested decoders run in partial mode; the outermost generated decoder validates
   required initialization on the final typed tree, after all parse errors have
   been observed. These arrays are generated internal accumulators, not
@@ -177,11 +178,13 @@ def construct_fromMessage
   let stateTy ←
     if hasOneofs then
       `(($name × Array Bool ×
-        Array Protobuf.Encoding.MessageChunks ×
-        Array (Option (Nat × Protobuf.Encoding.MessageChunks))))
+        Array Protobuf.Encoding.SpannedMessageChunks ×
+        Array
+          (Option
+            (Nat × Protobuf.Encoding.SpannedMessageChunks))))
     else
       `(($name × Array Bool ×
-        Array Protobuf.Encoding.MessageChunks))
+        Array Protobuf.Encoding.SpannedMessageChunks))
   let mkState : Term → Term → Term → CommandElabM Term :=
     fun st sn pd => do
       if hasOneofs then
@@ -193,8 +196,10 @@ def construct_fromMessage
     let $state':ident : $name := {
       $state:ident with
       $unknownField:ident := ($unknownProj:ident $state:ident).alter $(recVar).fieldNum (fun
-        | Option.none => Option.some #[$(recVar).value]
-        | Option.some vals => Option.some (vals.push $(recVar).value))
+        | Option.none =>
+            Option.some #[$(recVar).value.toProtoVal]
+        | Option.some vals =>
+            Option.some (vals.push $(recVar).value.toProtoVal))
     }
     pure $unknownState:term)
   let branchContext : DecodeFoldContext := {
@@ -243,13 +248,16 @@ def construct_fromMessage
   let stateInit ← `(Parser.Term.doSeqItem| let $state:ident : $name := default)
   let seenInit ← `(Parser.Term.doSeqItem| let $seen:ident : Array Bool := Array.replicate $(quote requiredStrictFields.size) false)
   let pendingInit ← `(Parser.Term.doSeqItem|
-    let $pending:ident : Array Protobuf.Encoding.MessageChunks :=
+    let $pending:ident :
+        Array Protobuf.Encoding.SpannedMessageChunks :=
       Array.replicate $(quote regularMessageFields.size) .empty)
   let oneofPendingInits : Array DoSeqItem ←
     if hasOneofs then
       let init ← `(Parser.Term.doSeqItem|
     let $oneofPending:ident :
-        Array (Option (Nat × Protobuf.Encoding.MessageChunks)) :=
+        Array
+          (Option
+            (Nat × Protobuf.Encoding.SpannedMessageChunks)) :=
           Array.replicate $(quote oneofFields.size) Option.none)
       pure #[init]
     else
@@ -314,7 +322,7 @@ def construct_fromMessage
           let chunkCommand ← `(partial def $chunkId:ident :
               (Unit → Except Protobuf.Encoding.ProtoError $stateTy) →
               $stateTy →
-              Protobuf.Encoding.Record →
+              Protobuf.Encoding.SpannedRecord →
               Nat →
               Except Protobuf.Encoding.ProtoError $stateTy :=
             fun $chunkFallback:ident $chunkAcc:ident $recVar:ident
@@ -338,28 +346,117 @@ def construct_fromMessage
   let dispatchBody ←
     recoverInvalidWireType stateTy dispatchBody unknownBody
   let initialFoldState ← mkState state seen pending
-  let foldPendingProjection ←
+  let applyPendingProjection ←
     if hasOneofs then
       `(($acc:ident).2.2.1)
     else
       `(($acc:ident).2.2)
-  let foldOneofPendingBinds : Array DoSeqItem ←
+  let applyOneofPendingBinds : Array DoSeqItem ←
     if hasOneofs then
       let bind ← `(Parser.Term.doSeqItem|
         let $oneofPending:ident := ($acc:ident).2.2.2)
       pure #[bind]
     else
       pure #[]
-  let foldExpr ← `((Protobuf.Encoding.Message.records $msg).foldlM
-      (init := $initialFoldState:term)
-      (fun ($acc:ident : $stateTy) $recVar:ident => do
-        let $state:ident := ($acc:ident).1
-        let $seen:ident := ($acc:ident).2.1
-        let $pending:ident := $foldPendingProjection:term
-        $foldOneofPendingBinds*
-        $fallbackInit
-        $dispatchBody:term))
-  let foldBody ← `(Parser.Term.doSeqItem| let $foldAcc:ident : $stateTy ← $foldExpr:term)
+  let applyRecordId := push_name "applySpannedRecord"
+  let applyRecord ← `(partial def $applyRecordId:ident
+      ($acc : $stateTy)
+      ($recVar : Protobuf.Encoding.SpannedRecord)
+      ($recursionBudget : Nat) :
+      Except Protobuf.Encoding.ProtoError $stateTy := do
+    let $state:ident := ($acc:ident).1
+    let $seen:ident := ($acc:ident).2.1
+    let $pending:ident := $applyPendingProjection:term
+    $applyOneofPendingBinds*
+    $fallbackInit
+    $dispatchBody:term)
+  let cursorAcc ← mkIdent <$> mkFreshUserName `acc
+  let cursor ← mkIdent <$> mkFreshUserName `cursor
+  let cursorOffset ← mkIdent <$> mkFreshUserName `offset
+  let nextOffset ← mkIdent <$> mkFreshUserName `offset
+  let cursorRecord ← mkIdent <$> mkFreshUserName `record
+  let cursorBudget ← mkIdent <$> mkFreshUserName `recursionBudget
+  let foldCursorId := push_name "foldSpannedCursor"
+  let foldCursor ← `(partial def $foldCursorId:ident
+      ($cursorAcc : $stateTy)
+      ($cursor : Protobuf.Encoding.SpannedCursor)
+      ($cursorOffset : Nat)
+      ($cursorBudget : Nat) :
+      Except Protobuf.Encoding.ProtoError $stateTy := do
+    match ←
+      ($cursor:ident).nextAt
+        $cursorOffset:ident $cursorBudget:ident
+    with
+    | .done => pure $cursorAcc:ident
+    | .next $cursorRecord:ident $nextOffset:ident => do
+        let $cursorAcc:ident ←
+          $applyRecordId:ident $cursorAcc:ident
+            $cursorRecord:ident $cursorBudget:ident
+        $foldCursorId:ident $cursorAcc:ident
+          $cursor:ident $nextOffset:ident $cursorBudget:ident)
+  let sourceAcc ← mkIdent <$> mkFreshUserName `acc
+  let sourceVar ← mkIdent <$> mkFreshUserName `source
+  let sourceBudget ← mkIdent <$> mkFreshUserName `recursionBudget
+  let sourceBytes ← mkIdent <$> mkFreshUserName `bytes
+  let sourceStart ← mkIdent <$> mkFreshUserName `start
+  let sourceStop ← mkIdent <$> mkFreshUserName `stop
+  let sourceMessage ← mkIdent <$> mkFreshUserName `message
+  let sourceRecord ← mkIdent <$> mkFreshUserName `record
+  let sourceCursor ← mkIdent <$> mkFreshUserName `cursor
+  let foldSourceId := push_name "foldSpannedSource"
+  let foldSource ← `(partial def $foldSourceId:ident
+      ($sourceAcc : $stateTy)
+      ($sourceVar : Protobuf.Encoding.SpannedMessageSource)
+      ($sourceBudget : Nat) :
+      Except Protobuf.Encoding.ProtoError $stateTy := do
+    match $sourceVar:ident with
+    | .span $sourceBytes:ident $sourceStart:ident $sourceStop:ident => do
+        let $sourceCursor:ident ←
+          Protobuf.Encoding.SpannedCursor.ofSpan
+            $sourceBytes:ident $sourceStart:ident $sourceStop:ident
+        $foldCursorId:ident $sourceAcc:ident
+          $sourceCursor:ident ($sourceCursor:ident).offset
+          $sourceBudget:ident
+    | .spanned $sourceMessage:ident =>
+        ($sourceMessage:ident).records.foldlM
+          (init := $sourceAcc:ident)
+          fun $sourceAcc:ident $sourceRecord:ident =>
+            $applyRecordId:ident $sourceAcc:ident
+              $sourceRecord:ident $sourceBudget:ident
+    | .owned $sourceMessage:ident =>
+        ($sourceMessage:ident).records.foldlM
+          (init := $sourceAcc:ident)
+          fun $sourceAcc:ident $sourceRecord:ident =>
+            $applyRecordId:ident $sourceAcc:ident
+              ($sourceRecord:ident).toSpannedRecord
+              $sourceBudget:ident)
+  let chunksAcc ← mkIdent <$> mkFreshUserName `acc
+  let chunksVar ← mkIdent <$> mkFreshUserName `chunks
+  let chunksBudget ← mkIdent <$> mkFreshUserName `recursionBudget
+  let chunkSource ← mkIdent <$> mkFreshUserName `source
+  let chunkSources ← mkIdent <$> mkFreshUserName `sources
+  let foldChunksId := push_name "foldSpannedChunks"
+  let foldChunks ← `(partial def $foldChunksId:ident
+      ($chunksAcc : $stateTy)
+      ($chunksVar : Protobuf.Encoding.SpannedMessageChunks)
+      ($chunksBudget : Nat) :
+      Except Protobuf.Encoding.ProtoError $stateTy := do
+    match $chunksVar:ident with
+    | .empty => pure $chunksAcc:ident
+    | .single $chunkSource:ident =>
+        $foldSourceId:ident $chunksAcc:ident
+          $chunkSource:ident $chunksBudget:ident
+    | .many $chunkSources:ident => do
+        let mut $chunksAcc:ident := $chunksAcc:ident
+        for $chunkSource:ident in $chunkSources:ident do
+          $chunksAcc:ident ←
+            $foldSourceId:ident $chunksAcc:ident
+              $chunkSource:ident $chunksBudget:ident
+        pure $chunksAcc:ident)
+  let foldBody ← `(Parser.Term.doSeqItem|
+    let $foldAcc:ident : $stateTy ←
+      $foldChunksId:ident $initialFoldState:term
+        $msg:ident $recursionBudget:ident)
   let stateAfterFold := mkIdent `st
   let seenAfterFold := mkIdent `seen
   let pendingAfterFold := mkIdent `pendingMessages
@@ -372,13 +469,16 @@ def construct_fromMessage
     else
       `(($foldAcc:ident).2.2)
   let foldPendingBind ← `(Parser.Term.doSeqItem|
-    let $pendingAfterFold:ident : Array Protobuf.Encoding.MessageChunks :=
+    let $pendingAfterFold:ident :
+        Array Protobuf.Encoding.SpannedMessageChunks :=
       $pendingAfterFoldProjection:term)
   let foldOneofPendingBinds : Array DoSeqItem ←
     if hasOneofs then
       let bind ← `(Parser.Term.doSeqItem|
         let $oneofPendingAfterFold:ident :
-            Array (Option (Nat × Protobuf.Encoding.MessageChunks)) :=
+            Array
+              (Option
+                (Nat × Protobuf.Encoding.SpannedMessageChunks)) :=
           ($foldAcc:ident).2.2.2)
       pure #[bind]
     else
@@ -408,6 +508,7 @@ def construct_fromMessage
   let oneofFinalizations := oneofStatePairs.1
   let finalState := oneofStatePairs.2
   let fromMessageId := push_name "fromMessage"
+  let fromSpannedChunksId := push_name "fromSpannedChunks"
   let requiredValidatorId := push_name "validateRequired"
   let ret ← `(Parser.Term.doSeqItem|
     if $validateRequired:ident then
@@ -415,8 +516,8 @@ def construct_fromMessage
       pure $finalState:ident
     else
       pure $finalState:ident)
-  let fromMessage ← `(partial def $fromMessageId:ident
-      ($msg : Protobuf.Encoding.Message)
+  let fromSpannedChunks ← `(partial def $fromSpannedChunksId:ident
+      ($msg : Protobuf.Encoding.SpannedMessageChunks)
       ($recursionBudget : Nat :=
         Protobuf.Encoding.defaultMessageRecursionLimit)
       ($validateRequired : Bool := true) :
@@ -434,7 +535,30 @@ def construct_fromMessage
     $oneofFinalizations*
     $ret
     )
-  return (fromMessageId, dispatchHelpers.push fromMessage)
+  let ownedMessage ← mkIdent <$> mkFreshUserName `msg
+  let ownedBudget ← mkIdent <$> mkFreshUserName `recursionBudget
+  let ownedValidate ← mkIdent <$> mkFreshUserName `validateRequired
+  let fromMessage ← `(partial def $fromMessageId:ident
+      ($ownedMessage : Protobuf.Encoding.Message)
+      ($ownedBudget : Nat :=
+        Protobuf.Encoding.defaultMessageRecursionLimit)
+      ($ownedValidate : Bool := true) :
+      Except Protobuf.Encoding.ProtoError $name :=
+    $fromSpannedChunksId:ident
+      (Protobuf.Encoding.SpannedMessageChunks.ofMessage
+        $ownedMessage:ident)
+      $ownedBudget:ident $ownedValidate:ident)
+  return (
+    fromMessageId,
+    fromSpannedChunksId,
+    dispatchHelpers
+      |>.push applyRecord
+      |>.push foldCursor
+      |>.push foldSource
+      |>.push foldChunks
+      |>.push fromSpannedChunks
+      |>.push fromMessage
+  )
 
 def construct_decoder_rep (name : Ident) (push_name : String → Ident) (fromMessage : Ident) : CommandElabM (Ident × Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
@@ -563,15 +687,16 @@ def construct_decoder? (name : Ident) (push_name : String → Ident) (fromMessag
     )
   return (decoder?Id, decoder?)
 
-def construct_decode (name : Ident) (push_name : String → Ident) (fromMessage : Ident) : CommandElabM (Ident × Command) := do
+def construct_decode
+    (name : Ident) (push_name : String → Ident)
+    (fromSpannedChunks : Ident) : CommandElabM (Ident × Command) := do
   let decodeId := push_name "decode"
   let s ← `(partial def $decodeId:ident : ByteArray → Except Encoding.ProtoError $name := fun bs => do
     if bs.size > 0x7fffffff then
       throw (.invalidBuffer
         "protobuf messages must be smaller than 2 GiB")
-    let msg := Binary.Get.run (Binary.getThe Encoding.Message) bs |>.toExcept
-    let msg ← Encoding.protoDecodeParseResultExcept msg
-    $fromMessage:ident msg)
+    $fromSpannedChunks:ident
+      (Protobuf.Encoding.SpannedMessageChunks.ofBytes bs))
   return (decodeId, s)
 
 end Protobuf.Notation
