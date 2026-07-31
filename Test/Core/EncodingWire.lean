@@ -224,6 +224,50 @@ abbrev testSpannedTypedReaders : Except String Unit := do
     (malformedFixed.appendRepeatedI32_fixed32 #[])
     "spanned packed fixed32 reader accepted a partial element"
 
+abbrev testSpannedMessageChunkFold : Except String Unit := do
+  let first : ByteArray := ⟨#[
+    0x08, 0x01,
+    0x12, 0x01, 0xaa
+  ]⟩
+  let owned : Message := {
+    records := #[
+      ⟨3, .I32 (0x12345678 : UInt32).toBitVec⟩
+    ]
+  }
+  let last : ByteArray := ⟨#[0x08, 0x02]⟩
+  let chunks :=
+    SpannedMessageChunks.empty
+      |>.push (.span first 0 first.size)
+      |>.push (.owned owned)
+      |>.push (.span last 0 last.size)
+  let records ← ofProtoExcept <|
+    chunks.foldlM (#[] : Array SpannedRecord)
+      fun records record => pure (records.push record)
+  assertEq (records.map SpannedRecord.fieldNum) #[1, 2, 3, 1]
+    "spanned chunk fold did not preserve occurrence and record order"
+  match records[1]!.value with
+  | .len source start stop =>
+      assertTrue (source.size == first.size)
+        "spanned chunk fold copied the LEN source buffer"
+      assertEq (source.extract start stop) (⟨#[0xaa]⟩ : ByteArray)
+        "spanned chunk fold selected the wrong LEN interval"
+  | _ => throw "spanned chunk fold changed a LEN record's wire type"
+  assertEq
+    (← ofProtoExcept <|
+      (SpannedMessageChunks.ofBytes ByteArray.empty).foldlM 17
+        fun count _ => pure (count + 1))
+    17
+    "empty serialized message changed the fold accumulator"
+  assertProtoFails
+    ((SpannedMessageChunks.single (.span first 0 (first.size + 1))).foldlM
+      () fun _ _ => pure ())
+    "spanned chunk fold accepted an out-of-bounds source interval"
+  assertProtoFails
+    ((SpannedMessageChunks.ofBytes
+      (⟨#[0x0a, 0x02, 0x01]⟩ : ByteArray)).foldlM
+      () fun _ _ => pure ())
+    "spanned chunk fold accepted a truncated LEN payload"
+
 abbrev testTypedPackedBuilders : Except String Unit := do
   let check {α : Type}
       (values : Array α) (typed : Array α → Except ProtoError ProtoVal)
@@ -409,6 +453,10 @@ abbrev testPackedFixed64 : Except String Unit := do
 /-- info: true -/
 #guard_msgs (info) in
 #eval (match testSpannedTypedReaders with | .ok () => true | .error _ => false)
+
+/-- info: true -/
+#guard_msgs (info) in
+#eval (match testSpannedMessageChunkFold with | .ok () => true | .error _ => false)
 
 /-- info: true -/
 #guard_msgs (info) in

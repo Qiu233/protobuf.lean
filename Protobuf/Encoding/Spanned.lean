@@ -96,17 +96,19 @@ private def WireCursor.readFixed
       (UInt64.ofNat byte.toNat <<< UInt64.ofNat (8 * index))
   return (value, { cursor with offset := cursor.offset + width })
 
-private partial def parseSpannedRecords
+private partial def foldSpannedRecordsM
+    {α : Type}
     (cursor : WireCursor) (expectedEnd? : Option Nat)
-    (groupBudget : Nat) :
-    Except ProtoError (Array SpannedRecord × WireCursor) := do
+    (groupBudget : Nat) (init : α)
+    (step : α → SpannedRecord → Except ProtoError α) :
+    Except ProtoError (α × WireCursor) := do
   let mut cursor := cursor
-  let mut records := Array.emptyWithCapacity 8
+  let mut acc := init
   repeat
     if cursor.offset == cursor.stop then
       if expectedEnd?.isSome then
         throw .truncated
-      return (records, cursor)
+      return (acc, cursor)
     let (key, keyBytes, afterKey) ← cursor.readVarint
     if keyBytes > 5 then
       throw (.userError "protobuf: field tag varint is longer than 5 bytes")
@@ -119,11 +121,11 @@ private partial def parseSpannedRecords
     match wireType with
     | 0 =>
         let (value, _, next) ← cursor.readVarint
-        records := records.push ⟨fieldNum, .varint value⟩
+        acc ← step acc ⟨fieldNum, .varint value⟩
         cursor := next
     | 1 =>
         let (value, next) ← cursor.readFixed 8
-        records := records.push ⟨fieldNum, .i64 value⟩
+        acc ← step acc ⟨fieldNum, .i64 value⟩
         cursor := next
     | 2 =>
         let (length64, _, afterLength) ← cursor.readVarint
@@ -134,7 +136,7 @@ private partial def parseSpannedRecords
         if length > afterLength.stop - afterLength.offset then
           throw .truncated
         let stop := afterLength.offset + length
-        records := records.push
+        acc ← step acc
           ⟨fieldNum,
             .len afterLength.source afterLength.offset stop⟩
         cursor := { afterLength with offset := stop }
@@ -142,25 +144,35 @@ private partial def parseSpannedRecords
         if groupBudget == 0 then
           throw (.userError "protobuf: group recursion limit exceeded")
         let (nested, next) ←
-          parseSpannedRecords cursor (some fieldNum) (groupBudget - 1)
-        records := records.push
+          foldSpannedRecordsM cursor (some fieldNum) (groupBudget - 1)
+            (Array.emptyWithCapacity 8)
+            fun records record => pure (records.push record)
+        acc ← step acc
           ⟨fieldNum, .grouped { records := nested }⟩
         cursor := next
     | 4 =>
         match expectedEnd? with
         | some expected =>
             if fieldNum == expected then
-              return (records, cursor)
+              return (acc, cursor)
             throw (.userError "protobuf: mismatching EGROUP field number")
         | none =>
             throw (.userError "protobuf: unexpected EGROUP")
     | 5 =>
         let (value, next) ← cursor.readFixed 4
-        records := records.push ⟨fieldNum, .i32 value.toUInt32⟩
+        acc ← step acc ⟨fieldNum, .i32 value.toUInt32⟩
         cursor := next
     | _ =>
         throw (.userError "protobuf: invalid wire type encountered")
   throw (.userError "protobuf: internal wire cursor loop terminated")
+
+private def parseSpannedRecords
+    (cursor : WireCursor) (expectedEnd? : Option Nat)
+    (groupBudget : Nat) :
+    Except ProtoError (Array SpannedRecord × WireCursor) :=
+  foldSpannedRecordsM cursor expectedEnd? groupBudget
+    (Array.emptyWithCapacity 8)
+    fun records record => pure (records.push record)
 
 /-- Parse a complete input while borrowing all length-delimited payloads. -/
 def SpannedMessage.decode
@@ -204,6 +216,45 @@ def ByteSpan.decodeMessage
     return { records }
   throw (.invalidBuffer "protobuf byte span is outside its source buffer")
 
+/--
+One wire-message input for generated schema-aware decoding.
+
+`span` is the zero-copy fast path used for serialized root and embedded
+messages. `spanned` represents a legacy group that the schema-neutral parser
+has already delimited. `owned` adapts the public compatibility `Message` API
+without first copying its complete record array.
+-/
+inductive SpannedMessageSource where
+  | span (source : ByteArray) (start stop : Nat)
+  | spanned (message : SpannedMessage)
+  | owned (message : Message)
+deriving Inhabited
+
+/--
+Amortized-constant collection of wire-message occurrences.
+
+Singular protobuf message fields merge all their occurrences before required
+initialization is checked. Keeping the common zero/one cases inline avoids an
+array allocation, while `many` preserves occurrence order.
+-/
+inductive SpannedMessageChunks where
+  | empty
+  | single (source : SpannedMessageSource)
+  | many (sources : Array SpannedMessageSource)
+deriving Inhabited
+
+def SpannedMessageChunks.push
+    (chunks : SpannedMessageChunks)
+    (source : SpannedMessageSource) : SpannedMessageChunks :=
+  match chunks with
+  | .empty => .single source
+  | .single first => .many #[first, source]
+  | .many sources => .many (sources.push source)
+
+def SpannedMessageChunks.isEmpty : SpannedMessageChunks → Bool
+  | .empty => true
+  | _ => false
+
 mutual
 
 /-- Materialize a borrowed wire value for the compatibility/reflection API. -/
@@ -244,41 +295,67 @@ partial def Message.toSpannedMessage
 
 end
 
-/-- Concatenate spanned message occurrences in one allocation. -/
-@[noinline]
-def SpannedMessage.combineMany
-    (messages : Array SpannedMessage) : SpannedMessage :=
-  let capacity :=
-    messages.foldl (init := 0) fun size message =>
-      size + message.records.size
-  let records :=
-    messages.foldl (init := Array.emptyWithCapacity capacity)
-      fun records message =>
-        message.records.foldl (init := records) Array.push
-  ⟨records⟩
+private def SpannedMessageSource.foldlM
+    (source : SpannedMessageSource) (init : α)
+    (step : α → SpannedRecord → Except ProtoError α)
+    (groupBudget : Nat) : Except ProtoError α := do
+  match source with
+  | .span bytes start stop =>
+      if start > stop then
+        throw
+          (.invalidBuffer
+            "protobuf byte span is outside its source buffer")
+      if validStop : stop ≤ bytes.size then
+        if stop - start > 0x7fffffff then
+          throw
+            (.invalidBuffer
+              "protobuf messages must be smaller than 2 GiB")
+        let cursor : WireCursor := {
+          source := bytes
+          offset := start
+          stop
+          validStop
+        }
+        return (←
+          foldSpannedRecordsM cursor none groupBudget init step).1
+      throw
+        (.invalidBuffer
+          "protobuf byte span is outside its source buffer")
+  | .spanned message =>
+      message.records.foldlM (init := init) step
+  | .owned message =>
+      message.records.foldlM (init := init) fun acc record =>
+        step acc record.toSpannedRecord
 
 /--
-Amortized-constant accumulator for singular embedded-message occurrences on
-the borrowed decoding path.
+Visit the wire records in all message occurrences without concatenating or
+materializing their borrowed LEN payloads.
+
+The callback observes the same record order as protobuf message merging:
+records of each occurrence are visited in occurrence order. Legacy group
+bodies are the only recursively materialized records because their end tags,
+unlike LEN bounds, cannot be represented by a byte interval alone.
 -/
-inductive SpannedMessageChunks where
-  | empty
-  | single (message : SpannedMessage)
-  | many (messages : Array SpannedMessage)
-deriving Inhabited
-
-def SpannedMessageChunks.push
-    (chunks : SpannedMessageChunks)
-    (message : SpannedMessage) : SpannedMessageChunks :=
+@[noinline]
+def SpannedMessageChunks.foldlM
+    (chunks : SpannedMessageChunks) (init : α)
+    (step : α → SpannedRecord → Except ProtoError α)
+    (groupBudget : Nat := defaultMessageRecursionLimit) :
+    Except ProtoError α := do
   match chunks with
-  | .empty => .single message
-  | .single first => .many #[first, message]
-  | .many messages => .many (messages.push message)
+  | .empty => pure init
+  | .single source =>
+      source.foldlM init step groupBudget
+  | .many sources =>
+      sources.foldlM (init := init) fun acc source =>
+        source.foldlM acc step groupBudget
 
-def SpannedMessageChunks.toMessage? :
-    SpannedMessageChunks → Option SpannedMessage
-  | .empty => none
-  | .single message => some message
-  | .many messages => some (SpannedMessage.combineMany messages)
+def SpannedMessageChunks.ofBytes
+    (bytes : ByteArray) : SpannedMessageChunks :=
+  .single (.span bytes 0 bytes.size)
+
+def SpannedMessageChunks.ofMessage
+    (message : Message) : SpannedMessageChunks :=
+  .single (.owned message)
 
 end Protobuf.Encoding
