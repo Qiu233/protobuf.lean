@@ -4,13 +4,14 @@ This benchmark compares the same generated `bench.perf.Batch` workload across:
 
 - `lean-binary`: this repository's generated binary codec;
 - `cpp-binary`: the official C++ protobuf runtime;
+- `go-binary`: the official Go protobuf runtime;
 - `lean-json`: hand-written instances using Lean's `Lean.Data.Json` AST,
   parser, and compact printer;
 - `lean-protojson`: this repository's reflection-based ProtoJSON codec.
 
 `lean-json` is deliberately not called ProtoJSON: its field naming and scalar
 mapping are ordinary application JSON choices. The binary comparison is exact:
-the runner rejects a sample unless Lean and C++ produce identical bytes.
+the runner rejects a sample unless Lean, C++, and Go produce identical bytes.
 Every path also checks a stable fingerprint covering every workload field.
 
 ## Run
@@ -21,12 +22,13 @@ From any directory in the repository:
 Test/Bench/run.sh
 ```
 
-The chain pins protobuf C++ and `protoc` to 35.0. If `BENCH_PROTOC` or
-`PROTOC` names that version, it is reused; otherwise the runner downloads the
-official architecture-specific compiler and verifies its SHA-256. CMake
-fetches and caches the matching official C++ source below `.lake/build/bench`.
-The first invocation therefore builds the C++ runtime; dependency compilation
-is not part of the measured program.
+The chain pins protobuf C++ and `protoc` to 35.0, Go to 1.26.5, and the
+official Go protobuf module to v1.36.11. If `BENCH_PROTOC` or `PROTOC` names
+the pinned compiler version, it is reused; otherwise the runner downloads the
+official architecture-specific compiler and Go toolchain and verifies their
+SHA-256 checksums. CMake fetches and caches the matching official C++ source
+below `.lake/build/bench`; the Go runner builds from the checked-in exact Go
+module checksums. Dependency compilation is not part of the measured program.
 
 For a fast chain check:
 
@@ -60,7 +62,8 @@ Test/Bench/run.sh
   process samples.
 
 The runner requires Linux, GNU `time`, Python 3, CMake, Ninja, a C++17
-compiler, curl, unzip, sha256sum, and taskset.
+compiler, curl, tar, unzip, sha256sum, and taskset. It bootstraps the pinned
+Go toolchain itself.
 
 ## Fixed and growing costs
 
@@ -95,7 +98,7 @@ Each run writes:
 
 - `raw.csv`: every independent process sample;
 - `summary.csv`: medians and interquartile ranges;
-- `metadata.json`: commit and dirty state, all toolchain versions, CPU model
+- `metadata.json`: commit and dirty state, all toolchain/runtime versions, CPU model
   and affinity, configuration, calibration counts, and metric definitions;
 - `REPORT.md`: fixed-cost, steady-state, memory, and growth tables.
 

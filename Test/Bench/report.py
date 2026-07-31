@@ -24,6 +24,7 @@ from typing import Iterable, Sequence
 IMPLEMENTATIONS = (
     "lean-binary",
     "cpp-binary",
+    "go-binary",
     "lean-json",
     "lean-protojson",
 )
@@ -70,6 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--lean", required=True, type=pathlib.Path)
     parser.add_argument("--cpp", required=True, type=pathlib.Path)
+    parser.add_argument("--go", required=True, type=pathlib.Path)
     parser.add_argument("--protoc", required=True, type=pathlib.Path)
     parser.add_argument("--repo", required=True, type=pathlib.Path)
     parser.add_argument("--output", required=True, type=pathlib.Path)
@@ -116,9 +118,10 @@ def executable_command(
     iterations: int,
     validate: bool,
 ) -> list[str]:
-    if implementation == "cpp-binary":
+    if implementation in ("cpp-binary", "go-binary"):
+        executable = args.cpp if implementation == "cpp-binary" else args.go
         return [
-            str(args.cpp),
+            str(executable),
             operation,
             str(items),
             str(iterations),
@@ -135,7 +138,12 @@ def executable_command(
 
 
 def startup_command(args: argparse.Namespace, runtime: str) -> list[str]:
-    executable = args.lean if runtime == "lean-runtime" else args.cpp
+    executables = {
+        "lean-runtime": args.lean,
+        "cpp-runtime": args.cpp,
+        "go-runtime": args.go,
+    }
+    executable = executables[runtime]
     return [str(executable), "startup"]
 
 
@@ -285,13 +293,13 @@ def check_results(rows: Sequence[dict[str, object]], sizes: Sequence[int]) -> No
         binary_rows = [
             row
             for row in at_size
-            if row["implementation"] in ("lean-binary", "cpp-binary")
+            if row["implementation"] in ("lean-binary", "cpp-binary", "go-binary")
         ]
         binary_hashes = {row["output_hash"] for row in binary_rows}
         binary_sizes = {row["output_bytes"] for row in binary_rows}
         if len(binary_hashes) != 1 or len(binary_sizes) != 1:
             raise RuntimeError(
-                f"Lean and C++ binary protobuf bytes differ at size {size}"
+                f"Lean, C++, and Go binary protobuf bytes differ at size {size}"
             )
 
 
@@ -331,6 +339,7 @@ def write_metadata(
         "lean_version": capture(["lake", "env", "lean", "--version"], args.repo),
         "protoc_version": capture([str(args.protoc), "--version"], args.repo),
         "cpp_runtime_version": capture([str(args.cpp), "version"], args.repo),
+        "go_runtime_version": capture([str(args.go), "version"], args.repo),
         "cpp_compiler": capture(["c++", "--version"], args.repo).splitlines()[0],
         "kernel": capture(["uname", "-a"], args.repo),
         "cpu_model": cpu_model(),
@@ -466,7 +475,7 @@ def write_report(
         "|---|---:|---:|",
     ]
     startup_rss: dict[str, float] = {}
-    for runtime in ("lean-runtime", "cpp-runtime"):
+    for runtime in ("lean-runtime", "cpp-runtime", "go-runtime"):
         rows = grouped[("startup", runtime, "startup", 0)]
         rss = median(rows, "max_rss_kib")
         startup_rss[runtime] = rss
@@ -523,9 +532,10 @@ def write_report(
             for implementation in IMPLEMENTATIONS:
                 rows = grouped[("memory", implementation, operation, size)]
                 rss = median(rows, "max_rss_kib")
-                runtime = (
-                    "cpp-runtime" if implementation == "cpp-binary" else "lean-runtime"
-                )
+                runtime = {
+                    "cpp-binary": "cpp-runtime",
+                    "go-binary": "go-runtime",
+                }.get(implementation, "lean-runtime")
                 delta = rss - startup_rss[runtime]
                 delta_per_item = f"{delta / size:+.3f}" if size else "n/a"
                 lines.append(
@@ -575,7 +585,7 @@ def write_report(
             "  calibration, and metric definitions.",
             "- `lean-json` is the hand-written `Lean.Data.Json` AST baseline; it is not",
             "  ProtoJSON. `lean-protojson` is this repository's reflection-based ProtoJSON.",
-            "- Binary Lean and C++ output hashes and sizes are checked for exact equality.",
+            "- Binary Lean, C++, and Go output hashes and sizes are checked for exact equality.",
             "  Every codec also validates a full-field logical content fingerprint outside",
             "  the timed region.",
             "",
@@ -628,6 +638,7 @@ def main() -> int:
     for sample in range(args.repeats):
         jobs.append(("startup", sample, startup_command(args, "lean-runtime")))
         jobs.append(("startup", sample, startup_command(args, "cpp-runtime")))
+        jobs.append(("startup", sample, startup_command(args, "go-runtime")))
         for case in cases:
             jobs.append(
                 (
