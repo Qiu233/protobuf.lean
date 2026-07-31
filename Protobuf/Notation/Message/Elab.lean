@@ -49,7 +49,8 @@ public def elabMessageDecCore
   let (_, builder) ← construct_builder name push_name toMessage'
   let (_, builderPartial) ←
     construct_builder name push_name (push_name "toMessagePartial") "builderPartial"
-  let (fromMessage', fromMessage) ← construct_fromMessage name push_name mdata
+  let (fromMessage', fromMessage) ←
+    construct_fromMessage name push_name localOneofs mdata
   let (_, merge) ← construct_merge name push_name mdata
   let requiredValidators ←
     constructMessageRequiredValidator name push_name mdata

@@ -511,46 +511,42 @@ def constructRegularBranches
     CommandElabM (Array (Nat × Term)) :=
   fields.mapM (constructRegularBranch ctx)
 
-def constructOneofDispatch
+def constructOneofBranch
     (ctx : DecodeFoldContext)
-    (oneofs : List (ProtoFieldMData × Nat)) : CommandElabM Term := do
-  match oneofs with
-  | [] => pure ctx.unknownBody
-  | (field, pendingIndex) :: rest =>
-    let fallback ←
-      constructOneofDispatch ctx rest
-    let acceptsRecord := helperIdent field.proto_type "acceptsRecord"
-    let decodeRecord := helperIdent field.proto_type "decodeRecord"
-    let oneofValue ←
-      mkIdent <$> mkFreshUserName field.field_name.getId
-    let pendingValue ←
-      mkIdent <$> mkFreshUserName `pendingOneofMessage
-    let state' := ctx.state'
-    let some oneofPending := ctx.oneofPending?
-      | throwError
-          "{decl_name%}: internal error: oneof dispatch has no pending state"
-    let some oneofPending' := ctx.oneofPending'?
-      | throwError
-          "{decl_name%}: internal error: oneof dispatch has no updated pending state"
-    let fieldName := field.field_name
-    let updatedState ←
-      ctx.mkStateWithOneof
-        state' ctx.seen ctx.pending oneofPending'
-    `(if $acceptsRecord:ident $(ctx.recVar) then do
-        let ($oneofValue:ident, $pendingValue:ident) ←
-          $decodeRecord:ident
-            (($(field.field_proj) $(ctx.state)),
-              ($oneofPending:ident)[$(quote pendingIndex)]!)
-            $(ctx.recVar) $(ctx.recursionBudget)
-        let $state':ident : $(ctx.name) := {
-          $(ctx.state) with
-          $fieldName:ident := $oneofValue:ident
-        }
-        let $oneofPending':ident :=
-          ($oneofPending:ident).set!
-            $(quote pendingIndex) $pendingValue:ident
-        pure $updatedState:term
-      else
-        $fallback:term)
+    (field : ProtoFieldMData) (pendingIndex : Nat) :
+    CommandElabM Term := do
+  let acceptsRecord := helperIdent field.proto_type "acceptsRecord"
+  let decodeRecord := helperIdent field.proto_type "decodeRecord"
+  let oneofValue ←
+    mkIdent <$> mkFreshUserName field.field_name.getId
+  let pendingValue ←
+    mkIdent <$> mkFreshUserName `pendingOneofMessage
+  let state' := ctx.state'
+  let some oneofPending := ctx.oneofPending?
+    | throwError
+        "{decl_name%}: internal error: oneof branch has no pending state"
+  let some oneofPending' := ctx.oneofPending'?
+    | throwError
+        "{decl_name%}: internal error: oneof branch has no updated pending state"
+  let fieldName := field.field_name
+  let updatedState ←
+    ctx.mkStateWithOneof
+      state' ctx.seen ctx.pending oneofPending'
+  `(if $acceptsRecord:ident $(ctx.recVar) then do
+      let ($oneofValue:ident, $pendingValue:ident) ←
+        $decodeRecord:ident
+          (($(field.field_proj) $(ctx.state)),
+            ($oneofPending:ident)[$(quote pendingIndex)]!)
+          $(ctx.recVar) $(ctx.recursionBudget)
+      let $state':ident : $(ctx.name) := {
+        $(ctx.state) with
+        $fieldName:ident := $oneofValue:ident
+      }
+      let $oneofPending':ident :=
+        ($oneofPending:ident).set!
+          $(quote pendingIndex) $pendingValue:ident
+      pure $updatedState:term
+    else
+      $(ctx.unknownBody))
 
 end Protobuf.Notation

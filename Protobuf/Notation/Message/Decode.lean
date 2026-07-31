@@ -124,6 +124,7 @@ private def constructPendingMessageDecodes
 def construct_fromMessage
     (name : Ident)
     (push_name : String → Ident)
+    (localOneofs : LocalOneofAlternatives)
     (fields : Array ProtoFieldMData) :
     CommandElabM (Ident × Array Command) := do
   let msg ← mkIdent <$> mkFreshUserName `msg
@@ -213,7 +214,30 @@ def construct_fromMessage
     requiredStrictMeta,
     regularMessageMeta
   }
-  let branchCases ← constructRegularBranches branchContext regularFields
+  let regularBranchCases ←
+    constructRegularBranches branchContext regularFields
+  let oneofBranchCases ← oneofFields.zipIdx.foldlM
+    (init := (#[] : Array (Nat × Term)))
+    (fun cases (field, pendingIndex) => do
+      let some oneofName := field.oneof_type?
+        | throwErrorAt field.field_name
+            "{decl_name%}: internal error: oneof field has no oneof type"
+      let alternatives? ←
+        match localOneofs.find? oneofName with
+        | some alternatives => pure (some alternatives)
+        | none => do
+            let env ← getEnv
+            pure (oneofAlternativesExt.find? env oneofName)
+      let some alternatives := alternatives?
+        | throwErrorAt field.proto_type
+            "static field metadata is unavailable for protobuf oneof `{oneofName}`; rebuild the module that declares it"
+      let body ←
+        constructOneofBranch branchContext field pendingIndex
+      pure <| alternatives.foldl
+        (init := cases)
+        fun cases alternative =>
+          cases.push (alternative.fieldNumber, body))
+  let branchCases := regularBranchCases ++ oneofBranchCases
   let stateInit ← `(Parser.Term.doSeqItem| let $state:ident : $name := default)
   let seenInit ← `(Parser.Term.doSeqItem| let $seen:ident : Array Bool := Array.replicate $(quote requiredStrictFields.size) false)
   let pendingInit ← `(Parser.Term.doSeqItem|
@@ -230,20 +254,17 @@ def construct_fromMessage
       pure #[]
   let foldAcc := mkIdent `acc
   /-
-  Each oneof contributes a generated record classifier and accumulator
-  transition. The main wire scan updates the matching slot immediately:
-  scalars obey last-one-wins, while consecutive occurrences of the same
-  message member merge raw wire payloads until finalize. A non-member,
-  wrong-wire record, or unknown CLOSED enum value falls through to
-  Unknown.Fields.
+  Every ordinary field and oneof alternative participates in the same
+  field-number dispatch tree. A oneof hit updates its accumulator slot
+  immediately: scalars obey last-one-wins, while consecutive occurrences of
+  the same message member merge raw wire payloads until finalize. A wrong-wire
+  record or unknown CLOSED enum value falls through to Unknown.Fields.
   -/
-  let oneofDispatch ←
-    constructOneofDispatch branchContext oneofFields.zipIdx.toList
   let fallback ← mkIdent <$> mkFreshUserName `fallback
   let fallbackInit ← `(Parser.Term.doSeqItem|
     let $fallback:ident :
         Unit → Except Protobuf.Encoding.ProtoError $stateTy :=
-      fun _ => $oneofDispatch:term)
+      fun _ => $unknownBody:term)
   let sortedCases := branchCases.qsort (fun a b => a.1 < b.1)
   let (dispatchBody, dispatchHelpers) ←
     if sortedCases.size ≤ decodingChunkSize then

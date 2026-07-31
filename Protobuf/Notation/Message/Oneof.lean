@@ -38,6 +38,31 @@ private def InternalType.recordDecoder : InternalType → Ident
   | .fixed32 => mkIdent ``Encoding.Record.getI32_fixed32
   | .sfixed32 => mkIdent ``Encoding.Record.getI32_sfixed32
 
+/--
+Build a bounded-depth exact field-number dispatch for generated oneof helpers.
+Alternatives may use arbitrary protobuf tag numbers, so sort once and split
+around the midpoint rather than emitting a source-order linear chain.
+-/
+private partial def constructBalancedRecordDispatch
+    (record : Ident) (fallback : Term)
+    (cases : Array (Nat × Term))
+    (start stop : Nat) : CommandElabM Term := do
+  if start >= stop then
+    pure fallback
+  else
+    let mid := start + (stop - start) / 2
+    let (fieldNum, body) := cases[mid]!
+    let left ←
+      constructBalancedRecordDispatch record fallback cases start mid
+    let right ←
+      constructBalancedRecordDispatch record fallback cases (mid + 1) stop
+    `(if ($record:ident).fieldNum == $(quote fieldNum) then
+        $body:term
+      else if ($record:ident).fieldNum < $(quote fieldNum) then
+        $left:term
+      else
+        $right:term)
+
 public def elabOneofDecCore
     (mutEnums mutOneofs messages : NameSet) :
     Syntax → CommandElabM ProtobufDeclBlock := fun stx => do
@@ -206,17 +231,12 @@ public def elabOneofDecCore
               | .LEN _ => true
               | _ => false)
     pure (x.field_num.getNat, acceptsValue)
-  let rec mkAcceptsDispatch
-      (cases : List (Nat × Term)) : CommandElabM Term := do
-    match cases with
-    | [] => `(false)
-    | (fieldNum, acceptsValue) :: rest =>
-      let fallback ← mkAcceptsDispatch rest
-      `(if ($acceptsRecordArg:ident).fieldNum == $(quote fieldNum) then
-          $acceptsValue:term
-        else
-          $fallback:term)
-  let acceptsBody ← mkAcceptsDispatch acceptsCases.toList
+  let acceptsCases :=
+    acceptsCases.qsort (fun a b => a.1 < b.1)
+  let acceptsFallback ← `(false)
+  let acceptsBody ←
+    constructBalancedRecordDispatch
+      acceptsRecordArg acceptsFallback acceptsCases 0 acceptsCases.size
   let acceptsRecord ← `(
     /--
     Classify a oneof wire record using only its statically generated field
@@ -317,16 +337,11 @@ public def elabOneofDecCore
           pure (((Option.none,
             Option.some ($(x.field_num):num, $combined:ident)) : $stateTy)))
     pure (x.field_num.getNat, decode)
-  let rec mkDispatch (cases : List (Nat × Term)) : CommandElabM Term := do
-    match cases with
-    | [] => `(pure $state:ident)
-    | (fieldNum, body) :: rest =>
-      let restTerm ← mkDispatch rest
-      `(if ($recVar:ident).fieldNum == $(quote fieldNum) then
-          $body:term
-        else
-          $restTerm:term)
-  let dispatch ← mkDispatch ds.toList
+  let ds := ds.qsort (fun a b => a.1 < b.1)
+  let dispatchFallback ← `(pure $state:ident)
+  let dispatch ←
+    constructBalancedRecordDispatch
+      recVar dispatchFallback ds 0 ds.size
   let decodeRecordId := push_name "decodeRecord"
   let decodeRecord ← `(
     /--
