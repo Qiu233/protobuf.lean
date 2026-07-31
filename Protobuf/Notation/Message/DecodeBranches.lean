@@ -12,6 +12,42 @@ namespace Protobuf.Notation
 open Encoding Notation
 open Lean Meta Elab Term Command
 
+private def InternalType.recordDecoder : InternalType → Ident
+  | .string => mkIdent ``Encoding.Record.getString
+  | .raw_string => mkIdent ``Encoding.Record.getUnvalidatedString
+  | .bytes => mkIdent ``Encoding.Record.getBytes
+  | .bool => mkIdent ``Encoding.Record.getBool
+  | .int32 => mkIdent ``Encoding.Record.getVarint_int32
+  | .uint32 => mkIdent ``Encoding.Record.getVarint_uint32
+  | .int64 => mkIdent ``Encoding.Record.getVarint_int64
+  | .uint64 => mkIdent ``Encoding.Record.getVarint_uint64
+  | .sint32 => mkIdent ``Encoding.Record.getVarint_sint32
+  | .sint64 => mkIdent ``Encoding.Record.getVarint_sint64
+  | .double => mkIdent ``Encoding.Record.getI64_double
+  | .fixed64 => mkIdent ``Encoding.Record.getI64_fixed64
+  | .sfixed64 => mkIdent ``Encoding.Record.getI64_sfixed64
+  | .float => mkIdent ``Encoding.Record.getI32_float
+  | .fixed32 => mkIdent ``Encoding.Record.getI32_fixed32
+  | .sfixed32 => mkIdent ``Encoding.Record.getI32_sfixed32
+
+private def InternalType.recordAppender : InternalType → Ident
+  | .string => mkIdent ``Encoding.Record.appendRepeatedString
+  | .raw_string => mkIdent ``Encoding.Record.appendRepeatedUnvalidatedString
+  | .bytes => mkIdent ``Encoding.Record.appendRepeatedBytes
+  | .bool => mkIdent ``Encoding.Record.appendRepeatedBool
+  | .int32 => mkIdent ``Encoding.Record.appendRepeatedVarint_int32
+  | .uint32 => mkIdent ``Encoding.Record.appendRepeatedVarint_uint32
+  | .int64 => mkIdent ``Encoding.Record.appendRepeatedVarint_int64
+  | .uint64 => mkIdent ``Encoding.Record.appendRepeatedVarint_uint64
+  | .sint32 => mkIdent ``Encoding.Record.appendRepeatedVarint_sint32
+  | .sint64 => mkIdent ``Encoding.Record.appendRepeatedVarint_sint64
+  | .double => mkIdent ``Encoding.Record.appendRepeatedI64_double
+  | .fixed64 => mkIdent ``Encoding.Record.appendRepeatedI64_fixed64
+  | .sfixed64 => mkIdent ``Encoding.Record.appendRepeatedI64_sfixed64
+  | .float => mkIdent ``Encoding.Record.appendRepeatedI32_float
+  | .fixed32 => mkIdent ``Encoding.Record.appendRepeatedI32_fixed32
+  | .sfixed32 => mkIdent ``Encoding.Record.appendRepeatedI32_sfixed32
+
 /--
 Identifiers and generated terms shared by the per-field decoder branch
 builders. Keeping these builders in separate declarations avoids one enormous
@@ -179,47 +215,58 @@ private def constructRepeatedBranch
   `packed` controls serialization only.
   -/
   let xs := mkIdent `xs
-  let decodeRepeated ←
-    if fieldMData.options.wired_as_group?.isEqSome true then
-      let fromMessage ← fieldMData.fromMessage?.getDM <|
-        throwErrorAt fieldMData.field_name
-          "{decl_name%}: internal error: repeated group field has no generated fromMessage function"
-      let groupMessage ← mkIdent <$> mkFreshUserName `groupMessage
-      let childBudget ← mkIdent <$> mkFreshUserName `childBudget
+  let normalBody ←
+    match fieldMData.internal_type? with
+    | some type =>
+      let appender := type.recordAppender
       `(do
-        let groupMessages ←
-          Encoding.Message.getExpandedGroup
-            $recMsg:ident $fieldNum:num
-        groupMessages.mapM fun $groupMessage:ident => do
-          let $childBudget:ident ←
-            Protobuf.Encoding.descendMessageRecursion
-              $recursionBudget:ident
-          $fromMessage:ident $groupMessage:ident $childBudget:ident false)
-    else
-      let decoderRep ← fieldMData.decoder_rep?.getDM <|
-        throwErrorAt fieldMData.field_name
-          "{decl_name%}: internal error: repeated field has no generated decoder"
-      if fieldMData.internal_type?.isNone &&
-        fieldMData.enum_type?.isNone then
-        `($decoderRep:ident
-          $recMsg:ident $fieldNum:num $recursionBudget:ident false)
-      else
-        `($decoderRep:ident $recMsg:ident $fieldNum:num)
-  let normalBody ← `(do
-    let $xs:ident ← $decodeRepeated:term
-    -- Repeated `Array.append` of one decoded record copied the accumulated
-    -- prefix and made a long unpacked/repeated field quadratic. Folding with
-    -- `push` lets the uniquely owned generated-state accumulator grow in place.
-    let values :=
-      ($xs:ident).foldl
-        (init := ($(fieldMData.field_proj) $state:ident))
-        fun values value => values.push value
-    let $state':ident : $name := {
-      $state:ident with
-      $field:ident := values
-    }
-    let $seen':ident := $seenUpdate:term
-    pure (($state':ident, $seen':ident, $pending:ident) : $stateTy))
+        let values ←
+          $appender:ident $recVar:ident
+            ($(fieldMData.field_proj) $state:ident)
+        let $state':ident : $name := {
+          $state:ident with
+          $field:ident := values
+        }
+        let $seen':ident := $seenUpdate:term
+        pure (($state':ident, $seen':ident, $pending:ident) : $stateTy))
+    | none =>
+      let decodeRepeated ←
+        if fieldMData.options.wired_as_group?.isEqSome true then
+          let fromMessage ← fieldMData.fromMessage?.getDM <|
+            throwErrorAt fieldMData.field_name
+              "{decl_name%}: internal error: repeated group field has no generated fromMessage function"
+          let groupMessage ← mkIdent <$> mkFreshUserName `groupMessage
+          let childBudget ← mkIdent <$> mkFreshUserName `childBudget
+          `(do
+            let groupMessages ←
+              Encoding.Message.getExpandedGroup
+                $recMsg:ident $fieldNum:num
+            groupMessages.mapM fun $groupMessage:ident => do
+              let $childBudget:ident ←
+                Protobuf.Encoding.descendMessageRecursion
+                  $recursionBudget:ident
+              $fromMessage:ident $groupMessage:ident $childBudget:ident false)
+        else
+          let decoderRep ← fieldMData.decoder_rep?.getDM <|
+            throwErrorAt fieldMData.field_name
+              "{decl_name%}: internal error: repeated field has no generated decoder"
+          if fieldMData.enum_type?.isNone then
+            `($decoderRep:ident
+              $recMsg:ident $fieldNum:num $recursionBudget:ident false)
+          else
+            `($decoderRep:ident $recMsg:ident $fieldNum:num)
+      `(do
+        let $xs:ident ← $decodeRepeated:term
+        let values :=
+          ($xs:ident).foldl
+            (init := ($(fieldMData.field_proj) $state:ident))
+            fun values value => values.push value
+        let $state':ident : $name := {
+          $state:ident with
+          $field:ident := values
+        }
+        let $seen':ident := $seenUpdate:term
+        pure (($state':ident, $seen':ident, $pending:ident) : $stateTy))
   match fieldMData.enum_type? with
   | none => pure normalBody
   | some _ =>
@@ -287,6 +334,7 @@ private def constructSingularScalarBranch
     (seenUpdate : Term) : CommandElabM Term := do
   let {
     name,
+    recVar,
     recMsg,
     state,
     seen,
@@ -300,6 +348,15 @@ private def constructSingularScalarBranch
   let fieldNum := fieldMData.field_num
   let field := fieldMData.field_name
   let decoder? := fieldMData.decoder??.get!
+  let decodeValue? ←
+    match fieldMData.internal_type? with
+    | some type =>
+        let decoder := type.recordDecoder
+        `(do
+          let value ← $decoder:ident $recVar:ident
+          pure (some value))
+    | none =>
+        `($decoder?:ident $recMsg:ident $fieldNum:num)
   let value? := mkIdent `value?
   let value := mkIdent `value
   match fieldMData.mod with
@@ -308,7 +365,7 @@ private def constructSingularScalarBranch
     match fieldMData.enum_type? with
     | none =>
       `(do
-        let $value?:ident ← $decoder?:ident $recMsg:ident $fieldNum:num
+        let $value?:ident ← $decodeValue?:term
         let $state':ident : $name := {
           $state:ident with
           $field:ident := $value?:ident
@@ -317,7 +374,7 @@ private def constructSingularScalarBranch
     | some _ =>
       let enumIsClosed := helperIdent fieldMData.proto_type "isClosed"
       `(do
-        let $value?:ident ← $decoder?:ident $recMsg:ident $fieldNum:num
+        let $value?:ident ← $decodeValue?:term
         match $value?:ident with
         | Option.some $value:ident =>
             let $state':ident : $name := {
@@ -336,7 +393,7 @@ private def constructSingularScalarBranch
     match fieldMData.enum_type? with
     | none =>
       `(do
-        let $value?:ident ← $decoder?:ident $recMsg:ident $fieldNum:num
+        let $value?:ident ← $decodeValue?:term
         match $value?:ident with
         | Option.some $value:ident =>
             let $state':ident : $name := {
@@ -350,7 +407,7 @@ private def constructSingularScalarBranch
     | some _ =>
       let enumIsClosed := helperIdent fieldMData.proto_type "isClosed"
       `(do
-        let $value?:ident ← $decoder?:ident $recMsg:ident $fieldNum:num
+        let $value?:ident ← $decodeValue?:term
         match $value?:ident with
         | Option.some $value:ident =>
             let $state':ident : $name := {

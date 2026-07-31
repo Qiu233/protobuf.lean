@@ -311,6 +311,95 @@ def Message.getI32_sfixed32? (msg : Message) (fieldNum : Nat) : Except ProtoErro
   let r ← msg.getI32? fieldNum
   return r.map Int32.ofBitVec
 
+/-!
+Generated decoders have already dispatched on `Record.fieldNum`. These
+record-level readers avoid rebuilding a singleton `Message` and searching it
+again for every scalar occurrence.
+-/
+
+@[noinline]
+def Record.getString (record : Record) : Except ProtoError String := do
+  let .LEN data := record.value | throwWireType! "expected LEN"
+  let some value := String.fromUTF8? data
+    | throwInvalidBuffer! "invalid UTF-8 data"
+  return value
+
+@[noinline]
+def Record.getUnvalidatedString
+    (record : Record) : Except ProtoError Protobuf.UnvalidatedString := do
+  let .LEN data := record.value | throwWireType! "expected LEN"
+  return .ofBytes data
+
+@[noinline]
+def Record.getBytes (record : Record) : Except ProtoError ByteArray := do
+  let .LEN data := record.value | throwWireType! "expected LEN"
+  return data
+
+@[noinline]
+def Record.getBool (record : Record) : Except ProtoError Bool := do
+  let .VARINT value := record.value | throwWireType! "expected VARINT"
+  return value != 0
+
+@[noinline]
+def Record.getVarint_int32 (record : Record) : Except ProtoError Int32 := do
+  let .VARINT value := record.value | throwWireType! "expected VARINT"
+  return Int32.ofBitVec (UInt32.ofNat value).toBitVec
+
+@[noinline]
+def Record.getVarint_uint32 (record : Record) : Except ProtoError UInt32 := do
+  let .VARINT value := record.value | throwWireType! "expected VARINT"
+  return UInt32.ofNat value
+
+@[noinline]
+def Record.getVarint_int64 (record : Record) : Except ProtoError Int64 := do
+  let .VARINT value := record.value | throwWireType! "expected VARINT"
+  return Int64.ofBitVec (UInt64.ofNat value).toBitVec
+
+@[noinline]
+def Record.getVarint_uint64 (record : Record) : Except ProtoError UInt64 := do
+  let .VARINT value := record.value | throwWireType! "expected VARINT"
+  return UInt64.ofNat value
+
+@[noinline]
+def Record.getVarint_sint32 (record : Record) : Except ProtoError Int32 := do
+  let .VARINT value := record.value | throwWireType! "expected VARINT"
+  return zigzagDecode32 value
+
+@[noinline]
+def Record.getVarint_sint64 (record : Record) : Except ProtoError Int64 := do
+  let .VARINT value := record.value | throwWireType! "expected VARINT"
+  return zigzagDecode64 value
+
+@[noinline]
+def Record.getI64_double (record : Record) : Except ProtoError Float := do
+  let .I64 value := record.value | throwWireType! "expected I64"
+  return Float.ofBits (UInt64.ofBitVec value)
+
+@[noinline]
+def Record.getI64_fixed64 (record : Record) : Except ProtoError UInt64 := do
+  let .I64 value := record.value | throwWireType! "expected I64"
+  return UInt64.ofBitVec value
+
+@[noinline]
+def Record.getI64_sfixed64 (record : Record) : Except ProtoError Int64 := do
+  let .I64 value := record.value | throwWireType! "expected I64"
+  return Int64.ofBitVec value
+
+@[noinline]
+def Record.getI32_float (record : Record) : Except ProtoError Float32 := do
+  let .I32 value := record.value | throwWireType! "expected I32"
+  return Float32.ofBits (UInt32.ofBitVec value)
+
+@[noinline]
+def Record.getI32_fixed32 (record : Record) : Except ProtoError UInt32 := do
+  let .I32 value := record.value | throwWireType! "expected I32"
+  return UInt32.ofBitVec value
+
+@[noinline]
+def Record.getI32_sfixed32 (record : Record) : Except ProtoError Int32 := do
+  let .I32 value := record.value | throwWireType! "expected I32"
+  return Int32.ofBitVec value
+
 @[noinline]
 private def Message.getPackedAs
     (msg : Message) (fieldNum : Nat) (getValue : Get α) :
@@ -545,6 +634,19 @@ def Message.getExpandedI32_sfixed32 (msg : Message) (fieldNum : Nat) : Except Pr
   return xs.map Int32.ofBitVec
 
 @[noinline]
+private def Record.appendRepeatedAs
+    (record : Record) (getPackedValue : Get α)
+    (getExpandedValue : ProtoVal → Option α) :
+    Array α → Except ProtoError (Array α) := fun out => do
+  match record.value with
+  | .LEN data =>
+      decodePackedInto getPackedValue data out
+  | value =>
+      let some value := getExpandedValue value
+        | throwWireType! "value of repeated field has the wrong wire type"
+      return out.push value
+
+@[noinline]
 private def Message.getRepeatedAs
     (msg : Message) (fieldNum : Nat) (getPackedValue : Get α)
     (getExpandedValue : ProtoVal → Option α) :
@@ -554,13 +656,7 @@ private def Message.getRepeatedAs
   let mut out := #[]
   for record in msg.records do
     if record.fieldNum == fieldNum then
-      match record.value with
-      | .LEN data =>
-          out ← decodePackedInto getPackedValue data out
-      | value =>
-          let some value := getExpandedValue value
-            | throwWireType! "value of repeated field has the wrong wire type"
-          out := out.push value
+      out ← record.appendRepeatedAs getPackedValue getExpandedValue out
   return out
 
 @[noinline]
@@ -592,6 +688,168 @@ private def Message.getRepeatedI32As
     (fun
       | .I32 value => some (convert (UInt32.ofBitVec value))
       | _ => none)
+
+@[noinline]
+def Record.appendRepeatedBool
+    (record : Record) (out : Array Bool) : Except ProtoError (Array Bool) :=
+  record.appendRepeatedAs
+    (do return (← get_varint) != 0)
+    (fun
+      | .VARINT value => some (value != 0)
+      | _ => none)
+    out
+
+@[noinline]
+def Record.appendRepeatedString
+    (record : Record) (out : Array String) :
+    Except ProtoError (Array String) := do
+  return out.push (← record.getString)
+
+@[noinline]
+def Record.appendRepeatedUnvalidatedString
+    (record : Record) (out : Array Protobuf.UnvalidatedString) :
+    Except ProtoError (Array Protobuf.UnvalidatedString) := do
+  return out.push (← record.getUnvalidatedString)
+
+@[noinline]
+def Record.appendRepeatedBytes
+    (record : Record) (out : Array ByteArray) :
+    Except ProtoError (Array ByteArray) := do
+  return out.push (← record.getBytes)
+
+@[noinline]
+def Record.appendRepeatedVarint_int32
+    (record : Record) (out : Array Int32) :
+    Except ProtoError (Array Int32) :=
+  let convert := fun n => Int32.ofBitVec (UInt32.ofNat n).toBitVec
+  record.appendRepeatedAs
+    (do return convert (← get_varint))
+    (fun
+      | .VARINT value => some (convert value)
+      | _ => none)
+    out
+
+@[noinline]
+def Record.appendRepeatedVarint_uint32
+    (record : Record) (out : Array UInt32) :
+    Except ProtoError (Array UInt32) :=
+  record.appendRepeatedAs
+    (do return UInt32.ofNat (← get_varint))
+    (fun
+      | .VARINT value => some (UInt32.ofNat value)
+      | _ => none)
+    out
+
+@[noinline]
+def Record.appendRepeatedVarint_int64
+    (record : Record) (out : Array Int64) :
+    Except ProtoError (Array Int64) :=
+  let convert := fun n => Int64.ofBitVec (UInt64.ofNat n).toBitVec
+  record.appendRepeatedAs
+    (do return convert (← get_varint))
+    (fun
+      | .VARINT value => some (convert value)
+      | _ => none)
+    out
+
+@[noinline]
+def Record.appendRepeatedVarint_uint64
+    (record : Record) (out : Array UInt64) :
+    Except ProtoError (Array UInt64) :=
+  record.appendRepeatedAs
+    (do return UInt64.ofNat (← get_varint))
+    (fun
+      | .VARINT value => some (UInt64.ofNat value)
+      | _ => none)
+    out
+
+@[noinline]
+def Record.appendRepeatedVarint_sint32
+    (record : Record) (out : Array Int32) :
+    Except ProtoError (Array Int32) :=
+  record.appendRepeatedAs
+    (do return zigzagDecode32 (← get_varint))
+    (fun
+      | .VARINT value => some (zigzagDecode32 value)
+      | _ => none)
+    out
+
+@[noinline]
+def Record.appendRepeatedVarint_sint64
+    (record : Record) (out : Array Int64) :
+    Except ProtoError (Array Int64) :=
+  record.appendRepeatedAs
+    (do return zigzagDecode64 (← get_varint))
+    (fun
+      | .VARINT value => some (zigzagDecode64 value)
+      | _ => none)
+    out
+
+@[noinline]
+def Record.appendRepeatedI64_double
+    (record : Record) (out : Array Float) :
+    Except ProtoError (Array Float) :=
+  record.appendRepeatedAs
+    (do return Float.ofBits (← getThe UInt64))
+    (fun
+      | .I64 value => some (Float.ofBits (UInt64.ofBitVec value))
+      | _ => none)
+    out
+
+@[noinline]
+def Record.appendRepeatedI64_fixed64
+    (record : Record) (out : Array UInt64) :
+    Except ProtoError (Array UInt64) :=
+  record.appendRepeatedAs
+    (getThe UInt64)
+    (fun
+      | .I64 value => some (UInt64.ofBitVec value)
+      | _ => none)
+    out
+
+@[noinline]
+def Record.appendRepeatedI64_sfixed64
+    (record : Record) (out : Array Int64) :
+    Except ProtoError (Array Int64) :=
+  record.appendRepeatedAs
+    (do return Int64.ofBitVec (← getThe UInt64).toBitVec)
+    (fun
+      | .I64 value => some (Int64.ofBitVec value)
+      | _ => none)
+    out
+
+@[noinline]
+def Record.appendRepeatedI32_float
+    (record : Record) (out : Array Float32) :
+    Except ProtoError (Array Float32) :=
+  record.appendRepeatedAs
+    (do return Float32.ofBits (← getThe UInt32))
+    (fun
+      | .I32 value => some (Float32.ofBits (UInt32.ofBitVec value))
+      | _ => none)
+    out
+
+@[noinline]
+def Record.appendRepeatedI32_fixed32
+    (record : Record) (out : Array UInt32) :
+    Except ProtoError (Array UInt32) :=
+  record.appendRepeatedAs
+    (getThe UInt32)
+    (fun
+      | .I32 value => some (UInt32.ofBitVec value)
+      | _ => none)
+    out
+
+@[noinline]
+def Record.appendRepeatedI32_sfixed32
+    (record : Record) (out : Array Int32) :
+    Except ProtoError (Array Int32) :=
+  record.appendRepeatedAs
+    (do return Int32.ofBitVec (← getThe UInt32).toBitVec)
+    (fun
+      | .I32 value => some (Int32.ofBitVec value)
+      | _ => none)
+    out
 
 @[noinline]
 def Message.getRepeatedBool
