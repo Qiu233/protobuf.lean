@@ -165,6 +165,15 @@ abbrev testRawEncodingValidation : Except String Unit := do
   assertEq groupSize 11
     "group field size omitted a start or end tag"
 
+  let emptyUnknowns : Std.HashMap Nat (Array ProtoVal) := {}
+  let emptyUnknownSize ← ofProtoExcept <|
+    unknownFieldsValidateAndEncodedSize emptyUnknowns
+  assertEq emptyUnknownSize 0
+    "empty unknown fields have nonzero encoded size"
+  let initialOutput : ByteArray := ⟨#[0xaa, 0xbb]⟩
+  assertEq (unknownFieldsWriteTo initialOutput emptyUnknowns) initialOutput
+    "empty unknown fields changed the existing output"
+
   let unknowns : Std.HashMap Nat (Array ProtoVal) :=
     ({} : Std.HashMap Nat (Array ProtoVal))
       |>.insert 9 #[.VARINT 150, .LEN ⟨#[1, 2, 3]⟩]

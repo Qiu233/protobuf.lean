@@ -28,6 +28,7 @@ also expose `Unknown.Fields`, however, so callers can inject an out-of-domain
 `Nat` varint or field number.  Reject those values explicitly instead of
 letting the low-level `UInt64.ofNat` conversion truncate them.
 -/
+@[always_inline]
 private def varintSize (value : UInt64) : Nat :=
   if value < 0x80 then 1
   else if value < 0x4000 then 2
@@ -120,24 +121,28 @@ partial def Message.validateForEncoding
   let _ ← message.validateAndEncodedSize
   pure ()
 
+@[always_inline]
 private def validateFieldNumber
     (fieldNum : Nat) : Except ProtoError Unit := do
   if fieldNum == 0 || fieldNum > (1 <<< 29) - 1 then
     throw (.invalidWireType
       s!"protobuf field number {fieldNum} is outside 1..536870911")
 
+@[always_inline]
 def varintFieldEncodedSize
     (fieldNum : Nat) (value : UInt64) : Except ProtoError Nat := do
   validateFieldNumber fieldNum
   let key := UInt64.ofNat fieldNum <<< 3
   pure (varintSize key + varintSize value)
 
+@[always_inline]
 def fixed32FieldEncodedSize
     (fieldNum : Nat) : Except ProtoError Nat := do
   validateFieldNumber fieldNum
   let key := (UInt64.ofNat fieldNum <<< 3) ||| (5 : UInt64)
   pure (varintSize key + 4)
 
+@[always_inline]
 def fixed64FieldEncodedSize
     (fieldNum : Nat) : Except ProtoError Nat := do
   validateFieldNumber fieldNum
@@ -151,6 +156,7 @@ Generated typed encoders use this for embedded messages, whose bytes are
 written directly into the parent output rather than first materialized as a
 `ProtoVal.LEN`.
 -/
+@[always_inline]
 def lengthDelimitedFieldEncodedSize
     (fieldNum payloadSize : Nat) : Except ProtoError Nat := do
   validateFieldNumber fieldNum
@@ -171,6 +177,7 @@ Encoded size of a group field with an already measured body.
 The start and end tags use the same field number and therefore have the same
 encoded size.
 -/
+@[always_inline]
 def groupFieldEncodedSize
     (fieldNum payloadSize : Nat) : Except ProtoError Nat := do
   validateFieldNumber fieldNum
@@ -292,7 +299,7 @@ Validate and measure generated-message unknown fields in their existing
 `HashMap.fold` wire order.
 -/
 @[noinline]
-def unknownFieldsValidateAndEncodedSize
+private def unknownFieldsValidateAndEncodedSizeNonempty
     (fields : Std.HashMap Nat (Array ProtoVal)) :
     Except ProtoError Nat :=
   fields.fold (init := pure 0) fun result fieldNum values => do
@@ -302,17 +309,35 @@ def unknownFieldsValidateAndEncodedSize
         (← (Record.mk fieldNum value).validateAndEncodedSize)
     pure size
 
+@[always_inline]
+def unknownFieldsValidateAndEncodedSize
+    (fields : Std.HashMap Nat (Array ProtoVal)) :
+    Except ProtoError Nat :=
+  if fields.isEmpty then
+    pure 0
+  else
+    unknownFieldsValidateAndEncodedSizeNonempty fields
+
 /--
 Append already validated generated-message unknown fields in the same order as
 `Message.wire_map`.
 -/
 @[noinline]
-def unknownFieldsWriteTo
+private def unknownFieldsWriteToNonempty
     (output : ByteArray)
     (fields : Std.HashMap Nat (Array ProtoVal)) : ByteArray :=
   fields.fold (init := output) fun output fieldNum values =>
     values.foldl (init := output) fun output value =>
       Internal.writeRecordTo output { fieldNum, value }
+
+@[always_inline]
+def unknownFieldsWriteTo
+    (output : ByteArray)
+    (fields : Std.HashMap Nat (Array ProtoVal)) : ByteArray :=
+  if fields.isEmpty then
+    output
+  else
+    unknownFieldsWriteToNonempty output fields
 
 @[always_inline]
 private def ProtoVal.ofLengthDelimited (data : ByteArray) :
