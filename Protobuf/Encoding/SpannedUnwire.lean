@@ -63,7 +63,7 @@ private def readSpanFixed
     offset := next
   return (value, offset)
 
-@[noinline]
+@[noinline, specialize]
 private def ByteSpan.appendVarints
     (span : ByteSpan) (out : Array α) (convert : UInt64 → α) :
     Except ProtoError (Array α) := do
@@ -77,7 +77,7 @@ private def ByteSpan.appendVarints
     offset := next
   return out
 
-@[noinline]
+@[noinline, specialize]
 private def ByteSpan.appendFixed
     (span : ByteSpan) (out : Array α) (width : Nat)
     (convert : UInt64 → α) :
@@ -115,7 +115,7 @@ private def SpannedCursor.readFixedAsAt
   let (value, next) ← cursor.readFixedValueAt offset width
   return (convert value, next)
 
-@[noinline]
+@[inline]
 def SpannedCursor.readStringAt
     (cursor : SpannedCursor) (offset : Nat) :
     Except ProtoError (String × Nat) := do
@@ -124,14 +124,14 @@ def SpannedCursor.readStringAt
     | throwInvalidBuffer! "invalid UTF-8 data"
   return (value, stop)
 
-@[noinline]
+@[inline]
 def SpannedCursor.readUnvalidatedStringAt
     (cursor : SpannedCursor) (offset : Nat) :
     Except ProtoError (Protobuf.UnvalidatedString × Nat) := do
   let (start, stop) ← cursor.readLengthAt offset
   return (.ofBytes (cursor.source.extract start stop), stop)
 
-@[noinline]
+@[inline]
 def SpannedCursor.readBytesAt
     (cursor : SpannedCursor) (offset : Nat) :
     Except ProtoError (ByteArray × Nat) := do
@@ -221,7 +221,7 @@ def SpannedCursor.readSFixed32At
   cursor.readFixedAsAt offset 4 fun value =>
     Int32.ofBitVec value.toUInt32.toBitVec
 
-@[noinline]
+@[noinline, specialize]
 private def SpannedCursor.appendPackedVarintsAsAt
     (cursor : SpannedCursor) (offset : Nat) (out : Array α)
     (convert : UInt64 → α) : Except ProtoError (Array α × Nat) := do
@@ -230,7 +230,7 @@ private def SpannedCursor.appendPackedVarintsAsAt
     out convert
   return (out, stop)
 
-@[noinline]
+@[noinline, specialize]
 private def SpannedCursor.appendPackedFixedAsAt
     (cursor : SpannedCursor) (offset width : Nat) (out : Array α)
     (convert : UInt64 → α) : Except ProtoError (Array α × Nat) := do
