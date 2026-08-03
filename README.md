@@ -3,6 +3,12 @@
 
 ## Production readiness
 
+On the benchmarked workload, generated binary codecs have competitive
+steady-state performance with Haskell `proto-lens`: encoding is 2–2.5× faster,
+while large-message decoding is approximately on par. This comparison excludes
+runtime startup and baseline memory; see [Performance measurement](#performance-measurement)
+for the benchmark scope and protocol.
+
 Legend: `[x]` is supported; `[x] ◩` is supported with the stated compatibility
 boundary. Markdown has no portable indeterminate checkbox, so `◩` is used as
 the half-checked marker.
