@@ -46,7 +46,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/protobuf-conformance
-          key: protobuf-conformance-${{ runner.os }}-${{ runner.arch }}-${{ env.PROTOBUF_VERSION }}-v1
+          key: protobuf-conformance-${{ runner.os }}-${{ runner.arch }}-${{ env.PROTOBUF_VERSION }}-v2
       - name: Build official conformance runner
         if: steps.conformance-cache.outputs.cache-hit != 'true'
         run: |
@@ -59,6 +59,7 @@ jobs:
             -B "${RUNNER_TEMP}/protobuf-conformance-build" \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SKIP_BUILD_RPATH=ON \
             -DBUILD_SHARED_LIBS=ON \
             -Dprotobuf_BUILD_SHARED_LIBS=OFF \
             -Dprotobuf_BUILD_CONFORMANCE=ON \
@@ -71,9 +72,10 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/protobuf-conformance/lib"
           cp "${RUNNER_TEMP}/protobuf-conformance-build/conformance_test_runner" \
             "${RUNNER_TEMP}/protobuf-conformance/"
-          cp -a \
-            "${RUNNER_TEMP}/protobuf-conformance-build/_deps/jsoncpp-build/src/lib_json/." \
-            "${RUNNER_TEMP}/protobuf-conformance/lib/"
+          while IFS= read -r -d '' library; do
+            cp -a "${library}" "${RUNNER_TEMP}/protobuf-conformance/lib/"
+          done < <(find "${RUNNER_TEMP}/protobuf-conformance-build" \
+            \( -type f -o -type l \) -name '*.so*' -print0)
       - name: Run official ProtoJSON conformance suite
         run: |
           export LD_LIBRARY_PATH="${RUNNER_TEMP}/protobuf-conformance/lib"
