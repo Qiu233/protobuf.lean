@@ -1,0 +1,73 @@
+name: Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      quick:
+        description: Run the short chain check instead of the full benchmark
+        required: true
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmark
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    name: Protobuf engineering benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      BENCH_BUILD_JOBS: "2"
+      BENCH_OUTPUT_DIR: ${{ runner.temp }}/protobuf-benchmark
+      BENCH_QUICK: ${{ inputs.quick && '1' || '0' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Lean
+        uses: leanprover/lean-action@v1
+        with:
+          auto-config: false
+          use-github-cache: false
+
+      - name: Run benchmark
+        run: Test/Bench/run.sh
+
+      - name: Upload raw benchmark results
+        id: benchmark-artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: protobuf-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/protobuf-benchmark
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Publish benchmark report
+        env:
+          ARTIFACT_URL: ${{ steps.benchmark-artifact.outputs.artifact-url }}
+          BENCHMARK_REF: ${{ github.ref_name }}
+          BENCHMARK_SHA: ${{ github.sha }}
+        run: |
+          if [[ "${BENCH_QUICK}" == "1" ]]; then
+            mode="quick chain check"
+          else
+            mode="full benchmark"
+          fi
+          {
+            echo "Run mode: ${mode}  "
+            echo "Ref: \`${BENCHMARK_REF}\`  "
+            echo "Commit: \`${BENCHMARK_SHA}\`  "
+            echo "Raw data: [download benchmark artifact](${ARTIFACT_URL})"
+            echo
+            echo "> Results from a shared GitHub-hosted runner are diagnostic, not a performance regression gate."
+            echo
+            cat "${BENCH_OUTPUT_DIR}/REPORT.md"
+          } >> "${GITHUB_STEP_SUMMARY}"
