@@ -6,7 +6,7 @@ package "protobuf" where
   releaseRepo := "https://github.com/Lean-zh/protobuf"
   preferReleaseBuild := true
 
-require binary from git "https://github.com/Lean-zh/binary"
+require binary from git "https://github.com/Lean-zh/binary.git"
 
 @[default_target]
 lean_lib Protobuf where
