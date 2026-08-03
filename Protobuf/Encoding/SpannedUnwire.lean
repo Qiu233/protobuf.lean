@@ -29,19 +29,26 @@ private partial def readSpanVarint
     (source : ByteArray) (stop offset : Nat) :
     Except ProtoError (UInt64 × Nat) := do
   let rec go
-      (offset : Nat) (value shift : UInt64) (index : Nat) :
+      (offset : Nat) (value shift : UInt64) (index : UInt8) :
       Except ProtoError (UInt64 × Nat) := do
-    let (byte, offset) ← readSpanByte source stop offset
-    if index == 9 then
-      if byte > 1 then
-        throw .invalidVarint
-      return (value ||| (UInt64.ofNat byte.toNat <<< shift), offset)
-    let value :=
-      value |||
-        (UInt64.ofNat (byte &&& (0x7f : UInt8)).toNat <<< shift)
-    if byte &&& (0x80 : UInt8) == 0 then
-      return (value, offset)
-    go offset value (shift + 7) (index + 1)
+    if offset < stop then
+      if hSource : offset < source.size then
+        let byte := source[offset]
+        let next := offset + 1
+        if index == 9 then
+          if byte > 1 then
+            throw .invalidVarint
+          return (value ||| (byte.toUInt64 <<< shift), next)
+        let value :=
+          value |||
+            ((byte &&& (0x7f : UInt8)).toUInt64 <<< shift)
+        if byte &&& (0x80 : UInt8) == 0 then
+          return (value, next)
+        go next value (shift + 7) (index + 1)
+      else
+        throw .truncated
+    else
+      throw .truncated
   go offset 0 0 0
 
 private def readSpanFixed
@@ -93,6 +100,227 @@ private def zigzagDecode32 (value : UInt64) : Int32 :=
 private def zigzagDecode64 (value : UInt64) : Int64 :=
   let mask : UInt64 := 0 - (value &&& 1)
   Int64.ofBitVec (((value >>> 1) ^^^ mask).toBitVec)
+
+@[always_inline]
+private def SpannedCursor.readVarintAsAt
+    (cursor : SpannedCursor) (offset : Nat) (convert : UInt64 → α) :
+    Except ProtoError (α × Nat) := do
+  let (value, next) ← cursor.readVarintValueAt offset
+  return (convert value, next)
+
+@[always_inline]
+private def SpannedCursor.readFixedAsAt
+    (cursor : SpannedCursor) (offset width : Nat)
+    (convert : UInt64 → α) : Except ProtoError (α × Nat) := do
+  let (value, next) ← cursor.readFixedValueAt offset width
+  return (convert value, next)
+
+@[noinline]
+def SpannedCursor.readStringAt
+    (cursor : SpannedCursor) (offset : Nat) :
+    Except ProtoError (String × Nat) := do
+  let (start, stop) ← cursor.readLengthAt offset
+  let some value := String.fromUTF8? (cursor.source.extract start stop)
+    | throwInvalidBuffer! "invalid UTF-8 data"
+  return (value, stop)
+
+@[noinline]
+def SpannedCursor.readUnvalidatedStringAt
+    (cursor : SpannedCursor) (offset : Nat) :
+    Except ProtoError (Protobuf.UnvalidatedString × Nat) := do
+  let (start, stop) ← cursor.readLengthAt offset
+  return (.ofBytes (cursor.source.extract start stop), stop)
+
+@[noinline]
+def SpannedCursor.readBytesAt
+    (cursor : SpannedCursor) (offset : Nat) :
+    Except ProtoError (ByteArray × Nat) := do
+  let (start, stop) ← cursor.readLengthAt offset
+  return (cursor.source.extract start stop, stop)
+
+@[always_inline]
+def SpannedCursor.readBoolAt
+    (cursor : SpannedCursor) (offset : Nat) :
+    Except ProtoError (Bool × Nat) :=
+  cursor.readVarintAsAt offset (· != 0)
+
+@[always_inline]
+def SpannedCursor.readVarintInt32At
+    (cursor : SpannedCursor) (offset : Nat) :
+    Except ProtoError (Int32 × Nat) :=
+  cursor.readVarintAsAt offset fun value =>
+    Int32.ofBitVec value.toUInt32.toBitVec
+
+@[always_inline]
+def SpannedCursor.readVarintUInt32At
+    (cursor : SpannedCursor) (offset : Nat) :
+    Except ProtoError (UInt32 × Nat) :=
+  cursor.readVarintAsAt offset UInt64.toUInt32
+
+@[always_inline]
+def SpannedCursor.readVarintInt64At
+    (cursor : SpannedCursor) (offset : Nat) :
+    Except ProtoError (Int64 × Nat) :=
+  cursor.readVarintAsAt offset fun value =>
+    Int64.ofBitVec value.toBitVec
+
+@[always_inline]
+def SpannedCursor.readVarintUInt64At
+    (cursor : SpannedCursor) (offset : Nat) :
+    Except ProtoError (UInt64 × Nat) :=
+  cursor.readVarintAsAt offset id
+
+@[always_inline]
+def SpannedCursor.readVarintSInt32At
+    (cursor : SpannedCursor) (offset : Nat) :
+    Except ProtoError (Int32 × Nat) :=
+  cursor.readVarintAsAt offset zigzagDecode32
+
+@[always_inline]
+def SpannedCursor.readVarintSInt64At
+    (cursor : SpannedCursor) (offset : Nat) :
+    Except ProtoError (Int64 × Nat) :=
+  cursor.readVarintAsAt offset zigzagDecode64
+
+@[always_inline]
+def SpannedCursor.readDoubleAt
+    (cursor : SpannedCursor) (offset : Nat) :
+    Except ProtoError (Float × Nat) :=
+  cursor.readFixedAsAt offset 8 Float.ofBits
+
+@[always_inline]
+def SpannedCursor.readFixed64At
+    (cursor : SpannedCursor) (offset : Nat) :
+    Except ProtoError (UInt64 × Nat) :=
+  cursor.readFixedAsAt offset 8 id
+
+@[always_inline]
+def SpannedCursor.readSFixed64At
+    (cursor : SpannedCursor) (offset : Nat) :
+    Except ProtoError (Int64 × Nat) :=
+  cursor.readFixedAsAt offset 8 fun value =>
+    Int64.ofBitVec value.toBitVec
+
+@[always_inline]
+def SpannedCursor.readFloatAt
+    (cursor : SpannedCursor) (offset : Nat) :
+    Except ProtoError (Float32 × Nat) :=
+  cursor.readFixedAsAt offset 4 fun value =>
+    Float32.ofBits value.toUInt32
+
+@[always_inline]
+def SpannedCursor.readFixed32At
+    (cursor : SpannedCursor) (offset : Nat) :
+    Except ProtoError (UInt32 × Nat) :=
+  cursor.readFixedAsAt offset 4 UInt64.toUInt32
+
+@[always_inline]
+def SpannedCursor.readSFixed32At
+    (cursor : SpannedCursor) (offset : Nat) :
+    Except ProtoError (Int32 × Nat) :=
+  cursor.readFixedAsAt offset 4 fun value =>
+    Int32.ofBitVec value.toUInt32.toBitVec
+
+@[noinline]
+private def SpannedCursor.appendPackedVarintsAsAt
+    (cursor : SpannedCursor) (offset : Nat) (out : Array α)
+    (convert : UInt64 → α) : Except ProtoError (Array α × Nat) := do
+  let (start, stop) ← cursor.readLengthAt offset
+  let out ← ByteSpan.appendVarints { source := cursor.source, start, stop }
+    out convert
+  return (out, stop)
+
+@[noinline]
+private def SpannedCursor.appendPackedFixedAsAt
+    (cursor : SpannedCursor) (offset width : Nat) (out : Array α)
+    (convert : UInt64 → α) : Except ProtoError (Array α × Nat) := do
+  let (start, stop) ← cursor.readLengthAt offset
+  let out ← ByteSpan.appendFixed { source := cursor.source, start, stop }
+    out width convert
+  return (out, stop)
+
+@[noinline]
+def SpannedCursor.appendPackedBoolAt
+    (cursor : SpannedCursor) (offset : Nat) (out : Array Bool) :
+    Except ProtoError (Array Bool × Nat) :=
+  cursor.appendPackedVarintsAsAt offset out (· != 0)
+
+@[noinline]
+def SpannedCursor.appendPackedVarintInt32At
+    (cursor : SpannedCursor) (offset : Nat) (out : Array Int32) :
+    Except ProtoError (Array Int32 × Nat) :=
+  cursor.appendPackedVarintsAsAt offset out fun value =>
+    Int32.ofBitVec value.toUInt32.toBitVec
+
+@[noinline]
+def SpannedCursor.appendPackedVarintUInt32At
+    (cursor : SpannedCursor) (offset : Nat) (out : Array UInt32) :
+    Except ProtoError (Array UInt32 × Nat) :=
+  cursor.appendPackedVarintsAsAt offset out UInt64.toUInt32
+
+@[noinline]
+def SpannedCursor.appendPackedVarintInt64At
+    (cursor : SpannedCursor) (offset : Nat) (out : Array Int64) :
+    Except ProtoError (Array Int64 × Nat) :=
+  cursor.appendPackedVarintsAsAt offset out fun value =>
+    Int64.ofBitVec value.toBitVec
+
+@[noinline]
+def SpannedCursor.appendPackedVarintUInt64At
+    (cursor : SpannedCursor) (offset : Nat) (out : Array UInt64) :
+    Except ProtoError (Array UInt64 × Nat) :=
+  cursor.appendPackedVarintsAsAt offset out id
+
+@[noinline]
+def SpannedCursor.appendPackedVarintSInt32At
+    (cursor : SpannedCursor) (offset : Nat) (out : Array Int32) :
+    Except ProtoError (Array Int32 × Nat) :=
+  cursor.appendPackedVarintsAsAt offset out zigzagDecode32
+
+@[noinline]
+def SpannedCursor.appendPackedVarintSInt64At
+    (cursor : SpannedCursor) (offset : Nat) (out : Array Int64) :
+    Except ProtoError (Array Int64 × Nat) :=
+  cursor.appendPackedVarintsAsAt offset out zigzagDecode64
+
+@[noinline]
+def SpannedCursor.appendPackedDoubleAt
+    (cursor : SpannedCursor) (offset : Nat) (out : Array Float) :
+    Except ProtoError (Array Float × Nat) :=
+  cursor.appendPackedFixedAsAt offset 8 out Float.ofBits
+
+@[noinline]
+def SpannedCursor.appendPackedFixed64At
+    (cursor : SpannedCursor) (offset : Nat) (out : Array UInt64) :
+    Except ProtoError (Array UInt64 × Nat) :=
+  cursor.appendPackedFixedAsAt offset 8 out id
+
+@[noinline]
+def SpannedCursor.appendPackedSFixed64At
+    (cursor : SpannedCursor) (offset : Nat) (out : Array Int64) :
+    Except ProtoError (Array Int64 × Nat) :=
+  cursor.appendPackedFixedAsAt offset 8 out fun value =>
+    Int64.ofBitVec value.toBitVec
+
+@[noinline]
+def SpannedCursor.appendPackedFloatAt
+    (cursor : SpannedCursor) (offset : Nat) (out : Array Float32) :
+    Except ProtoError (Array Float32 × Nat) :=
+  cursor.appendPackedFixedAsAt offset 4 out fun value =>
+    Float32.ofBits value.toUInt32
+
+@[noinline]
+def SpannedCursor.appendPackedFixed32At
+    (cursor : SpannedCursor) (offset : Nat) (out : Array UInt32) :
+    Except ProtoError (Array UInt32 × Nat) :=
+  cursor.appendPackedFixedAsAt offset 4 out UInt64.toUInt32
+
+@[noinline]
+def SpannedCursor.appendPackedSFixed32At
+    (cursor : SpannedCursor) (offset : Nat) (out : Array Int32) :
+    Except ProtoError (Array Int32 × Nat) :=
+  cursor.appendPackedFixedAsAt offset 4 out fun value =>
+    Int32.ofBitVec value.toUInt32.toBitVec
 
 @[noinline]
 def SpannedRecord.getString

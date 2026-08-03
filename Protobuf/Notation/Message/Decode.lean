@@ -53,6 +53,242 @@ private partial def constructBalancedDispatch
       else
         $right:term)
 
+/-- Build an exact full-wire-tag dispatch tree for the generated raw cursor. -/
+private partial def constructBalancedTagDispatch
+    (tag fallback : Ident)
+    (cases : Array (Nat × Term))
+    (start stop : Nat) : CommandElabM Term := do
+  if start >= stop then
+    `($fallback:ident ())
+  else
+    let mid := start + (stop - start) / 2
+    let (wireTag, body) := cases[mid]!
+    let left ←
+      constructBalancedTagDispatch tag fallback cases start mid
+    let right ←
+      constructBalancedTagDispatch tag fallback cases (mid + 1) stop
+    `(if $tag:ident == $(quote wireTag) then
+        $body:term
+      else if $tag:ident < $(quote wireTag) then
+        $left:term
+      else
+        $right:term)
+
+private def InternalType.cursorDecoder : InternalType → Ident
+  | .string => mkIdent ``Encoding.SpannedCursor.readStringAt
+  | .raw_string =>
+      mkIdent ``Encoding.SpannedCursor.readUnvalidatedStringAt
+  | .bytes => mkIdent ``Encoding.SpannedCursor.readBytesAt
+  | .bool => mkIdent ``Encoding.SpannedCursor.readBoolAt
+  | .int32 => mkIdent ``Encoding.SpannedCursor.readVarintInt32At
+  | .uint32 => mkIdent ``Encoding.SpannedCursor.readVarintUInt32At
+  | .int64 => mkIdent ``Encoding.SpannedCursor.readVarintInt64At
+  | .uint64 => mkIdent ``Encoding.SpannedCursor.readVarintUInt64At
+  | .sint32 => mkIdent ``Encoding.SpannedCursor.readVarintSInt32At
+  | .sint64 => mkIdent ``Encoding.SpannedCursor.readVarintSInt64At
+  | .double => mkIdent ``Encoding.SpannedCursor.readDoubleAt
+  | .fixed64 => mkIdent ``Encoding.SpannedCursor.readFixed64At
+  | .sfixed64 => mkIdent ``Encoding.SpannedCursor.readSFixed64At
+  | .float => mkIdent ``Encoding.SpannedCursor.readFloatAt
+  | .fixed32 => mkIdent ``Encoding.SpannedCursor.readFixed32At
+  | .sfixed32 => mkIdent ``Encoding.SpannedCursor.readSFixed32At
+
+private def InternalType.cursorPackedAppender? :
+    InternalType → Option Ident
+  | .string | .raw_string | .bytes => none
+  | .bool => some <| mkIdent ``Encoding.SpannedCursor.appendPackedBoolAt
+  | .int32 =>
+      some <| mkIdent ``Encoding.SpannedCursor.appendPackedVarintInt32At
+  | .uint32 =>
+      some <| mkIdent ``Encoding.SpannedCursor.appendPackedVarintUInt32At
+  | .int64 =>
+      some <| mkIdent ``Encoding.SpannedCursor.appendPackedVarintInt64At
+  | .uint64 =>
+      some <| mkIdent ``Encoding.SpannedCursor.appendPackedVarintUInt64At
+  | .sint32 =>
+      some <| mkIdent ``Encoding.SpannedCursor.appendPackedVarintSInt32At
+  | .sint64 =>
+      some <| mkIdent ``Encoding.SpannedCursor.appendPackedVarintSInt64At
+  | .double => some <| mkIdent ``Encoding.SpannedCursor.appendPackedDoubleAt
+  | .fixed64 => some <| mkIdent ``Encoding.SpannedCursor.appendPackedFixed64At
+  | .sfixed64 =>
+      some <| mkIdent ``Encoding.SpannedCursor.appendPackedSFixed64At
+  | .float => some <| mkIdent ``Encoding.SpannedCursor.appendPackedFloatAt
+  | .fixed32 => some <| mkIdent ``Encoding.SpannedCursor.appendPackedFixed32At
+  | .sfixed32 =>
+      some <| mkIdent ``Encoding.SpannedCursor.appendPackedSFixed32At
+
+private def InternalType.wireType : InternalType → Nat
+  | .string | .raw_string | .bytes => 2
+  | .bool | .int32 | .uint32 | .int64 | .uint64 | .sint32 | .sint64 => 0
+  | .double | .fixed64 | .sfixed64 => 1
+  | .float | .fixed32 | .sfixed32 => 5
+
+private structure RawFoldContext where
+  name : Ident
+  cursor : Ident
+  afterTag : Ident
+  recursionBudget : Ident
+  foldCursor : Ident
+  state : Ident
+  seen : Ident
+  pending : Ident
+  oneofPending? : Option Ident
+  stateTy : Term
+  requiredStrictMeta : Array (Name × Nat)
+  regularMessageMeta : Array (Name × Nat)
+
+private def RawFoldContext.mkState
+    (ctx : RawFoldContext) (state seen pending : Term) :
+    CommandElabM Term := do
+  match ctx.oneofPending? with
+  | some oneofPending =>
+      `((($state, $seen, $pending, $oneofPending:ident) : $(ctx.stateTy)))
+  | none => `((($state, $seen, $pending) : $(ctx.stateTy)))
+
+private def RawFoldContext.recur
+    (ctx : RawFoldContext) (state seen pending offset : Term) :
+    CommandElabM Term := do
+  let foldCursor := ctx.foldCursor
+  let cursor := ctx.cursor
+  let recursionBudget := ctx.recursionBudget
+  match ctx.oneofPending? with
+  | some oneofPending =>
+      `($foldCursor:ident $state $seen $pending $oneofPending:ident
+        $cursor:ident $offset $recursionBudget:ident)
+  | none =>
+      `($foldCursor:ident $state $seen $pending
+        $cursor:ident $offset $recursionBudget:ident)
+
+private def RawFoldContext.seenUpdate
+    (ctx : RawFoldContext) (field : ProtoFieldMData) :
+    CommandElabM Term := do
+  match ctx.requiredStrictMeta.findSome? (fun (fieldName, i) =>
+    if fieldName == field.field_name.getId then some i else none) with
+  | some i => `(($(ctx.seen)).set! $(quote i) true)
+  | none => `($(ctx.seen))
+
+private def constructRawScalarBranch
+    (ctx : RawFoldContext) (field : ProtoFieldMData)
+    (internalType : InternalType) : CommandElabM Term := do
+  let decoder := internalType.cursorDecoder
+  let value ← mkIdent <$> mkFreshUserName field.field_name.getId
+  let next ← mkIdent <$> mkFreshUserName `next
+  let state' ← mkIdent <$> mkFreshUserName `st
+  let seen' ← mkIdent <$> mkFreshUserName `seen
+  let assigned ←
+    match field.mod with
+    | .default => `($value:ident)
+    | .optional | .required => `(Option.some $value:ident)
+    | .repeated =>
+        `((($(field.field_proj) $(ctx.state)).push $value:ident))
+  let seenUpdate ← ctx.seenUpdate field
+  let recur ← ctx.recur state' seen' ctx.pending next
+  `(do
+    let ($value:ident, $next:ident) ←
+      $decoder:ident $(ctx.cursor) $(ctx.afterTag)
+    let $state':ident : $(ctx.name) := {
+      $(ctx.state) with
+      $(field.field_name):ident := $assigned:term
+    }
+    let $seen':ident := $seenUpdate:term
+    $recur:term)
+
+private def constructRawPackedBranch
+    (ctx : RawFoldContext) (field : ProtoFieldMData)
+    (appender : Ident) : CommandElabM Term := do
+  let values ← mkIdent <$> mkFreshUserName field.field_name.getId
+  let next ← mkIdent <$> mkFreshUserName `next
+  let state' ← mkIdent <$> mkFreshUserName `st
+  let seen' ← mkIdent <$> mkFreshUserName `seen
+  let seenUpdate ← ctx.seenUpdate field
+  let recur ← ctx.recur state' seen' ctx.pending next
+  `(do
+    let ($values:ident, $next:ident) ←
+      $appender:ident $(ctx.cursor) $(ctx.afterTag)
+        ($(field.field_proj) $(ctx.state))
+    let $state':ident : $(ctx.name) := {
+      $(ctx.state) with
+      $(field.field_name):ident := $values:ident
+    }
+    let $seen':ident := $seenUpdate:term
+    $recur:term)
+
+private def constructRawMessageBranch
+    (ctx : RawFoldContext) (field : ProtoFieldMData) :
+    CommandElabM Term := do
+  let start ← mkIdent <$> mkFreshUserName `start
+  let stop ← mkIdent <$> mkFreshUserName `stop
+  let seen' ← mkIdent <$> mkFreshUserName `seen
+  let seenUpdate ← ctx.seenUpdate field
+  if field.mod == .repeated then
+    let childBudget ← mkIdent <$> mkFreshUserName `childBudget
+    let value ← mkIdent <$> mkFreshUserName field.field_name.getId
+    let state' ← mkIdent <$> mkFreshUserName `st
+    let fromSpannedChunks :=
+      helperIdent field.proto_type "fromSpannedChunks"
+    let recur ← ctx.recur state' seen' ctx.pending stop
+    `(do
+      let ($start:ident, $stop:ident) ←
+        ($(ctx.cursor)).readLengthAt $(ctx.afterTag)
+      let $childBudget:ident ←
+        Protobuf.Encoding.descendMessageRecursion $(ctx.recursionBudget)
+      let $value:ident ←
+        $fromSpannedChunks:ident
+          (.single
+            (.span ($(ctx.cursor)).source $start:ident $stop:ident))
+          $childBudget:ident false
+      let $state':ident : $(ctx.name) := {
+        $(ctx.state) with
+        $(field.field_name):ident :=
+          (($(field.field_proj) $(ctx.state)).push $value:ident)
+      }
+      let $seen':ident := $seenUpdate:term
+      $recur:term)
+  else
+    let some pendingIndex :=
+        ctx.regularMessageMeta.findSome? (fun (fieldName, i) =>
+          if fieldName == field.field_name.getId then some i else none)
+      | throwErrorAt field.field_name
+          "{decl_name%}: internal error: raw singular message field has no pending slot"
+    let chunks ← mkIdent <$> mkFreshUserName `chunks
+    let pending' ← mkIdent <$> mkFreshUserName `pendingMessages
+    let recur ← ctx.recur ctx.state seen' pending' stop
+    `(do
+      let ($start:ident, $stop:ident) ←
+        ($(ctx.cursor)).readLengthAt $(ctx.afterTag)
+      let $chunks:ident :=
+        (($(ctx.pending))[$(quote pendingIndex)]!).push
+          (.span ($(ctx.cursor)).source $start:ident $stop:ident)
+      let $pending':ident :=
+        ($(ctx.pending)).set! $(quote pendingIndex) $chunks:ident
+      let $seen':ident := $seenUpdate:term
+      $recur:term)
+
+private def constructRawBranches
+    (ctx : RawFoldContext) (fields : Array ProtoFieldMData) :
+    CommandElabM (Array (Nat × Term)) := do
+  fields.foldlM (init := #[]) fun cases field => do
+    if field.map_info?.isSome || field.enum_type?.isSome ||
+        field.oneof_type?.isSome ||
+        field.options.wired_as_group?.isEqSome true then
+      pure cases
+    else if let some internalType := field.internal_type? then
+      let normal ← constructRawScalarBranch ctx field internalType
+      let wireTag := field.field_num.getNat * 8 + internalType.wireType
+      let cases := cases.push (wireTag, normal)
+      if field.mod == .repeated then
+        match internalType.cursorPackedAppender? with
+        | some appender =>
+            let packed ← constructRawPackedBranch ctx field appender
+            pure <| cases.push (field.field_num.getNat * 8 + 2, packed)
+        | none => pure cases
+      else
+        pure cases
+    else
+      let body ← constructRawMessageBranch ctx field
+      pure <| cases.push (field.field_num.getNat * 8 + 2, body)
+
 private partial def constructBalancedChunkDispatch
     (recVar fallback acc recursionBudget : Ident)
     (chunks : Array (Nat × Ident × Command))
@@ -377,23 +613,166 @@ def construct_fromMessage
   let cursorRecord ← mkIdent <$> mkFreshUserName `record
   let cursorBudget ← mkIdent <$> mkFreshUserName `recursionBudget
   let foldCursorId := push_name "foldSpannedCursor"
-  let foldCursor ← `(partial def $foldCursorId:ident
-      ($cursorAcc : $stateTy)
-      ($cursor : Protobuf.Encoding.SpannedCursor)
-      ($cursorOffset : Nat)
-      ($cursorBudget : Nat) :
-      Except Protobuf.Encoding.ProtoError $stateTy := do
-    match ←
-      ($cursor:ident).nextAt
-        $cursorOffset:ident $cursorBudget:ident
-    with
-    | .done => pure $cursorAcc:ident
-    | .next $cursorRecord:ident $nextOffset:ident => do
-        let $cursorAcc:ident ←
-          $applyRecordId:ident $cursorAcc:ident
-            $cursorRecord:ident $cursorBudget:ident
-        $foldCursorId:ident $cursorAcc:ident
-          $cursor:ident $nextOffset:ident $cursorBudget:ident)
+  let rawFoldCursorId := push_name "foldRawCursor"
+  let rawTag ← mkIdent <$> mkFreshUserName `tag
+  let rawAfterTag ← mkIdent <$> mkFreshUserName `afterTag
+  let rawFallback ← mkIdent <$> mkFreshUserName `fallback
+  /-
+  Keep very wide generated messages on the compact compatibility path for now.
+  Their existing chunked field dispatch avoids enormous declarations; raw
+  chunk helpers can be added independently without changing this fast path's
+  semantics.
+  -/
+  let rawCases ←
+    if regularFields.size ≤ decodingChunkSize then
+      constructRawBranches {
+        name,
+        cursor,
+        afterTag := rawAfterTag,
+        recursionBudget := cursorBudget,
+        foldCursor := rawFoldCursorId,
+        state,
+        seen,
+        pending,
+        oneofPending? := if hasOneofs then some oneofPending else none,
+        stateTy,
+        requiredStrictMeta,
+        regularMessageMeta
+      } regularFields
+    else
+      pure #[]
+  let rawCases := rawCases.qsort (fun a b => a.1 < b.1)
+  let (rawFoldCommands, foldCursor) ←
+    if rawCases.isEmpty then
+      let command ← `(partial def $foldCursorId:ident
+          ($cursorAcc : $stateTy)
+          ($cursor : Protobuf.Encoding.SpannedCursor)
+          ($cursorOffset : Nat)
+          ($cursorBudget : Nat) :
+          Except Protobuf.Encoding.ProtoError $stateTy := do
+        match ←
+          ($cursor:ident).nextAt
+            $cursorOffset:ident $cursorBudget:ident
+        with
+        | .done => pure $cursorAcc:ident
+        | .next $cursorRecord:ident $nextOffset:ident => do
+            let $cursorAcc:ident ←
+              $applyRecordId:ident $cursorAcc:ident
+                $cursorRecord:ident $cursorBudget:ident
+            $foldCursorId:ident $cursorAcc:ident
+              $cursor:ident $nextOffset:ident $cursorBudget:ident)
+      pure (#[], command)
+    else do
+      let rawDispatch ←
+        constructBalancedTagDispatch
+          rawTag rawFallback rawCases 0 rawCases.size
+      let rawCurrentAcc ← mkState state seen pending
+      let rawNextAcc ← mkIdent <$> mkFreshUserName `acc
+      let rawEndAcc ← mkState state seen pending
+      let rawFallbackBody ←
+        if hasOneofs then
+          `(do
+            match ←
+              ($cursor:ident).nextAt
+                $cursorOffset:ident $cursorBudget:ident
+            with
+            | .done => pure $rawEndAcc:term
+            | .next $cursorRecord:ident $nextOffset:ident => do
+                let $rawNextAcc:ident ←
+                  $applyRecordId:ident $rawCurrentAcc:term
+                    $cursorRecord:ident $cursorBudget:ident
+                $rawFoldCursorId:ident
+                  ($rawNextAcc:ident).1
+                  ($rawNextAcc:ident).2.1
+                  ($rawNextAcc:ident).2.2.1
+                  ($rawNextAcc:ident).2.2.2
+                  $cursor:ident $nextOffset:ident $cursorBudget:ident)
+        else
+          `(do
+            match ←
+              ($cursor:ident).nextAt
+                $cursorOffset:ident $cursorBudget:ident
+            with
+            | .done => pure $rawEndAcc:term
+            | .next $cursorRecord:ident $nextOffset:ident => do
+                let $rawNextAcc:ident ←
+                  $applyRecordId:ident $rawCurrentAcc:term
+                    $cursorRecord:ident $cursorBudget:ident
+                $rawFoldCursorId:ident
+                  ($rawNextAcc:ident).1
+                  ($rawNextAcc:ident).2.1
+                  ($rawNextAcc:ident).2.2
+                  $cursor:ident $nextOffset:ident $cursorBudget:ident)
+      let rawFoldCursor ←
+        if hasOneofs then
+          `(partial def $rawFoldCursorId:ident
+              ($state : $name)
+              ($seen : Array Bool)
+              ($pending :
+                Array Protobuf.Encoding.SpannedMessageChunks)
+              ($oneofPending :
+                Array
+                  (Option
+                    (Nat × Protobuf.Encoding.SpannedMessageChunks)))
+              ($cursor : Protobuf.Encoding.SpannedCursor)
+              ($cursorOffset : Nat)
+              ($cursorBudget : Nat) :
+              Except Protobuf.Encoding.ProtoError $stateTy := do
+            let ($rawTag:ident, $rawAfterTag:ident) ←
+              ($cursor:ident).readTagAt $cursorOffset:ident
+            if $rawTag:ident == 0 then
+              pure $rawEndAcc:term
+            else do
+              let $rawFallback:ident :
+                  Unit → Except Protobuf.Encoding.ProtoError $stateTy :=
+                fun _ => $rawFallbackBody:term
+              $rawDispatch:term)
+        else
+          `(partial def $rawFoldCursorId:ident
+              ($state : $name)
+              ($seen : Array Bool)
+              ($pending :
+                Array Protobuf.Encoding.SpannedMessageChunks)
+              ($cursor : Protobuf.Encoding.SpannedCursor)
+              ($cursorOffset : Nat)
+              ($cursorBudget : Nat) :
+              Except Protobuf.Encoding.ProtoError $stateTy := do
+            let ($rawTag:ident, $rawAfterTag:ident) ←
+              ($cursor:ident).readTagAt $cursorOffset:ident
+            if $rawTag:ident == 0 then
+              pure $rawEndAcc:term
+            else do
+              let $rawFallback:ident :
+                  Unit → Except Protobuf.Encoding.ProtoError $stateTy :=
+                fun _ => $rawFallbackBody:term
+              $rawDispatch:term)
+      let wrapper ←
+        if hasOneofs then
+          `(partial def $foldCursorId:ident
+              ($cursorAcc : $stateTy)
+              ($cursor : Protobuf.Encoding.SpannedCursor)
+              ($cursorOffset : Nat)
+              ($cursorBudget : Nat) :
+              Except Protobuf.Encoding.ProtoError $stateTy :=
+            $rawFoldCursorId:ident
+              ($cursorAcc:ident).1
+              ($cursorAcc:ident).2.1
+              ($cursorAcc:ident).2.2.1
+              ($cursorAcc:ident).2.2.2
+              $cursor:ident $cursorOffset:ident $cursorBudget:ident)
+        else
+          `(partial def $foldCursorId:ident
+              ($cursorAcc : $stateTy)
+              ($cursor : Protobuf.Encoding.SpannedCursor)
+              ($cursorOffset : Nat)
+              ($cursorBudget : Nat) :
+              Except Protobuf.Encoding.ProtoError $stateTy :=
+            $rawFoldCursorId:ident
+              ($cursorAcc:ident).1
+              ($cursorAcc:ident).2.1
+              ($cursorAcc:ident).2.2
+              $cursor:ident $cursorOffset:ident $cursorBudget:ident)
+      pure (#[rawFoldCursor], wrapper)
   let sourceAcc ← mkIdent <$> mkFreshUserName `acc
   let sourceVar ← mkIdent <$> mkFreshUserName `source
   let sourceBudget ← mkIdent <$> mkFreshUserName `recursionBudget
@@ -551,8 +930,8 @@ def construct_fromMessage
   return (
     fromMessageId,
     fromSpannedChunksId,
-    dispatchHelpers
-      |>.push applyRecord
+    (dispatchHelpers
+      |>.push applyRecord) ++ rawFoldCommands
       |>.push foldCursor
       |>.push foldSource
       |>.push foldChunks
