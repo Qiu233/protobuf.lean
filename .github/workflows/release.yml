@@ -50,9 +50,19 @@ jobs:
             echo "release tag ${RELEASE_TAG} does not match package version v${package_version}" >&2
             exit 1
           fi
-          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
-            echo "release tag ${RELEASE_TAG} already exists" >&2
-            exit 1
+          tag_object="$(
+            git ls-remote --tags origin "refs/tags/${RELEASE_TAG}" | cut -f1
+          )"
+          if [[ -n "${tag_object}" ]]; then
+            tag_revision="$(
+              git ls-remote --tags origin "refs/tags/${RELEASE_TAG}^{}" | cut -f1
+            )"
+            tag_revision="${tag_revision:-${tag_object}}"
+            if [[ "${tag_revision}" != "${GITHUB_SHA}" ]]; then
+              echo "release tag ${RELEASE_TAG} already points to ${tag_revision}, not ${GITHUB_SHA}" >&2
+              exit 1
+            fi
+            echo "release tag ${RELEASE_TAG} already points to this commit; continuing retry"
           fi
 
   build-archives:
@@ -64,16 +74,59 @@ jobs:
         include:
           - name: Linux x86-64
             os: ubuntu-latest
+            protoc_platform: linux-x86_64
           - name: macOS x86-64
             os: macos-15-intel
+            protoc_platform: osx-x86_64
           - name: macOS ARM64
             os: macos-15
+            protoc_platform: osx-aarch_64
           - name: Windows x86-64
             os: windows-latest
+            protoc_platform: win64
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install protoc
+        if: runner.os != 'Windows'
+        env:
+          PROTOC_PLATFORM: ${{ matrix.protoc_platform }}
+        run: |
+          curl --fail --location --retry 3 \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VERSION}/protoc-${PROTOBUF_VERSION}-${PROTOC_PLATFORM}.zip" \
+            --output "${RUNNER_TEMP}/protoc.zip"
+          unzip -q "${RUNNER_TEMP}/protoc.zip" -d "${RUNNER_TEMP}/protoc"
+          actual_version="$("${RUNNER_TEMP}/protoc/bin/protoc" --version)"
+          if [[ "${actual_version}" != "libprotoc ${PROTOBUF_VERSION}" ]]; then
+            echo "installed ${actual_version}; expected libprotoc ${PROTOBUF_VERSION}" >&2
+            exit 1
+          fi
+          echo "${RUNNER_TEMP}/protoc/bin" >> "${GITHUB_PATH}"
+
+      - name: Install protoc
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PROTOC_PLATFORM: ${{ matrix.protoc_platform }}
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "protoc.zip"
+          $destination = Join-Path $env:RUNNER_TEMP "protoc"
+          curl.exe --fail --location --retry 3 `
+            "https://github.com/protocolbuffers/protobuf/releases/download/v$env:PROTOBUF_VERSION/protoc-$env:PROTOBUF_VERSION-$env:PROTOC_PLATFORM.zip" `
+            --output $archive
+          if ($LASTEXITCODE -ne 0) {
+            throw "failed to download protoc"
+          }
+          Expand-Archive -Path $archive -DestinationPath $destination -Force
+          $protoc = Join-Path $destination "bin/protoc.exe"
+          $actualVersion = & $protoc --version
+          if ($actualVersion -ne "libprotoc $env:PROTOBUF_VERSION") {
+            throw "installed $actualVersion; expected libprotoc $env:PROTOBUF_VERSION"
+          }
+          (Join-Path $destination "bin") | Out-File `
+            -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - uses: leanprover/lean-action@v1
         with:
@@ -86,10 +139,22 @@ jobs:
         run: |
           "$HOME/.elan/bin/lake" pack
 
+      - name: Verify Lake build archive
+        shell: bash
+        run: |
+          shopt -s nullglob
+          archives=(.lake/protobuf-*.tar.gz)
+          if (( ${#archives[@]} != 1 )); then
+            echo "expected exactly one Lake archive, found ${#archives[@]}" >&2
+            printf '%s\n' "${archives[@]}" >&2
+            exit 1
+          fi
+          tar -tzf "${archives[0]}" >/dev/null
+
       - name: Stage Lake build archive
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ runner.os }}-${{ runner.arch }}
+          name: release-${{ matrix.protoc_platform }}
           path: .lake/protobuf-*.tar.gz
           if-no-files-found: error
           include-hidden-files: true
@@ -118,15 +183,30 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${RELEASE_TAG}" "${GITHUB_SHA}" -m "protobuf ${RELEASE_TAG}"
-          git push origin "${RELEASE_TAG}"
-          gh release create "${RELEASE_TAG}" dist/*.tar.gz \
-            --verify-tag \
-            --generate-notes \
-            --title "${RELEASE_TAG}"
-          for archive in dist/*.tar.gz; do
+          mapfile -t archives < <(
+            find dist -maxdepth 1 -type f -name 'protobuf-*.tar.gz' -print | sort
+          )
+          if (( ${#archives[@]} != 4 )); then
+            echo "expected four platform archives, found ${#archives[@]}" >&2
+            printf '%s\n' "${archives[@]}" >&2
+            exit 1
+          fi
+          if ! git ls-remote --exit-code --tags origin \
+              "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "${RELEASE_TAG}" "${GITHUB_SHA}" -m "protobuf ${RELEASE_TAG}"
+            git push origin "${RELEASE_TAG}"
+          fi
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" "${archives[@]}" --clobber
+          else
+            gh release create "${RELEASE_TAG}" "${archives[@]}" \
+              --verify-tag \
+              --generate-notes \
+              --title "${RELEASE_TAG}"
+          fi
+          for archive in "${archives[@]}"; do
             asset="$(basename "${archive}")"
             url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${asset}"
             curl --fail --head --location --retry 5 --retry-all-errors "${url}"
