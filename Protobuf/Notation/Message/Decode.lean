@@ -616,6 +616,7 @@ def construct_fromMessage
   let rawFoldCursorId := push_name "foldRawCursor"
   let rawTag ← mkIdent <$> mkFreshUserName `tag
   let rawAfterTag ← mkIdent <$> mkFreshUserName `afterTag
+  let rawError ← mkIdent <$> mkFreshUserName `error
   let rawFallback ← mkIdent <$> mkFreshUserName `fallback
   /-
   Keep very wide generated messages on the compact compatibility path for now.
@@ -718,11 +719,12 @@ def construct_fromMessage
               ($cursorOffset : Nat)
               ($cursorBudget : Nat) :
               Except Protobuf.Encoding.ProtoError $stateTy := do
-            let ($rawTag:ident, $rawAfterTag:ident) ←
-              ($cursor:ident).readTagAt $cursorOffset:ident
-            if $rawTag:ident == 0 then
-              pure $rawEndAcc:term
-            else do
+            match
+              ($cursor:ident).readTagResultAt $cursorOffset:ident
+            with
+            | .error $rawError:ident => throw $rawError:ident
+            | .done => pure $rawEndAcc:term
+            | .next $rawTag:ident $rawAfterTag:ident => do
               let $rawFallback:ident :
                   Unit → Except Protobuf.Encoding.ProtoError $stateTy :=
                 fun _ => $rawFallbackBody:term
@@ -737,11 +739,12 @@ def construct_fromMessage
               ($cursorOffset : Nat)
               ($cursorBudget : Nat) :
               Except Protobuf.Encoding.ProtoError $stateTy := do
-            let ($rawTag:ident, $rawAfterTag:ident) ←
-              ($cursor:ident).readTagAt $cursorOffset:ident
-            if $rawTag:ident == 0 then
-              pure $rawEndAcc:term
-            else do
+            match
+              ($cursor:ident).readTagResultAt $cursorOffset:ident
+            with
+            | .error $rawError:ident => throw $rawError:ident
+            | .done => pure $rawEndAcc:term
+            | .next $rawTag:ident $rawAfterTag:ident => do
               let $rawFallback:ident :
                   Unit → Except Protobuf.Encoding.ProtoError $stateTy :=
                 fun _ => $rawFallbackBody:term

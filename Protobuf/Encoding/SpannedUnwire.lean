@@ -25,31 +25,50 @@ private def readSpanByte
     | throw .truncated
   return (byte, offset + 1)
 
+private inductive SpanVarintResult where
+  | ok (value : UInt64) (next : Nat)
+  | error (error : ProtoError)
+deriving Inhabited
+
 private partial def readSpanVarint
     (source : ByteArray) (stop offset : Nat) :
-    Except ProtoError (UInt64 × Nat) := do
+    SpanVarintResult :=
   let rec go
       (offset : Nat) (value shift : UInt64) (index : UInt8) :
-      Except ProtoError (UInt64 × Nat) := do
+      SpanVarintResult :=
     if offset < stop then
       if hSource : offset < source.size then
         let byte := source[offset]
         let next := offset + 1
         if index == 9 then
           if byte > 1 then
-            throw .invalidVarint
-          return (value ||| (byte.toUInt64 <<< shift), next)
-        let value :=
-          value |||
-            ((byte &&& (0x7f : UInt8)).toUInt64 <<< shift)
-        if byte &&& (0x80 : UInt8) == 0 then
-          return (value, next)
-        go next value (shift + 7) (index + 1)
+            .error .invalidVarint
+          else
+            .ok (value ||| (byte.toUInt64 <<< shift)) next
+        else
+          let value :=
+            value |||
+              ((byte &&& (0x7f : UInt8)).toUInt64 <<< shift)
+          if byte &&& (0x80 : UInt8) == 0 then
+            .ok value next
+          else
+            go next value (shift + 7) (index + 1)
       else
-        throw .truncated
+        .error .truncated
     else
-      throw .truncated
-  go offset 0 0 0
+      .error .truncated
+  if hStop : offset < stop then
+    if hSource : offset < source.size then
+      let byte := source[offset]
+      let next := offset + 1
+      if byte &&& (0x80 : UInt8) == 0 then
+        .ok byte.toUInt64 next
+      else
+        go next ((byte &&& (0x7f : UInt8)).toUInt64) 7 1
+    else
+      .error .truncated
+  else
+    .error .truncated
 
 private def readSpanFixed
     (source : ByteArray) (stop offset width : Nat) :
@@ -71,10 +90,11 @@ private def ByteSpan.appendVarints
   let mut offset := span.start
   let mut out := out
   while offset < span.stop do
-    let (value, next) ←
-      readSpanVarint span.source span.stop offset
-    out := out.push (convert value)
-    offset := next
+    match readSpanVarint span.source span.stop offset with
+    | .error error => throw error
+    | .ok value next =>
+        out := out.push (convert value)
+        offset := next
   return out
 
 @[noinline, specialize]

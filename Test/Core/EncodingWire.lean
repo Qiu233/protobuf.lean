@@ -235,6 +235,45 @@ abbrev testSpannedWireParser : Except String Unit := do
     "spanned parser accepted a mismatching end-group tag"
 
 abbrev testSpannedTypedReaders : Except String Unit := do
+  let singleTagBytes : ByteArray := ⟨#[0x08]⟩
+  let singleTagCursor ← ofProtoExcept <|
+    SpannedCursor.ofSpan singleTagBytes 0 singleTagBytes.size
+  match singleTagCursor.readTagResultAt 0 with
+  | .next tag offset =>
+      assertEq tag 8 "single-byte tag fast path returned the wrong tag"
+      assertEq offset 1 "single-byte tag fast path returned the wrong offset"
+  | .done => throw "single-byte tag fast path skipped a tag"
+  | .error error =>
+      throw s!"single-byte tag fast path failed: {error}"
+
+  let multiTagBytes : ByteArray := ⟨#[0x80, 0x01]⟩
+  let multiTagCursor ← ofProtoExcept <|
+    SpannedCursor.ofSpan multiTagBytes 0 multiTagBytes.size
+  match multiTagCursor.readTagResultAt 0 with
+  | .next tag offset =>
+      assertEq tag 128 "multi-byte tag fallback returned the wrong tag"
+      assertEq offset 2 "multi-byte tag fallback returned the wrong offset"
+  | .done => throw "multi-byte tag fallback skipped a tag"
+  | .error error =>
+      throw s!"multi-byte tag fallback failed: {error}"
+
+  let assertTagError (bytes : ByteArray) (description : String) := do
+    let cursor ← ofProtoExcept <|
+      SpannedCursor.ofSpan bytes 0 bytes.size
+    match cursor.readTagResultAt 0 with
+    | .error _ => pure ()
+    | .done | .next .. => throw description
+  assertTagError ⟨#[0x00]⟩
+    "generated tag reader accepted field number zero"
+  assertTagError ⟨#[0x80]⟩
+    "generated tag reader accepted a truncated varint"
+  assertTagError ⟨#[0x80, 0x80, 0x80, 0x80, 0x80, 0x00]⟩
+    "generated tag reader accepted a tag longer than five bytes"
+  assertTagError
+    ⟨#[0x80, 0x80, 0x80, 0x80, 0x80,
+        0x80, 0x80, 0x80, 0x80, 0x02]⟩
+    "generated tag reader accepted an overflowing varint"
+
   let varintSource : ByteArray := ⟨#[
     0xee,
     0x00, 0x01, 0x96, 0x01,
@@ -249,6 +288,20 @@ abbrev testSpannedTypedReaders : Except String Unit := do
       (varints.appendRepeatedVarint_uint64 #[42]))
     #[42, 0, 1, 150, 0xffffffffffffffff]
     "spanned packed varint reader returned the wrong typed values"
+  let truncatedVarints : SpannedRecord :=
+    ⟨1, .len ⟨#[0x80]⟩ 0 1⟩
+  assertProtoFails
+    (truncatedVarints.appendRepeatedVarint_uint64 #[])
+    "spanned packed varint reader accepted a truncated value"
+  let overflowingVarints : ByteArray := ⟨#[
+    0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0x02
+  ]⟩
+  let overflowingVarintRecord : SpannedRecord :=
+    ⟨1, .len overflowingVarints 0 overflowingVarints.size⟩
+  assertProtoFails
+    (overflowingVarintRecord.appendRepeatedVarint_uint64 #[])
+    "spanned packed varint reader accepted an overflowing value"
 
   let fixed32Source : ByteArray := ⟨#[
       0x78, 0x56, 0x34, 0x12,

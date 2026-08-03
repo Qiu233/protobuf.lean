@@ -54,19 +54,100 @@ structure SpannedCursor where
   stop : Nat
   validStop : stop ≤ source.size
 
-private structure SpannedVarintResult where
-  value : UInt64
-  width : UInt8
-  next : Nat
+/--
+Allocation-light result used by generated decoders when reading a wire tag.
+
+The public `readTagAt` API returns `Except ProtoError (UInt64 × Nat)`.  On the
+generated hot path that shape first allocates the generic varint result and
+its `Except` wrapper, then replaces them with a pair and another wrapper.
+Keeping completion, success, and failure in one specialized object avoids
+that intermediate representation while preserving the same validation.
+-/
+inductive SpannedTagResult where
+  | done
+  | next (tag : UInt64) (offset : Nat)
+  | error (error : ProtoError)
+deriving Inhabited
+
+@[always_inline]
+private def finishTagResult
+    (value : UInt64) (width : UInt8) (next : Nat) :
+    SpannedTagResult :=
+  if width > 5 then
+    .error
+      (.userError "protobuf: field tag varint is longer than 5 bytes")
+  else
+    let fieldNum := value >>> 3
+    if fieldNum == 0 || fieldNum > (0x1fffffff : UInt64) then
+      .error (.userError "protobuf: invalid field number")
+    else
+      .next value next
+
+/-- Read and validate one wire tag for the generated raw-cursor fast path. -/
+@[always_inline]
+partial def SpannedCursor.readTagResultAt
+    (cursor : SpannedCursor) (initialOffset : Nat) :
+    SpannedTagResult :=
+  if initialOffset == cursor.stop then
+    .done
+  else if initialOffset < cursor.offset || initialOffset > cursor.stop then
+    .error
+      (.invalidBuffer
+        "protobuf cursor offset is outside its source interval")
+  else
+    let rec go
+        (offset : Nat) (value shift : UInt64) (index : UInt8) :
+        SpannedTagResult :=
+      if hStop : offset < cursor.stop then
+        have hSource : offset < cursor.source.size :=
+          Nat.lt_of_lt_of_le hStop cursor.validStop
+        let byte := cursor.source[offset]
+        let next := offset + 1
+        if index == 9 then
+          if byte > 1 then
+            .error .invalidVarint
+          else
+            finishTagResult
+              (value ||| (byte.toUInt64 <<< shift)) 10 next
+        else
+          let value :=
+            value |||
+              ((byte &&& (0x7f : UInt8)).toUInt64 <<< shift)
+          if byte &&& (0x80 : UInt8) == 0 then
+            finishTagResult value (index + 1) next
+          else
+            go next value (shift + 7) (index + 1)
+      else
+        .error .truncated
+    if hStop : initialOffset < cursor.stop then
+      have hSource : initialOffset < cursor.source.size :=
+        Nat.lt_of_lt_of_le hStop cursor.validStop
+      let byte := cursor.source[initialOffset]
+      let next := initialOffset + 1
+      if byte &&& (0x80 : UInt8) == 0 then
+        let value := byte.toUInt64
+        if value >>> 3 == 0 then
+          .error (.userError "protobuf: invalid field number")
+        else
+          .next value next
+      else
+        go next
+          ((byte &&& (0x7f : UInt8)).toUInt64) 7 1
+    else
+      .error .truncated
+
+private inductive SpannedVarintResult where
+  | ok (value : UInt64) (width : UInt8) (next : Nat)
+  | error (error : ProtoError)
 deriving Inhabited
 
 @[always_inline]
 private partial def SpannedCursor.readVarintAt
     (cursor : SpannedCursor) (initialOffset : Nat) :
-    Except ProtoError SpannedVarintResult := do
+    SpannedVarintResult :=
   let rec go
       (offset : Nat) (value shift : UInt64) (index : UInt8) :
-      Except ProtoError SpannedVarintResult := do
+      SpannedVarintResult :=
     if hStop : offset < cursor.stop then
       have hSource : offset < cursor.source.size :=
         Nat.lt_of_lt_of_le hStop cursor.validStop
@@ -74,20 +155,30 @@ private partial def SpannedCursor.readVarintAt
       let next := offset + 1
       if index == 9 then
         if byte > 1 then
-          throw .invalidVarint
-        return {
-          value := value ||| (byte.toUInt64 <<< shift)
-          width := 10
-          next
-        }
-      let value :=
-        value |||
-          ((byte &&& (0x7f : UInt8)).toUInt64 <<< shift)
-      if byte &&& (0x80 : UInt8) == 0 then
-        return { value, width := index + 1, next }
-      return ← go next value (shift + 7) (index + 1)
-    throw .truncated
-  go initialOffset 0 0 0
+          .error .invalidVarint
+        else
+          .ok (value ||| (byte.toUInt64 <<< shift)) 10 next
+      else
+        let value :=
+          value |||
+            ((byte &&& (0x7f : UInt8)).toUInt64 <<< shift)
+        if byte &&& (0x80 : UInt8) == 0 then
+          .ok value (index + 1) next
+        else
+          go next value (shift + 7) (index + 1)
+    else
+      .error .truncated
+  if hStop : initialOffset < cursor.stop then
+    have hSource : initialOffset < cursor.source.size :=
+      Nat.lt_of_lt_of_le hStop cursor.validStop
+    let byte := cursor.source[initialOffset]
+    let next := initialOffset + 1
+    if byte &&& (0x80 : UInt8) == 0 then
+      .ok byte.toUInt64 1 next
+    else
+      go next ((byte &&& (0x7f : UInt8)).toUInt64) 7 1
+  else
+    .error .truncated
 
 /--
 Read and validate the next wire tag without materializing a schema-neutral
@@ -104,21 +195,24 @@ def SpannedCursor.readTagAt
     throw
       (.invalidBuffer
         "protobuf cursor offset is outside its source interval")
-  let result ← cursor.readVarintAt offset
-  if result.width > 5 then
-    throw (.userError "protobuf: field tag varint is longer than 5 bytes")
-  let fieldNum64 := result.value >>> 3
-  if fieldNum64 == 0 || fieldNum64 > (0x1fffffff : UInt64) then
-    throw (.userError "protobuf: invalid field number")
-  return (result.value, result.next)
+  match cursor.readVarintAt offset with
+  | .error error => throw error
+  | .ok value width next =>
+      if width > 5 then
+        throw (.userError "protobuf: field tag varint is longer than 5 bytes")
+      let fieldNum64 := value >>> 3
+      if fieldNum64 == 0 || fieldNum64 > (0x1fffffff : UInt64) then
+        throw (.userError "protobuf: invalid field number")
+      return (value, next)
 
 /-- Read a raw varint value starting immediately after a wire tag. -/
 @[always_inline]
 def SpannedCursor.readVarintValueAt
     (cursor : SpannedCursor) (offset : Nat) :
-    Except ProtoError (UInt64 × Nat) := do
-  let result ← cursor.readVarintAt offset
-  return (result.value, result.next)
+    Except ProtoError (UInt64 × Nat) :=
+  match cursor.readVarintAt offset with
+  | .error error => throw error
+  | .ok value _ next => pure (value, next)
 
 @[always_inline]
 private def SpannedCursor.readFixedAt
@@ -147,24 +241,25 @@ component is also the offset of the next top-level wire tag.
 @[always_inline]
 def SpannedCursor.readLengthAt
     (cursor : SpannedCursor) (offset : Nat) :
-    Except ProtoError (Nat × Nat) := do
-  let result ← cursor.readVarintAt offset
-  let length64 := result.value
-  let start := result.next
-  if length64 > 0x7fffffff then
-    throw (.userError
-      "protobuf: length-delimited field exceeds 2 GiB limit")
-  let length := length64.toNat
-  if length > cursor.stop - start then
-    throw .truncated
-  return (start, start + length)
+    Except ProtoError (Nat × Nat) :=
+  match cursor.readVarintAt offset with
+  | .error error => throw error
+  | .ok length64 _ start => do
+      if length64 > 0x7fffffff then
+        throw (.userError
+          "protobuf: length-delimited field exceeds 2 GiB limit")
+      let length := length64.toNat
+      if length > cursor.stop - start then
+        throw .truncated
+      return (start, start + length)
 
 private def SpannedCursor.readVarint
     (cursor : SpannedCursor) :
-    Except ProtoError (UInt64 × Nat × SpannedCursor) := do
-  let result ← cursor.readVarintAt cursor.offset
-  return (result.value, result.width.toNat,
-    { cursor with offset := result.next })
+    Except ProtoError (UInt64 × Nat × SpannedCursor) :=
+  match cursor.readVarintAt cursor.offset with
+  | .error error => throw error
+  | .ok value width next =>
+      pure (value, width.toNat, { cursor with offset := next })
 
 private def SpannedCursor.readFixed
     (cursor : SpannedCursor) (width : Nat) :
@@ -299,10 +394,11 @@ partial def SpannedCursor.nextAt
     throw
       (.invalidBuffer
         "protobuf cursor offset is outside its source interval")
-  let keyResult ← cursor.readVarintAt offset
-  let key := keyResult.value
-  let afterKey := keyResult.next
-  if keyResult.width > 5 then
+  let (key, keyWidth, afterKey) ←
+    match cursor.readVarintAt offset with
+    | .error error => throw error
+    | .ok value width next => pure (value, width, next)
+  if keyWidth > 5 then
     throw (.userError "protobuf: field tag varint is longer than 5 bytes")
   let wireType := key &&& 0b111
   let fieldNum64 := key >>> 3
@@ -311,26 +407,28 @@ partial def SpannedCursor.nextAt
   let fieldNum := fieldNum64.toNat
   match wireType with
   | 0 =>
-      let result ← cursor.readVarintAt afterKey
-      return .next ⟨fieldNum, .varint result.value⟩ result.next
+      match cursor.readVarintAt afterKey with
+      | .error error => throw error
+      | .ok value _ next =>
+          return .next ⟨fieldNum, .varint value⟩ next
   | 1 =>
       let (value, next) ← cursor.readFixedAt afterKey 8
       return .next ⟨fieldNum, .i64 value⟩ next
   | 2 =>
-      let result ← cursor.readVarintAt afterKey
-      let length64 := result.value
-      let afterLength := result.next
-      if length64 > 0x7fffffff then
-        throw (.userError
-          "protobuf: length-delimited field exceeds 2 GiB limit")
-      let length := length64.toNat
-      if length > cursor.stop - afterLength then
-        throw .truncated
-      let stop := afterLength + length
-      return .next
-        ⟨fieldNum,
-          .len cursor.source afterLength stop⟩
-        stop
+      match cursor.readVarintAt afterKey with
+      | .error error => throw error
+      | .ok length64 _ afterLength => do
+          if length64 > 0x7fffffff then
+            throw (.userError
+              "protobuf: length-delimited field exceeds 2 GiB limit")
+          let length := length64.toNat
+          if length > cursor.stop - afterLength then
+            throw .truncated
+          let stop := afterLength + length
+          return .next
+            ⟨fieldNum,
+              .len cursor.source afterLength stop⟩
+            stop
   | 3 =>
       if groupBudget == 0 then
         throw (.userError "protobuf: group recursion limit exceeded")
