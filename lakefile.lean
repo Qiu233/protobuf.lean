@@ -2,7 +2,7 @@ import Lake
 open Lake DSL
 
 package "protobuf" where
-  version := v!"0.1.0"
+  version := v!"0.2.0"
   releaseRepo := "https://github.com/Lean-zh/protobuf"
   preferReleaseBuild := true
 
