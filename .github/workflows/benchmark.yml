@@ -26,7 +26,6 @@ jobs:
 
     env:
       BENCH_BUILD_JOBS: "2"
-      BENCH_OUTPUT_DIR: ${{ runner.temp }}/protobuf-benchmark
       BENCH_QUICK: ${{ inputs.quick && '1' || '0' }}
 
     steps:
@@ -39,6 +38,8 @@ jobs:
           use-github-cache: false
 
       - name: Run benchmark
+        env:
+          BENCH_OUTPUT_DIR: ${{ runner.temp }}/protobuf-benchmark
         run: Test/Bench/run.sh
 
       - name: Upload raw benchmark results
@@ -53,6 +54,7 @@ jobs:
       - name: Publish benchmark report
         env:
           ARTIFACT_URL: ${{ steps.benchmark-artifact.outputs.artifact-url }}
+          BENCH_OUTPUT_DIR: ${{ runner.temp }}/protobuf-benchmark
           BENCHMARK_REF: ${{ github.ref_name }}
           BENCHMARK_SHA: ${{ github.sha }}
         run: |
