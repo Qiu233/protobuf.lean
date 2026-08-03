@@ -25,6 +25,7 @@ IMPLEMENTATIONS = (
     "lean-binary",
     "cpp-binary",
     "go-binary",
+    "haskell-binary",
     "lean-json",
     "lean-protojson",
 )
@@ -72,6 +73,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lean", required=True, type=pathlib.Path)
     parser.add_argument("--cpp", required=True, type=pathlib.Path)
     parser.add_argument("--go", required=True, type=pathlib.Path)
+    parser.add_argument("--haskell", required=True, type=pathlib.Path)
     parser.add_argument("--protoc", required=True, type=pathlib.Path)
     parser.add_argument("--repo", required=True, type=pathlib.Path)
     parser.add_argument("--output", required=True, type=pathlib.Path)
@@ -118,8 +120,13 @@ def executable_command(
     iterations: int,
     validate: bool,
 ) -> list[str]:
-    if implementation in ("cpp-binary", "go-binary"):
-        executable = args.cpp if implementation == "cpp-binary" else args.go
+    external_executables = {
+        "cpp-binary": args.cpp,
+        "go-binary": args.go,
+        "haskell-binary": args.haskell,
+    }
+    if implementation in external_executables:
+        executable = external_executables[implementation]
         return [
             str(executable),
             operation,
@@ -142,6 +149,7 @@ def startup_command(args: argparse.Namespace, runtime: str) -> list[str]:
         "lean-runtime": args.lean,
         "cpp-runtime": args.cpp,
         "go-runtime": args.go,
+        "haskell-runtime": args.haskell,
     }
     executable = executables[runtime]
     return [str(executable), "startup"]
@@ -293,13 +301,14 @@ def check_results(rows: Sequence[dict[str, object]], sizes: Sequence[int]) -> No
         binary_rows = [
             row
             for row in at_size
-            if row["implementation"] in ("lean-binary", "cpp-binary", "go-binary")
+            if row["implementation"]
+            in ("lean-binary", "cpp-binary", "go-binary", "haskell-binary")
         ]
         binary_hashes = {row["output_hash"] for row in binary_rows}
         binary_sizes = {row["output_bytes"] for row in binary_rows}
         if len(binary_hashes) != 1 or len(binary_sizes) != 1:
             raise RuntimeError(
-                f"Lean, C++, and Go binary protobuf bytes differ at size {size}"
+                f"Lean, C++, Go, and Haskell binary protobuf bytes differ at size {size}"
             )
 
 
@@ -340,6 +349,9 @@ def write_metadata(
         "protoc_version": capture([str(args.protoc), "--version"], args.repo),
         "cpp_runtime_version": capture([str(args.cpp), "version"], args.repo),
         "go_runtime_version": capture([str(args.go), "version"], args.repo),
+        "haskell_runtime_version": capture(
+            [str(args.haskell), "version"], args.repo
+        ),
         "cpp_compiler": capture(["c++", "--version"], args.repo).splitlines()[0],
         "kernel": capture(["uname", "-a"], args.repo),
         "cpu_model": cpu_model(),
@@ -475,7 +487,12 @@ def write_report(
         "|---|---:|---:|",
     ]
     startup_rss: dict[str, float] = {}
-    for runtime in ("lean-runtime", "cpp-runtime", "go-runtime"):
+    for runtime in (
+        "lean-runtime",
+        "cpp-runtime",
+        "go-runtime",
+        "haskell-runtime",
+    ):
         rows = grouped[("startup", runtime, "startup", 0)]
         rss = median(rows, "max_rss_kib")
         startup_rss[runtime] = rss
@@ -535,6 +552,7 @@ def write_report(
                 runtime = {
                     "cpp-binary": "cpp-runtime",
                     "go-binary": "go-runtime",
+                    "haskell-binary": "haskell-runtime",
                 }.get(implementation, "lean-runtime")
                 delta = rss - startup_rss[runtime]
                 delta_per_item = f"{delta / size:+.3f}" if size else "n/a"
@@ -585,7 +603,8 @@ def write_report(
             "  calibration, and metric definitions.",
             "- `lean-json` is the hand-written `Lean.Data.Json` AST baseline; it is not",
             "  ProtoJSON. `lean-protojson` is this repository's reflection-based ProtoJSON.",
-            "- Binary Lean, C++, and Go output hashes and sizes are checked for exact equality.",
+            "- Binary Lean, C++, Go, and Haskell output hashes and sizes are checked for",
+            "  exact equality.",
             "  Every codec also validates a full-field logical content fingerprint outside",
             "  the timed region.",
             "",
@@ -639,6 +658,7 @@ def main() -> int:
         jobs.append(("startup", sample, startup_command(args, "lean-runtime")))
         jobs.append(("startup", sample, startup_command(args, "cpp-runtime")))
         jobs.append(("startup", sample, startup_command(args, "go-runtime")))
+        jobs.append(("startup", sample, startup_command(args, "haskell-runtime")))
         for case in cases:
             jobs.append(
                 (

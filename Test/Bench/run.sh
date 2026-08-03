@@ -10,6 +10,10 @@ readonly protoc_x86_64_sha256="a45cda0989c17dd950db55f6fbe1e5814c50fda08e87aa422
 readonly protoc_aarch64_sha256="36b518ac14d90351cc6598228ed2bbe5afe4e357b1af470b07e0ec1609875de2"
 readonly go_version="1.26.5"
 readonly go_protobuf_version="1.36.11"
+readonly ghc_version="8.8.4"
+readonly cabal_version="3.10.3.0"
+readonly proto_lens_version="0.7.1.7"
+readonly proto_lens_runtime_version="0.7.0.8"
 readonly go_x86_64_sha256="5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053"
 readonly go_aarch64_sha256="fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49"
 
@@ -18,13 +22,24 @@ tool_root="$build_root/toolchain/protoc-$protobuf_version"
 go_tool_root="$build_root/toolchain/go-$go_version"
 cpp_build="$build_root/cpp"
 go_build="$build_root/go"
+haskell_build="$build_root/haskell"
+haskell_source="$repo_root/Test/Bench/haskell"
 
-for command_name in cmake curl ninja python3 sha256sum tar taskset unzip /usr/bin/time; do
+for command_name in cabal cmake curl ghc ninja python3 sha256sum tar taskset unzip /usr/bin/time; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "missing benchmark dependency: $command_name" >&2
     exit 2
   fi
 done
+
+if [[ "$(ghc --numeric-version)" != "$ghc_version" ]]; then
+  echo "GHC $(ghc --numeric-version) is installed; expected $ghc_version" >&2
+  exit 2
+fi
+if [[ "$(cabal --numeric-version)" != "$cabal_version" ]]; then
+  echo "cabal $(cabal --numeric-version) is installed; expected $cabal_version" >&2
+  exit 2
+fi
 
 protoc_path="${BENCH_PROTOC:-${PROTOC:-}}"
 if [[ -n "$protoc_path" ]]; then
@@ -150,6 +165,29 @@ export GOCACHE="$go_build/cache"
   -ldflags "-X main.protobufVersion=v$go_protobuf_version" \
   -o "$go_build/benchGoCodec" .
 
+echo "Building Haskell proto-lens $proto_lens_version / runtime $proto_lens_runtime_version benchmark with GHC $ghc_version"
+export CABAL_DIR="${BENCH_CABAL_DIR:-$haskell_build/cabal}"
+mkdir -p "$CABAL_DIR"
+if [[ ! -f "$CABAL_DIR/packages/hackage.haskell.org/01-index.tar" ]]; then
+  (
+    cd "$haskell_source"
+    cabal update
+  )
+fi
+(
+  cd "$haskell_source"
+  cabal --builddir="$haskell_build/dist" build exe:benchHaskellCodec
+)
+haskell_exe="$(
+  cd "$haskell_source"
+  cabal --builddir="$haskell_build/dist" list-bin exe:benchHaskellCodec
+)"
+expected_haskell_version="proto-lens-$proto_lens_version proto-lens-runtime-$proto_lens_runtime_version ghc-$ghc_version"
+if [[ "$($haskell_exe version)" != "$expected_haskell_version" ]]; then
+  echo "pinned Haskell benchmark failed version check" >&2
+  exit 2
+fi
+
 if [[ "${BENCH_QUICK:-0}" == "1" ]]; then
   default_sizes="1,32"
   default_repeats="2"
@@ -170,6 +208,7 @@ python3 Test/Bench/report.py \
   --lean "$repo_root/.lake/build/bin/benchCodec" \
   --cpp "$cpp_build/benchCppCodec" \
   --go "$go_build/benchGoCodec" \
+  --haskell "$haskell_exe" \
   --protoc "$PROTOC" \
   --repo "$repo_root" \
   --output "$output_dir" \

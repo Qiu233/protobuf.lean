@@ -5,13 +5,15 @@ This benchmark compares the same generated `bench.perf.Batch` workload across:
 - `lean-binary`: this repository's generated binary codec;
 - `cpp-binary`: the official C++ protobuf runtime;
 - `go-binary`: the official Go protobuf runtime;
+- `haskell-binary`: `proto-lens`, with decoded values forced to normal form;
 - `lean-json`: hand-written instances using Lean's `Lean.Data.Json` AST,
   parser, and compact printer;
 - `lean-protojson`: this repository's reflection-based ProtoJSON codec.
 
 `lean-json` is deliberately not called ProtoJSON: its field naming and scalar
 mapping are ordinary application JSON choices. The binary comparison is exact:
-the runner rejects a sample unless Lean, C++, and Go produce identical bytes.
+the runner rejects a sample unless Lean, C++, Go, and Haskell produce identical
+bytes.
 Every path also checks a stable fingerprint covering every workload field.
 
 ## Run
@@ -22,8 +24,10 @@ From any directory in the repository:
 Test/Bench/run.sh
 ```
 
-The chain pins protobuf C++ and `protoc` to 35.0, Go to 1.26.5, and the
-official Go protobuf module to v1.36.11. If `BENCH_PROTOC` or `PROTOC` names
+The chain pins protobuf C++ and `protoc` to 35.0, Go to 1.26.5, the official Go
+protobuf module to v1.36.11, GHC to 8.8.4, `cabal-install` to 3.10.3.0,
+`proto-lens` to 0.7.1.7, and `proto-lens-runtime` to 0.7.0.8. If
+`BENCH_PROTOC` or `PROTOC` names
 the pinned compiler version, it is reused; otherwise the runner downloads the
 official architecture-specific compiler and Go toolchain and verifies their
 SHA-256 checksums. CMake fetches and caches the matching official C++ source
@@ -62,8 +66,9 @@ Test/Bench/run.sh
   process samples.
 
 The runner requires Linux, GNU `time`, Python 3, CMake, Ninja, a C++17
-compiler, curl, tar, unzip, sha256sum, and taskset. It bootstraps the pinned
-Go toolchain itself.
+compiler, curl, tar, unzip, sha256sum, taskset, and the pinned GHC/Cabal
+toolchain. It bootstraps the pinned Go toolchain itself. The CI workflow installs
+the pinned Haskell toolchain and caches Cabal dependencies.
 
 ## Fixed and growing costs
 
@@ -105,3 +110,10 @@ Each run writes:
 The generated data is machine-specific and intentionally stays under the
 ignored `.lake` build tree. The source, pinned dependency versions, commands,
 correctness gates, and report generation are the reproducible artifact.
+
+The two modules under `haskell/generated/` were generated from `Perf.proto` by
+`proto-lens-protoc` 0.7.0.0 and are checked in so benchmark CI does not spend
+most of its time compiling the historical GHC API-based code generator. Any
+workload schema change must regenerate those modules and update every runner's
+logical content fingerprint; the cross-runtime byte/hash gate will reject a
+stale implementation for ordinary workload changes.

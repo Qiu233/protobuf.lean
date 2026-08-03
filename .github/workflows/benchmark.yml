@@ -21,7 +21,7 @@ concurrency:
 jobs:
   benchmark:
     name: Protobuf engineering benchmark
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
 
     env:
@@ -30,6 +30,21 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Haskell benchmark toolchain
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "8.8.4"
+          cabal-version: "3.10.3.0"
+          cabal-update: false
+
+      - name: Restore Haskell dependencies
+        uses: actions/cache@v4
+        with:
+          path: .lake/build/bench/haskell/cabal
+          key: haskell-${{ runner.os }}-${{ runner.arch }}-ghc-8.8.4-cabal-3.10.3.0-${{ hashFiles('Test/Bench/haskell/**') }}
+          restore-keys: |
+            haskell-${{ runner.os }}-${{ runner.arch }}-ghc-8.8.4-cabal-3.10.3.0-
 
       - name: Install Lean
         uses: leanprover/lean-action@v1
