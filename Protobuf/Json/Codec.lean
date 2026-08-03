@@ -179,6 +179,154 @@ private def parseIntegralNumber
     throw (.invalidValue path "integer value has a nonzero fractional part")
   return number.mantissa / Int.ofNat divisor
 
+private def decimalDigit? (c : Char) : Option Nat :=
+  if '0' ≤ c && c ≤ '9' then
+    some (c.toNat - '0'.toNat)
+  else
+    none
+
+private def takeDecimalDigits (input : List Char) : List Nat × List Char :=
+  let rec go (input : List Char) (reversed : List Nat) : List Nat × List Char :=
+    match input with
+    | [] => (reversed.reverse, [])
+    | input@(c :: rest) =>
+        match decimalDigit? c with
+        | none => (reversed.reverse, input)
+        | some digit => go rest (digit :: reversed)
+  go input []
+
+private def boundedDecimalExponent
+    (digits : List Nat) (limit : Nat) : Nat :=
+  digits.foldl (init := 0) fun value digit =>
+    min limit (value * 10 + digit)
+
+private def decimalFractionLength (input : List Char) : Nat :=
+  let rec go (input : List Char) (afterPoint : Bool) (count : Nat) : Nat :=
+    match input with
+    | [] => count
+    | c :: rest =>
+        if c == 'e' || c == 'E' then
+          count
+        else if c == '.' then
+          go rest true count
+        else
+          go rest afterPoint (if afterPoint then count + 1 else count)
+  go input false 0
+
+/--
+Reject decimal exponents that would make Lean's JSON parser materialize a
+multi-kilobyte power of ten.  This is a resource bound, not a protobuf value
+bound: ordinary float and integer range checks still happen after parsing.
+-/
+private def checkSafePositiveJsonExponent
+    (input : List Char) : Except String Unit := do
+  let numeric :=
+    match input with
+    | '-' :: c :: _ => (decimalDigit? c).isSome
+    | c :: _ => (decimalDigit? c).isSome
+    | _ => false
+  if !numeric then return ()
+  let fractionLength := decimalFractionLength input
+  let exponent := input.dropWhile fun c => c != 'e' && c != 'E'
+  let digits ←
+    match exponent with
+    | [] => return ()
+    | _ :: '-' :: _ => return ()
+    | _ :: '+' :: rest => pure rest
+    | _ :: rest => pure rest
+  let maximumExpansion := 4096
+  let (digits, _) := takeDecimalDigits digits
+  let value := boundedDecimalExponent digits
+    (fractionLength + maximumExpansion + 1)
+  if value > fractionLength + maximumExpansion then
+    throw "JSON number exponent exceeds the safe expansion limit"
+
+/--
+Parse the JSON-number grammar used by quoted protobuf integer values without
+asking Lean's general JSON parser to materialize a positive decimal exponent.
+
+The largest protobuf integer magnitude has 20 decimal digits.  We therefore
+normalize the decimal position and reject an oversized result before building
+the `Nat`; even an exponent with millions of digits takes only linear time in
+the input spelling and constant-size arithmetic.
+-/
+private def parseIntegralText (text : String) : Except String Int := do
+  let (negative, input) :=
+    match text.toList with
+    | '-' :: rest => (true, rest)
+    | rest => (false, rest)
+  let (whole, rest) ←
+    match input with
+    | '0' :: rest => pure ([0], rest)
+    | c :: rest =>
+        let some digit := decimalDigit? c
+          | throw "integer string is not a JSON number"
+        if digit == 0 then
+          throw "integer string is not a JSON number"
+        let (digits, rest) := takeDecimalDigits rest
+        pure (digit :: digits, rest)
+    | [] => throw "integer string is not a JSON number"
+  let (fraction, rest) ←
+    match rest with
+    | '.' :: rest =>
+        let (digits, rest) := takeDecimalDigits rest
+        if digits.isEmpty then
+          throw "integer string is not a JSON number"
+        pure (digits, rest)
+    | rest => pure ([], rest)
+  let (exponentNegative, exponentDigits, rest) ←
+    match rest with
+    | c :: rest =>
+        if c == 'e' || c == 'E' then
+          let (negative, rest) :=
+            match rest with
+            | '-' :: rest => (true, rest)
+            | '+' :: rest => (false, rest)
+            | rest => (false, rest)
+          let (digits, rest) := takeDecimalDigits rest
+          if digits.isEmpty then
+            throw "integer string is not a JSON number"
+          pure (negative, digits, rest)
+        else
+          pure (false, [], c :: rest)
+    | rest => pure (false, [], rest)
+  unless rest.isEmpty do
+    throw "integer string is not a JSON number"
+
+  let digits := (whole ++ fraction).dropWhile (· == 0)
+  if digits.isEmpty then
+    return 0
+
+  -- Once the absolute decimal shift exceeds the input length plus the largest
+  -- protobuf integer width, its exact value can no longer affect the result.
+  let exponentLimit := text.length + 21
+  let exponent := boundedDecimalExponent exponentDigits exponentLimit
+  let (shiftNegative, shift) :=
+    if exponentNegative then
+      (true, exponent + fraction.length)
+    else if exponent < fraction.length then
+      (true, fraction.length - exponent)
+    else
+      (false, exponent - fraction.length)
+  let digits ←
+    if shiftNegative then
+      let trailingZeros := digits.foldl (init := 0) fun count digit =>
+        if digit == 0 then count + 1 else 0
+      if shift > trailingZeros then
+        throw "integer value has a nonzero fractional part"
+      pure (digits.take (digits.length - shift))
+    else
+      if digits.length + shift > 20 then
+        throw "integer value is outside the protobuf integer range"
+      pure (digits ++ List.replicate shift 0)
+  if digits.length > 20 then
+    throw "integer value is outside the protobuf integer range"
+  let magnitude := digits.foldl (init := 0) fun value digit =>
+    value * 10 + digit
+  if magnitude > 18446744073709551615 then
+    throw "integer value is outside the protobuf integer range"
+  return if negative then -Int.ofNat magnitude else Int.ofNat magnitude
+
 private def parseIntegral
     (path : String) (json : Lean.Json) : JM Int := do
   match json with
@@ -186,14 +334,9 @@ private def parseIntegral
   | .str text =>
       if text.trimAscii.copy != text then
         throw (.invalidValue path s!"`{text}` is not a valid integer")
-      let parsed ←
-        match Lean.Json.parse text with
-        | .ok parsed => pure parsed
-        | .error _ =>
-            throw (.invalidValue path s!"`{text}` is not a valid integer")
-      match parsed with
-      | .num number => parseIntegralNumber path number
-      | _ => throw (.invalidValue path s!"`{text}` is not a valid integer")
+      match parseIntegralText text with
+      | .ok value => return value
+      | .error detail => throw (.invalidValue path detail)
   | _ => throw (.typeMismatch path "integer or numeric string" (jsonKind json))
 
 private def requireRange
@@ -217,6 +360,10 @@ private def parseFloat (path : String) (json : Lean.Json) : JM Float := do
       if text.trimAscii.copy != text then
         throw (.invalidValue path
           s!"`{text}` is not a valid floating-point value")
+      match checkSafePositiveJsonExponent text.toList with
+      | .error _ =>
+          throw (.invalidValue path "floating-point value is out of range")
+      | .ok () => pure ()
       match Lean.Json.parse text with
       | .ok (.num number) =>
           let value := number.toFloat
@@ -1348,15 +1495,24 @@ private partial def scanJsonValue (input : List Char) :
       let (_, rest) ← scanJsonString rest
       return rest
   | input@(first :: _) =>
-      -- Checking `rest.length == input.length` here is quadratic over a large
-      -- document: every primitive would traverse the complete remaining
-      -- suffix. The parser above has already established that the JSON is
-      -- valid, so a delimiter at the current position is the only empty token.
+      -- Comparing input and suffix lengths here is quadratic over a large
+      -- document. A delimiter at the current position is the only empty token;
+      -- Lean's parser performs the complete syntax check after this preflight.
       if first == ',' || first == ']' || first == '}' then
         throw "missing JSON value"
-      let rest := input.dropWhile fun c =>
-        c != ',' && c != ']' && c != '}' &&
-          c != ' ' && c != '\t' && c != '\r' && c != '\n'
+      let rec takePrimitive
+          (input : List Char) (reversed : List Char) :
+          List Char × List Char :=
+        match input with
+        | [] => (reversed.reverse, [])
+        | input@(c :: rest) =>
+            if c == ',' || c == ']' || c == '}' ||
+                c == ' ' || c == '\t' || c == '\r' || c == '\n' then
+              (reversed.reverse, input)
+            else
+              takePrimitive rest (c :: reversed)
+      let (token, rest) := takePrimitive input []
+      checkSafePositiveJsonExponent token
       return rest
 
 private partial def scanJsonObject (input : List Char) :
@@ -1397,7 +1553,7 @@ private partial def scanJsonArray (input : List Char) :
 
 end
 
-private def checkDuplicateJsonKeys (text : String) : Except String Unit := do
+private def checkJsonPreflight (text : String) : Except String Unit := do
   let rest ← scanJsonValue text.toList
   unless (dropJsonWhitespace rest).isEmpty do
     throw "trailing content after JSON value"
@@ -1406,12 +1562,12 @@ def dynamicOfJsonString
     (descriptor : MessageDescriptor) (text : String)
     (options : ParseOptions := {}) :
     IO (Except Error DynamicMessage) := do
-  match Lean.Json.parse text with
+  match checkJsonPreflight text with
   | .error detail => return .error (.invalidJson detail)
-  | .ok json =>
-      match checkDuplicateJsonKeys text with
+  | .ok () =>
+      match Lean.Json.parse text with
       | .error detail => return .error (.invalidJson detail)
-      | .ok () => dynamicOfJson descriptor json options
+      | .ok json => dynamicOfJson descriptor json options
 
 def toJson
     (value : α) [ReflectMessage α] (options : PrintOptions := {}) :

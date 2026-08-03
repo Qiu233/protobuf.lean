@@ -29,6 +29,21 @@ private def requiredField
     | throw (IO.userError s!"missing field {number}")
   return field
 
+private def parsedUint64
+    (descriptor : MessageDescriptor) (field : FieldDescriptor)
+    (text : String) : IO UInt64 := do
+  let parsed ← ofIOExcept (dynamicOfJsonString descriptor text)
+  let values ← ofIOExcept (parsed.presentValues field)
+  match values with
+  | #[.uint64 value] => return value
+  | _ => throw (IO.userError s!"uint64 value was not parsed from `{text}`")
+
+private def expectJsonFailure
+    (descriptor : MessageDescriptor) (text failure : String) : IO Unit := do
+  match ← dynamicOfJsonString descriptor text with
+  | .error _ => pure ()
+  | .ok _ => throw (IO.userError failure)
+
 private def testRegularRoundtrip : IO Unit := do
   let descriptor := messageDescriptor test.proto3.All
   let int32Field ← requiredField descriptor 1
@@ -137,7 +152,37 @@ private def testPresenceAndRequired : IO Unit := do
   | .error (.missingRequiredField _ _) => pure ()
   | _ => throw (IO.userError "uninitialized message was serialized")
 
+private def testIntegralNumericStrings : IO Unit := do
+  let descriptor := messageDescriptor test.proto3.All
+  let uint64Field ← requiredField descriptor 8
+  let cases := #[
+    ("{\"uint64Field\":1e3}", 1000),
+    ("{\"uint64Field\":\"1e3\"}", 1000),
+    ("{\"uint64Field\":\"1000e-3\"}", 1),
+    ("{\"uint64Field\":\"1.20e1\"}", 12),
+    ("{\"uint64Field\":\"184467440737095516150e-1\"}",
+      18446744073709551615),
+    ("{\"uint64Field\":\"0e536870000\"}", 0)
+  ]
+  for (text, expected) in cases do
+    let actual ← parsedUint64 descriptor uint64Field text
+    assert (actual == expected)
+      s!"expected {expected}, got {actual} from `{text}`"
+  for text in #[
+      "{\"uint64Field\":\"1e536870000\"}",
+      "{\"uint64Field\":\"1e-536870000\"}",
+      "{\"uint64Field\":\"1e-1\"}",
+      "{\"uint64Field\":\"18446744073709551616\"}",
+      "{\"uint64Field\":\"01\"}",
+      "{\"uint64Field\":\"+1\"}",
+      "{\"uint64Field\":1e536870000}",
+      "{\"floatField\":\"1e536870000\"}"
+    ] do
+    expectJsonFailure descriptor text
+      s!"invalid uint64 numeric string was accepted: `{text}`"
+
 public def main : IO Unit := do
   testRegularRoundtrip
   testExtensionAndClosedEnum
   testPresenceAndRequired
+  testIntegralNumericStrings
