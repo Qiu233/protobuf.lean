@@ -8,7 +8,7 @@
    "rev": "ca69df6c3efc2a57dd9647ab23dd84bb0ba76ff1",
    "name": "binary",
    "manifestFile": "lake-manifest.json",
-   "inputRev": "ca69df6c3efc2a57dd9647ab23dd84bb0ba76ff1",
+   "inputRev": null,
    "inherited": false,
    "configFile": "lakefile.lean"}],
  "name": "protobuf",

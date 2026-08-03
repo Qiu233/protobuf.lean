@@ -3,8 +3,10 @@ open Lake DSL
 
 package "protobuf" where
   version := v!"0.1.0"
+  releaseRepo := "https://github.com/Lean-zh/protobuf"
+  preferReleaseBuild := true
 
-require binary from git "https://github.com/Lean-zh/binary" @ "ca69df6c3efc2a57dd9647ab23dd84bb0ba76ff1"
+require binary from git "https://github.com/Lean-zh/binary"
 
 @[default_target]
 lean_lib Protobuf where
