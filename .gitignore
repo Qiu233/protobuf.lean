@@ -1,2 +1,4 @@
-/.lake
+.lake
 /Test/Bench/haskell/dist-newstyle/
+/Test/Integration/Client/lake-manifest.json
+/Test/Integration/Client/lean-toolchain

@@ -10,6 +10,9 @@ require binary from git "https://github.com/Lean-zh/binary.git"
 
 @[default_target]
 lean_lib Protobuf where
+  -- The `Protobuf` root does not import `Protobuf.Json`, so name it here as
+  -- well; the release archive ships exactly what this library builds.
+  globs := #[.one `Protobuf, .one `Protobuf.Json]
 
 lean_exe Plugin where
   root := `Plugin
@@ -162,5 +165,47 @@ script test (_args) do
   let pluginExit ← pluginTest.wait
   if pluginExit != 0 then
     return pluginExit
+
+
+  -- Nothing below the `Protobuf` root imports `Protobuf.Json`, so only the
+  -- library's globs keep it in the build, and a release archive holds exactly
+  -- what that library builds. Clients of the source tree cannot show this up,
+  -- because Lake builds a module they import on demand.
+  let some protobufLib := (← getWorkspace).findLeanLib? `Protobuf
+    | do
+      IO.eprintln "the workspace defines no `Protobuf` library"
+      return 1
+  unless (← protobufLib.getModuleArray).any (·.name == `Protobuf.Json) do
+    IO.eprintln "`Protobuf.Json` is not a module of the `Protobuf` library"
+    return 1
+
+  -- Clients of a release do reach it as a library module, so build one and run
+  -- it: the module has to link, not merely resolve.
+  let clientDir : System.FilePath := "Test" / "Integration" / "Client"
+  let clientBuild ← IO.Process.spawn {
+    cmd := "lake"
+    args := #["build", "client"]
+    cwd := clientDir
+    stdin := .inherit
+    stdout := .inherit
+    stderr := .inherit
+  }
+  let clientBuildExit ← clientBuild.wait
+  if clientBuildExit != 0 then
+    return clientBuildExit
+
+  let client ← IO.Process.output {
+    cmd := "lake"
+    args := #["exe", "client"]
+    cwd := clientDir
+  }
+  if client.exitCode != 0 then
+    IO.eprint client.stderr
+    return client.exitCode
+  let expected := "{\"name\":\"payload\",\"number\":3}"
+  let rendered := client.stdout.trimAscii.toString
+  if rendered != expected then
+    IO.eprintln s!"json client printed {rendered}, expected {expected}"
+    return 1
 
   return 0
