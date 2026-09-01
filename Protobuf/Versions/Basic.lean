@@ -1,6 +1,7 @@
 module
 
-import Lean.Data.NameTrie
+public import Lean.Data.NameTrie
+public meta import Lean.Parser
 import Protobuf.Notation.Syntax
 public import Protobuf.Internal.Desc
 public import Protobuf.Base64

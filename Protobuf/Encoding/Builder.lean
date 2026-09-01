@@ -1,10 +1,12 @@
 module
 
-import Binary
+import Binary.Basic
+import Binary.Get
+import Binary.Put
 public import Protobuf.Encoding.Basic
 public import Protobuf.Encoding.Binary
 public import Protobuf.UnvalidatedString
-import Std
+public import Std
 
 public section
 

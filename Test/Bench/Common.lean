@@ -1,4 +1,5 @@
 import Protobuf
+import Protobuf.Json
 import Lean.Data.Json
 
 import Protobuf.Notation
