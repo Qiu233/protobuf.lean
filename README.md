@@ -128,10 +128,6 @@ open Protobuf Encoding Notation
 
 ## As a protoc plugin
 
-**Warning: On the pinned Lean 4.27.0 toolchain, the compiler does not prune
-the `meta` imports; even minimal downstream executables are currently around
-190 MiB.**
-
 First prepare a folder to contain the plugin, say `<plugin_folder>`.
 
 ```bash
@@ -222,9 +218,12 @@ This usage is highly unrecommended and should only serve for debugging purposes.
 ## ProtoJSON
 
 `Protobuf.Json` implements the protobuf JSON mapping for generated messages and
-reflection-based `DynamicMessage` values:
+reflection-based `DynamicMessage` values. It is a separate import, so that
+programs which only encode and decode do not link `Lean.Data.Json`:
 
 ```lean
+import Protobuf.Json
+
 open Protobuf.Json
 
 def roundTrip (value : test.proto3.All) : IO test.proto3.All := do

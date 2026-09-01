@@ -1,6 +1,7 @@
 module
 
 import Protobuf
+import Protobuf.Json
 
 open Protobuf
 open Protobuf.Reflection

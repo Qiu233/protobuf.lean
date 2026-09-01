@@ -1,6 +1,8 @@
 module
 
-public import Binary
+public import Binary.Basic
+public import Binary.Get
+public import Binary.Put
 public import Protobuf.Encoding.Basic
 
 public section

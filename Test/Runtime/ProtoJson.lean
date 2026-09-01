@@ -1,6 +1,7 @@
 module
 
 import Protobuf
+import Protobuf.Json
 
 open Lean
 open Protobuf
